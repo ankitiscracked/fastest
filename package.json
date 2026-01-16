@@ -1,0 +1,20 @@
+{
+  "name": "fastest",
+  "private": true,
+  "workspaces": [
+    "api",
+    "web",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "bun run --filter api dev",
+    "dev:web": "bun run --filter web dev",
+    "build:api": "bun run --filter api build",
+    "build:web": "bun run --filter web build",
+    "build:cli": "cd cli && go build -o ../bin/fst ./cmd/fst",
+    "typecheck": "bun run --filter '*' typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

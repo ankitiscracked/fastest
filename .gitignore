@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+*.exe
+cli/fst
+
+# Local cache
+.fst/cache/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Wrangler
+.wrangler/
+.dev.vars
+
+# Test outputs
+coverage/
+*.test.js
+
+# Aider
+.aider*
