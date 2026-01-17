@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -26,6 +27,7 @@ func init() {
 func newInitCmd() *cobra.Command {
 	var workspaceName string
 	var noSnapshot bool
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "init [name]",
@@ -42,26 +44,74 @@ Works without cloud auth - project syncs to cloud when you log in.
 If no name is provided, the current directory name will be used.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(args, workspaceName, noSnapshot)
+			return runInit(args, workspaceName, noSnapshot, force)
 		},
 	}
 
 	cmd.Flags().StringVarP(&workspaceName, "workspace", "w", "", "Name for this workspace (default: main)")
 	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "Don't create initial snapshot")
+	cmd.Flags().BoolVar(&force, "force", false, "Skip safety checks (use with caution)")
 
 	return cmd
 }
 
-func runInit(args []string, workspaceName string, noSnapshot bool) error {
-	// Check if already initialized
-	if config.IsInitialized() {
-		return fmt.Errorf("already initialized - .fst directory exists")
-	}
-
+func runInit(args []string, workspaceName string, noSnapshot bool, force bool) error {
 	// Get current directory
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Check if current directory has .fst
+	if _, err := os.Stat(filepath.Join(cwd, ".fst")); err == nil {
+		return fmt.Errorf("already initialized - .fst exists in this directory")
+	}
+
+	// Safety checks (can be bypassed with --force)
+	if !force {
+		// Check for dangerous directories
+		homeDir, _ := os.UserHomeDir()
+		if cwd == homeDir {
+			return fmt.Errorf("refusing to initialize in home directory - this would track all your files\nUse --force to override (not recommended)")
+		}
+		if cwd == "/" {
+			return fmt.Errorf("refusing to initialize in root directory\nUse --force to override (not recommended)")
+		}
+
+		// Check if inside an existing fst project
+		parentDir := filepath.Dir(cwd)
+		for parentDir != "/" && parentDir != "." {
+			if _, err := os.Stat(filepath.Join(parentDir, ".fst")); err == nil {
+				return fmt.Errorf("already inside an fst project at %s\nUse --force to create a nested project", parentDir)
+			}
+			parentDir = filepath.Dir(parentDir)
+		}
+
+		// Quick file count to warn about large directories
+		fileCount := 0
+		filepath.Walk(cwd, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !info.IsDir() {
+				fileCount++
+				if fileCount > 10000 {
+					return fmt.Errorf("stopped counting") // Early exit
+				}
+			}
+			return nil
+		})
+
+		if fileCount > 5000 {
+			fmt.Printf("Warning: This directory contains %d+ files.\n", fileCount)
+			fmt.Print("Are you sure you want to initialize here? [y/N] ")
+			reader := bufio.NewReader(os.Stdin)
+			response, _ := reader.ReadString('\n')
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response != "y" && response != "yes" {
+				return fmt.Errorf("initialization cancelled")
+			}
+		}
 	}
 
 	// Determine project name
