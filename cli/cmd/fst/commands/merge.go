@@ -28,9 +28,21 @@ func init() {
 	rootCmd.AddCommand(newMergeCmd())
 }
 
+// ConflictMode determines how conflicts are resolved
+type ConflictMode int
+
+const (
+	ConflictModeAgent  ConflictMode = iota // Use AI agent (default)
+	ConflictModeManual                     // Write conflict markers
+	ConflictModeTheirs                     // Take source version
+	ConflictModeOurs                       // Keep target version
+)
+
 func newMergeCmd() *cobra.Command {
 	var useAgent bool
 	var manual bool
+	var theirs bool
+	var ours bool
 	var cherryPick []string
 	var dryRun bool
 	var fromPath string
@@ -48,14 +60,39 @@ This performs a three-way merge:
 Non-conflicting changes are applied automatically. For conflicts:
 - Default (--agent): Uses your coding agent (claude, aider, etc.) to intelligently merge
 - Manual (--manual): Creates conflict markers for you to resolve
+- Theirs (--theirs): Take source version for all conflicts
+- Ours (--ours): Keep target version for all conflicts
 
-Use --from to specify the source workspace path directly (no cloud auth needed).
-Or provide a workspace name to look it up from the cloud.`,
+Workspace lookup uses the local registry. Use --from for explicit path.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if useAgent && manual {
-				return fmt.Errorf("cannot use both --agent and --manual")
+			// Validate mutually exclusive options
+			modeCount := 0
+			if useAgent {
+				modeCount++
 			}
+			if manual {
+				modeCount++
+			}
+			if theirs {
+				modeCount++
+			}
+			if ours {
+				modeCount++
+			}
+			if modeCount > 1 {
+				return fmt.Errorf("only one of --agent, --manual, --theirs, --ours can be specified")
+			}
+
+			mode := ConflictModeAgent // default
+			if manual {
+				mode = ConflictModeManual
+			} else if theirs {
+				mode = ConflictModeTheirs
+			} else if ours {
+				mode = ConflictModeOurs
+			}
+
 			var workspaceName string
 			if len(args) > 0 {
 				workspaceName = args[0]
@@ -63,15 +100,18 @@ Or provide a workspace name to look it up from the cloud.`,
 			if workspaceName == "" && fromPath == "" {
 				return fmt.Errorf("must specify workspace name or --from path")
 			}
-			return runMerge(workspaceName, fromPath, !manual, cherryPick, dryRun)
+			return runMerge(workspaceName, fromPath, mode, cherryPick, dryRun)
 		},
 	}
 
-	cmd.Flags().BoolVar(&useAgent, "agent", true, "Use coding agent for conflict resolution (default)")
+	cmd.Flags().BoolVar(&useAgent, "agent", false, "Use coding agent for conflict resolution (default)")
 	cmd.Flags().BoolVar(&manual, "manual", false, "Create conflict markers for manual resolution")
-	cmd.Flags().StringSliceVar(&cherryPick, "cherry-pick", nil, "Only merge specific files")
+	cmd.Flags().BoolVar(&theirs, "theirs", false, "Take source version for all conflicts")
+	cmd.Flags().BoolVar(&ours, "ours", false, "Keep target version for all conflicts")
+	cmd.Flags().StringSliceVar(&cherryPick, "files", nil, "Only merge specific files")
+	cmd.Flags().StringSliceVar(&cherryPick, "cherry-pick", nil, "Only merge specific files (alias for --files)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be merged without making changes")
-	cmd.Flags().StringVar(&fromPath, "from", "", "Source workspace path (local merge without cloud)")
+	cmd.Flags().StringVar(&fromPath, "from", "", "Source workspace path")
 
 	return cmd
 }
@@ -86,7 +126,7 @@ type MergeResult struct {
 	ManualMode bool
 }
 
-func runMerge(sourceName string, fromPath string, useAgent bool, cherryPick []string, dryRun bool) error {
+func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -100,7 +140,7 @@ func runMerge(sourceName string, fromPath string, useAgent bool, cherryPick []st
 	var sourceRoot string
 	var sourceDisplayName string
 
-	// If --from path is specified, use it directly (no cloud auth needed)
+	// If --from path is specified, use it directly
 	if fromPath != "" {
 		// Resolve to absolute path
 		if !filepath.IsAbs(fromPath) {
@@ -124,36 +164,47 @@ func runMerge(sourceName string, fromPath string, useAgent bool, cherryPick []st
 			sourceDisplayName = filepath.Base(sourceRoot)
 		}
 	} else {
-		// Look up workspace from cloud
-		token, err := auth.GetToken()
-		if err != nil || token == "" {
-			return fmt.Errorf("not logged in - use --from <path> for local merge, or 'fst login' for cloud")
-		}
-
-		client := api.NewClient(token)
-		_, workspaces, err := client.GetProject(cfg.ProjectID)
+		// Look up workspace from local registry first
+		registry, err := LoadRegistry()
 		if err != nil {
-			return fmt.Errorf("failed to fetch project: %w", err)
+			return fmt.Errorf("failed to load workspace registry: %w", err)
 		}
 
-		var sourceWorkspace *api.Workspace
-		for _, ws := range workspaces {
-			if ws.Name == sourceName || ws.ID == sourceName {
-				sourceWorkspace = &ws
+		var found *RegisteredWorkspace
+		for _, w := range registry.Workspaces {
+			if (w.Name == sourceName || w.ID == sourceName) && w.ProjectID == cfg.ProjectID {
+				wCopy := w
+				found = &wCopy
 				break
 			}
 		}
 
-		if sourceWorkspace == nil {
-			return fmt.Errorf("workspace '%s' not found", sourceName)
-		}
+		if found == nil {
+			// Try cloud as fallback
+			token, _ := auth.GetToken()
+			if token != "" {
+				client := api.NewClient(token)
+				_, cloudWorkspaces, err := client.GetProject(cfg.ProjectID)
+				if err == nil {
+					for _, ws := range cloudWorkspaces {
+						if ws.Name == sourceName || ws.ID == sourceName {
+							if ws.LocalPath != nil && *ws.LocalPath != "" {
+								sourceRoot = *ws.LocalPath
+								sourceDisplayName = ws.Name
+								break
+							}
+						}
+					}
+				}
+			}
 
-		if sourceWorkspace.LocalPath == nil || *sourceWorkspace.LocalPath == "" {
-			return fmt.Errorf("source workspace has no local path - cannot merge from remote workspaces yet")
+			if sourceRoot == "" {
+				return fmt.Errorf("workspace '%s' not found\nUse --from <path> to specify path directly, or run 'fst workspaces' to see available workspaces", sourceName)
+			}
+		} else {
+			sourceRoot = found.Path
+			sourceDisplayName = found.Name
 		}
-
-		sourceRoot = *sourceWorkspace.LocalPath
-		sourceDisplayName = sourceWorkspace.Name
 	}
 
 	// Verify source path exists
@@ -214,8 +265,8 @@ func runMerge(sourceName string, fromPath string, useAgent bool, cherryPick []st
 	}
 
 	result := &MergeResult{
-		AgentUsed:  useAgent,
-		ManualMode: !useAgent,
+		AgentUsed:  mode == ConflictModeAgent,
+		ManualMode: mode == ConflictModeManual,
 	}
 
 	// Apply non-conflicting changes
@@ -235,13 +286,14 @@ func runMerge(sourceName string, fromPath string, useAgent bool, cherryPick []st
 
 	// Handle conflicts
 	if len(mergeActions.conflicts) > 0 {
-		if useAgent {
+		switch mode {
+		case ConflictModeAgent:
 			fmt.Println("Resolving conflicts with agent...")
 			preferredAgent, err := agent.GetPreferredAgent()
 			if err != nil {
 				fmt.Printf("Warning: %v\n", err)
 				fmt.Println("Falling back to manual conflict markers...")
-				useAgent = false
+				mode = ConflictModeManual
 			} else {
 				fmt.Printf("Using %s for conflict resolution...\n", preferredAgent.Name)
 				for _, conflict := range mergeActions.conflicts {
@@ -259,9 +311,29 @@ func runMerge(sourceName string, fromPath string, useAgent bool, cherryPick []st
 					}
 				}
 			}
+
+		case ConflictModeTheirs:
+			fmt.Println("Taking source version for all conflicts...")
+			for _, conflict := range mergeActions.conflicts {
+				if err := applyChange(localRoot, sourceRoot, conflict); err != nil {
+					fmt.Printf("  ✗ %s: %v\n", conflict.path, err)
+					result.Failed = append(result.Failed, conflict.path)
+				} else {
+					fmt.Printf("  ✓ %s (took theirs)\n", conflict.path)
+					result.Applied = append(result.Applied, conflict.path)
+				}
+			}
+
+		case ConflictModeOurs:
+			fmt.Println("Keeping local version for all conflicts...")
+			for _, conflict := range mergeActions.conflicts {
+				fmt.Printf("  ✓ %s (kept ours)\n", conflict.path)
+				result.Applied = append(result.Applied, conflict.path)
+			}
 		}
 
-		if !useAgent {
+		// Handle manual mode (or fallback from agent)
+		if mode == ConflictModeManual {
 			fmt.Println("Creating conflict markers for manual resolution...")
 			for _, conflict := range mergeActions.conflicts {
 				if err := createConflictMarkers(localRoot, sourceRoot, conflict); err != nil {
@@ -286,12 +358,15 @@ func runMerge(sourceName string, fromPath string, useAgent bool, cherryPick []st
 		fmt.Printf("  ✗ Failed:    %d files\n", len(result.Failed))
 	}
 
-	if len(result.Conflicts) > 0 && !useAgent {
+	if len(result.Conflicts) > 0 {
 		fmt.Println()
 		fmt.Println("To resolve conflicts manually:")
 		fmt.Println("  1. Edit the conflicting files (look for <<<<<<< markers)")
 		fmt.Println("  2. Remove the conflict markers")
 		fmt.Println("  3. Run 'fst snapshot' to save the merged state")
+	} else if len(result.Applied) > 0 {
+		fmt.Println()
+		fmt.Printf("Run 'fst snapshot -m \"Merged %s\"' to save.\n", sourceDisplayName)
 	}
 
 	return nil
