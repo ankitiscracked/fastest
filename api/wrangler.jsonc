@@ -1,7 +1,28 @@
 {
-  "name": "fastest-sandbox-worker",
+  "name": "fastest-api",
   "main": "src/index.ts",
-  "compatibility_date": "2024-12-18",
+  "compatibility_date": "2024-01-01",
+
+  "vars": {
+    "ENVIRONMENT": "development"
+  },
+
+  // D1 Database
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fastest-db",
+      "database_id": "local"
+    }
+  ],
+
+  // R2 Bucket for blobs
+  "r2_buckets": [
+    {
+      "binding": "BLOBS",
+      "bucket_name": "fastest-blobs"
+    }
+  ],
 
   // Sandbox container configuration
   "containers": [
@@ -23,16 +44,11 @@
     ]
   },
 
-  // Migrations for Durable Objects (note: new_sqlite_classes for Sandbox SDK)
+  // Migrations for Durable Objects
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": ["Sandbox"]
     }
-  ],
-
-  // Environment variables (for local dev - set these in .dev.vars)
-  "vars": {
-    "API_URL": "http://localhost:8788"
-  }
+  ]
 }

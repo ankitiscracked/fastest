@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "hono": "^4.0.0",
-    "@fastest/shared": "workspace:*"
+    "@fastest/shared": "workspace:*",
+    "@cloudflare/sandbox": "^0.0.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260117.0",

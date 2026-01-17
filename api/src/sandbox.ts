@@ -1,71 +1,19 @@
 /**
- * Fastest Sandbox Worker
- *
- * This Worker uses Cloudflare Sandboxes to run agent jobs in isolated containers.
- *
- * Endpoints:
- *   POST /run-job - Run a specific job in a sandbox
- *   POST /run-next - Poll and run the next pending job
- *   GET /health - Health check
+ * Sandbox execution - runs OpenCode in a Cloudflare Sandbox container
  */
 
-import { Hono } from 'hono';
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
+import type { Env } from './index';
 
-// Re-export Sandbox class for Durable Object binding
-export { Sandbox } from '@cloudflare/sandbox';
-
-interface Env {
-  Sandbox: DurableObjectNamespace<Sandbox>;
-  API_URL: string;
-  API_TOKEN: string;
-  ANTHROPIC_API_KEY?: string;
-  OPENAI_API_KEY?: string;
-  GOOGLE_GENERATIVE_AI_API_KEY?: string;
-  PROVIDER?: string;
+interface RunJobResult {
+  success: boolean;
+  job_id: string;
+  output_snapshot_id?: string;
+  error?: string;
+  duration_ms?: number;
+  stdout?: string;
+  stderr?: string;
 }
-
-const app = new Hono<{ Bindings: Env }>();
-
-// Health check
-app.get('/health', (c) => {
-  return c.json({ status: 'ok', service: 'fastest-sandbox-worker' });
-});
-
-// Run a specific job
-app.post('/run-job', async (c) => {
-  const body = await c.req.json<{ job_id: string }>();
-
-  if (!body.job_id) {
-    return c.json({ error: 'job_id is required' }, 400);
-  }
-
-  const result = await runJobInSandbox(c.env, body.job_id);
-  return c.json(result);
-});
-
-// Poll and run the next pending job
-app.post('/run-next', async (c) => {
-  // First, get the next pending job from the API
-  const apiResponse = await fetch(`${c.env.API_URL}/v1/jobs/next`, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${c.env.API_TOKEN}`,
-    },
-  });
-
-  if (!apiResponse.ok) {
-    if (apiResponse.status === 404) {
-      return c.json({ message: 'No pending jobs' });
-    }
-    const error = await apiResponse.text();
-    return c.json({ error: `Failed to get next job: ${error}` }, 500);
-  }
-
-  const { job } = await apiResponse.json() as { job: { id: string } };
-  const result = await runJobInSandbox(c.env, job.id);
-  return c.json(result);
-});
 
 /**
  * Generate the runner script that executes inside the sandbox
@@ -409,15 +357,12 @@ main().catch(async (error) => {
 /**
  * Run a job inside a Cloudflare Sandbox container
  */
-async function runJobInSandbox(env: Env, jobId: string): Promise<{
-  success: boolean;
-  job_id: string;
-  output_snapshot_id?: string;
-  error?: string;
-  duration_ms?: number;
-  stdout?: string;
-  stderr?: string;
-}> {
+export async function runJobInSandbox(
+  env: Env,
+  jobId: string,
+  apiUrl: string,
+  apiToken: string
+): Promise<RunJobResult> {
   const startTime = Date.now();
 
   try {
@@ -427,8 +372,8 @@ async function runJobInSandbox(env: Env, jobId: string): Promise<{
     // Generate and write the runner script
     const runnerScript = generateRunnerScript({
       jobId,
-      apiUrl: env.API_URL,
-      apiToken: env.API_TOKEN,
+      apiUrl,
+      apiToken,
       anthropicKey: env.ANTHROPIC_API_KEY,
       openaiKey: env.OPENAI_API_KEY,
       googleKey: env.GOOGLE_GENERATIVE_AI_API_KEY,
@@ -476,6 +421,3 @@ async function runJobInSandbox(env: Env, jobId: string): Promise<{
     };
   }
 }
-
-// Export default handler for Cloudflare Workers
-export default app;

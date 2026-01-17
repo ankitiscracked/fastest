@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { Sandbox } from '@cloudflare/sandbox';
 import { authRoutes } from './routes/auth';
 import { oauthRoutes } from './routes/oauth';
 import { projectRoutes } from './routes/projects';
@@ -9,10 +10,20 @@ import { workspaceRoutes } from './routes/workspaces';
 import { blobRoutes } from './routes/blobs';
 import { jobRoutes } from './routes/jobs';
 
+// Re-export Sandbox class for Durable Object binding
+export { Sandbox } from '@cloudflare/sandbox';
+
 export interface Env {
   DB: D1Database;
   BLOBS: R2Bucket;
   ENVIRONMENT: string;
+  // Sandbox container bindings
+  Sandbox: DurableObjectNamespace<Sandbox>;
+  // API keys for LLM providers
+  ANTHROPIC_API_KEY?: string;
+  OPENAI_API_KEY?: string;
+  GOOGLE_GENERATIVE_AI_API_KEY?: string;
+  PROVIDER?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();

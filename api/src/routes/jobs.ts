@@ -3,6 +3,7 @@ import type { Env } from '../index';
 import type { Job, CreateJobRequest, JobStatus } from '@fastest/shared';
 import type { DbJob } from '../types';
 import { getAuthUser } from '../middleware/auth';
+import { runJobInSandbox } from '../sandbox';
 
 export const jobRoutes = new Hono<{ Bindings: Env }>();
 
@@ -388,6 +389,85 @@ jobRoutes.post('/:jobId/status', async (c) => {
       started_at: updatedJob!.started_at,
       completed_at: updatedJob!.completed_at,
     } as Job
+  });
+});
+
+// Run a job in a sandbox
+jobRoutes.post('/:jobId/run', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const jobId = c.req.param('jobId');
+  const db = c.env.DB;
+
+  // Get job and verify ownership
+  const job = await db.prepare(`
+    SELECT j.*, p.owner_user_id
+    FROM jobs j
+    JOIN projects p ON j.project_id = p.id
+    WHERE j.id = ?
+  `).bind(jobId).first<DbJob & { owner_user_id: string }>();
+
+  if (!job) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404);
+  }
+
+  if (job.owner_user_id !== user.id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
+  }
+
+  // Can only run pending jobs
+  if (job.status !== 'pending') {
+    return c.json({
+      error: {
+        code: 'INVALID_STATE',
+        message: `Cannot run job with status '${job.status}'`
+      }
+    }, 422);
+  }
+
+  // Get the API URL from the request
+  const apiUrl = new URL(c.req.url).origin;
+
+  // Get auth token from request
+  const authHeader = c.req.header('Authorization');
+  const apiToken = authHeader?.replace('Bearer ', '') || '';
+
+  // Run job in sandbox
+  const result = await runJobInSandbox(c.env, jobId, apiUrl, apiToken);
+
+  if (!result.success) {
+    return c.json({
+      error: {
+        code: 'EXECUTION_FAILED',
+        message: result.error || 'Job execution failed',
+      },
+      job_id: jobId,
+      duration_ms: result.duration_ms,
+    }, 500);
+  }
+
+  // Fetch updated job
+  const updatedJob = await db.prepare(`
+    SELECT * FROM jobs WHERE id = ?
+  `).bind(jobId).first<DbJob>();
+
+  return c.json({
+    job: {
+      id: updatedJob!.id,
+      workspace_id: updatedJob!.workspace_id,
+      project_id: updatedJob!.project_id,
+      prompt: updatedJob!.prompt,
+      status: updatedJob!.status as JobStatus,
+      output_snapshot_id: updatedJob!.output_snapshot_id,
+      error: updatedJob!.error,
+      created_at: updatedJob!.created_at,
+      started_at: updatedJob!.started_at,
+      completed_at: updatedJob!.completed_at,
+    } as Job,
+    duration_ms: result.duration_ms,
   });
 });
 
