@@ -94,6 +94,36 @@ class ApiClient {
       `/projects/${projectId}/workspaces`
     );
   }
+
+  // Jobs
+  async createJob(workspaceId: string, prompt: string) {
+    return this.request<{ job: import('@fastest/shared').Job }>('POST', '/jobs', {
+      workspace_id: workspaceId,
+      prompt,
+    });
+  }
+
+  async getJob(jobId: string) {
+    return this.request<{ job: import('@fastest/shared').Job }>('GET', `/jobs/${jobId}`);
+  }
+
+  async listJobs(workspaceId: string) {
+    return this.request<{ jobs: import('@fastest/shared').Job[] }>(
+      'GET',
+      `/jobs?workspace_id=${workspaceId}`
+    );
+  }
+
+  async runJob(jobId: string) {
+    return this.request<{ job: import('@fastest/shared').Job; duration_ms: number }>(
+      'POST',
+      `/jobs/${jobId}/run`
+    );
+  }
+
+  async cancelJob(jobId: string) {
+    return this.request<{ job: import('@fastest/shared').Job }>('POST', `/jobs/${jobId}/cancel`);
+  }
 }
 
 export const api = new ApiClient();

@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import type { Workspace, DriftReport } from '@fastest/shared';
+import type { Workspace, DriftReport, Job } from '@fastest/shared';
 import { api } from '../api/client';
 
 interface DriftDetail {
@@ -19,8 +19,23 @@ export function WorkspaceDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Jobs state
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [newPrompt, setNewPrompt] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [runningJobId, setRunningJobId] = useState<string | null>(null);
+  const pollIntervalRef = useRef<number | null>(null);
+
   useEffect(() => {
     fetchWorkspace();
+    fetchJobs();
+
+    // Cleanup polling on unmount
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
   }, [workspaceId]);
 
   const fetchWorkspace = async () => {
@@ -37,6 +52,83 @@ export function WorkspaceDetail() {
       setError(err instanceof Error ? err.message : 'Failed to fetch workspace');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchJobs = async () => {
+    if (!workspaceId) return;
+    try {
+      const data = await api.listJobs(workspaceId);
+      setJobs(data.jobs);
+    } catch (err) {
+      console.error('Failed to fetch jobs:', err);
+    }
+  };
+
+  const handleCreateJob = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!workspaceId || !newPrompt.trim()) return;
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { job } = await api.createJob(workspaceId, newPrompt.trim());
+      setJobs((prev) => [job, ...prev]);
+      setNewPrompt('');
+
+      // Automatically run the job
+      await handleRunJob(job.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create job');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRunJob = async (jobId: string) => {
+    setRunningJobId(jobId);
+    setError(null);
+
+    // Start polling for status updates
+    pollIntervalRef.current = window.setInterval(async () => {
+      try {
+        const { job } = await api.getJob(jobId);
+        setJobs((prev) => prev.map((j) => (j.id === jobId ? job : j)));
+
+        if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          setRunningJobId(null);
+        }
+      } catch (err) {
+        console.error('Failed to poll job status:', err);
+      }
+    }, 2000);
+
+    try {
+      await api.runJob(jobId);
+      // Final fetch after run completes
+      const { job } = await api.getJob(jobId);
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? job : j)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to run job');
+    } finally {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      setRunningJobId(null);
+    }
+  };
+
+  const handleCancelJob = async (jobId: string) => {
+    try {
+      const { job } = await api.cancelJob(jobId);
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? job : j)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel job');
     }
   };
 
@@ -118,6 +210,92 @@ export function WorkspaceDetail() {
           )}
         </div>
       )}
+
+      {/* Agent Jobs */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-200">
+          <h3 className="text-sm font-medium text-gray-900">Agent Jobs</h3>
+          <p className="text-xs text-gray-500 mt-1">Run AI-powered code changes on this workspace</p>
+        </div>
+
+        {/* New Job Form */}
+        <form onSubmit={handleCreateJob} className="p-4 border-b border-gray-200 bg-gray-50">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newPrompt}
+              onChange={(e) => setNewPrompt(e.target.value)}
+              placeholder="Describe the code changes you want..."
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              disabled={submitting || runningJobId !== null}
+            />
+            <button
+              type="submit"
+              disabled={submitting || runningJobId !== null || !newPrompt.trim()}
+              className="px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submitting ? 'Creating...' : runningJobId ? 'Running...' : 'Run'}
+            </button>
+          </div>
+        </form>
+
+        {/* Jobs List */}
+        <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+          {jobs.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-gray-500">
+              No jobs yet. Create one above to get started.
+            </div>
+          ) : (
+            jobs.map((job) => (
+              <div key={job.id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900 truncate">{job.prompt}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <JobStatusBadge status={job.status} />
+                      <span className="text-xs text-gray-400">
+                        {new Date(job.created_at).toLocaleString()}
+                      </span>
+                      {job.completed_at && job.started_at && (
+                        <span className="text-xs text-gray-400">
+                          ({Math.round((new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()) / 1000)}s)
+                        </span>
+                      )}
+                    </div>
+                    {job.error && (
+                      <p className="text-xs text-red-600 mt-1">{job.error}</p>
+                    )}
+                    {job.output_snapshot_id && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Output: <span className="font-mono">{job.output_snapshot_id.slice(0, 12)}...</span>
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {job.status === 'pending' && (
+                      <button
+                        onClick={() => handleRunJob(job.id)}
+                        disabled={runningJobId !== null}
+                        className="text-xs px-2 py-1 bg-primary-100 text-primary-700 rounded hover:bg-primary-200 disabled:opacity-50"
+                      >
+                        Run
+                      </button>
+                    )}
+                    {(job.status === 'pending' || job.status === 'running') && (
+                      <button
+                        onClick={() => handleCancelJob(job.id)}
+                        className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
 
       {/* File Changes */}
       {driftDetail && (
@@ -226,4 +404,20 @@ function formatBytes(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function JobStatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    pending: 'bg-gray-100 text-gray-700',
+    running: 'bg-blue-100 text-blue-700',
+    completed: 'bg-green-100 text-green-700',
+    failed: 'bg-red-100 text-red-700',
+    cancelled: 'bg-yellow-100 text-yellow-700',
+  };
+
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[status] || styles.pending}`}>
+      {status}
+    </span>
+  );
 }
