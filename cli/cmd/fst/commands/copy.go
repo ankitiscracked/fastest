@@ -11,8 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/ignore"
 )
@@ -27,16 +25,16 @@ func newCopyCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "copy",
-		Short: "Create a local copy of the current workspace",
-		Long: `Create a new workspace by copying the current project to a new directory.
+		Short: "Create a linked workspace copy",
+		Long: `Create a new linked workspace by copying project files to a new directory.
 
 This will:
 1. Copy all project files to the target directory (respecting .fstignore)
-2. Initialize .fst/ in the new directory
-3. Register the new workspace with the cloud
-4. Set the current snapshot as the base for the new workspace
+2. Create a lightweight .fst link pointing to the main workspace
+3. Share the blob cache with the main workspace (no duplication)
 
-Use this to create multiple parallel working copies for different agents.`,
+The new workspace shares storage with the main workspace, making copies fast
+and storage-efficient even for large projects.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCopy(name, targetDir)
 		},
@@ -62,9 +60,11 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	// Get auth token (optional - we can work locally without it)
-	token, _ := auth.GetToken()
-	hasAuth := token != ""
+	// Get main workspace path (for linking)
+	mainPath, err := config.GetMainWorkspacePath()
+	if err != nil {
+		return fmt.Errorf("failed to find main workspace: %w", err)
+	}
 
 	// Resolve target directory
 	if !filepath.IsAbs(targetDir) {
@@ -80,7 +80,7 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("target directory already exists: %s", targetDir)
 	}
 
-	fmt.Printf("Copying project to %s...\n", targetDir)
+	fmt.Printf("Creating linked workspace at %s...\n", targetDir)
 
 	// Load ignore patterns
 	matcher, err := ignore.LoadFromDir(root)
@@ -130,7 +130,7 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
 
-	// Copy files
+	// Copy files (excluding .fst)
 	copied := 0
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -181,72 +181,25 @@ func runCopy(name, targetDir string) error {
 
 	fmt.Printf("Copied %d files.\n", copied)
 
-	// Try to register workspace with cloud (optional)
-	var workspaceID string
-	if hasAuth {
-		fmt.Println("Registering workspace with cloud...")
-		client := api.NewClient(token)
-		machineID := config.GetMachineID()
+	// Generate workspace ID
+	workspaceID := generateLocalID()
 
-		workspace, err := client.CreateWorkspace(cfg.ProjectID, api.CreateWorkspaceRequest{
-			Name:           name,
-			MachineID:      &machineID,
-			LocalPath:      &targetDir,
-			BaseSnapshotID: &cfg.BaseSnapshotID,
-		})
-		if err != nil {
-			fmt.Printf("Warning: Failed to register with cloud: %v\n", err)
-			workspaceID = generateLocalID()
-		} else {
-			workspaceID = workspace.ID
-		}
-	} else {
-		// Generate local workspace ID
-		workspaceID = generateLocalID()
+	// Initialize linked workspace
+	// We need to cd to target dir temporarily to create the link
+	origDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if err := os.Chdir(targetDir); err != nil {
+		return fmt.Errorf("failed to change to target directory: %w", err)
 	}
 
-	// Initialize .fst/ in target directory
-	fstDir := filepath.Join(targetDir, ".fst")
-	if err := os.MkdirAll(fstDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .fst directory: %w", err)
-	}
+	err = config.InitLinked(mainPath, workspaceID, name, cfg.BaseSnapshotID, cfg.ProjectID)
+	os.Chdir(origDir) // Restore original directory
 
-	// Create subdirectories
-	for _, subdir := range []string{"cache", "cache/blobs", "cache/manifests"} {
-		if err := os.MkdirAll(filepath.Join(fstDir, subdir), 0755); err != nil {
-			return fmt.Errorf("failed to create %s: %w", subdir, err)
-		}
-	}
-
-	// Copy the base manifest from source workspace
-	srcManifestPath := filepath.Join(root, ".fst", "cache", "manifests", cfg.BaseSnapshotID+".json")
-	dstManifestPath := filepath.Join(fstDir, "cache", "manifests", cfg.BaseSnapshotID+".json")
-	if manifestData, err := os.ReadFile(srcManifestPath); err == nil {
-		os.WriteFile(dstManifestPath, manifestData, 0644)
-	}
-
-	// Write config
-	configData := fmt.Sprintf(`{
-  "project_id": "%s",
-  "workspace_id": "%s",
-  "workspace_name": "%s",
-  "base_snapshot_id": "%s",
-  "mode": "%s",
-  "local_path": "%s"
-}`, cfg.ProjectID, workspaceID, name, cfg.BaseSnapshotID, cfg.Mode, targetDir)
-
-	configPath := filepath.Join(fstDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(configData), 0644); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
-	}
-
-	// Create .gitignore
-	gitignore := `# Fastest local cache
-cache/
-*.log
-`
-	if err := os.WriteFile(filepath.Join(fstDir, ".gitignore"), []byte(gitignore), 0644); err != nil {
-		return fmt.Errorf("failed to write .gitignore: %w", err)
+	if err != nil {
+		os.RemoveAll(targetDir)
+		return fmt.Errorf("failed to initialize linked workspace: %w", err)
 	}
 
 	// Register workspace in global registry
@@ -262,15 +215,15 @@ cache/
 	}
 
 	fmt.Println()
-	fmt.Println("✓ Workspace copied successfully!")
+	fmt.Println("✓ Linked workspace created!")
 	fmt.Println()
 	fmt.Printf("  Name:      %s\n", name)
 	fmt.Printf("  Directory: %s\n", targetDir)
+	fmt.Printf("  Main:      %s\n", mainPath)
 	fmt.Printf("  Base:      %s\n", cfg.BaseSnapshotID)
 	fmt.Printf("  ID:        %s\n", workspaceID)
-	if !hasAuth {
-		fmt.Println("  (local only - not synced to cloud)")
-	}
+	fmt.Println()
+	fmt.Println("  (shares blob cache with main workspace - no storage duplication)")
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Printf("  cd %s\n", targetDir)

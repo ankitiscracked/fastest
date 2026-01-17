@@ -34,7 +34,7 @@ func newInitCmd() *cobra.Command {
 
 This will:
 1. Create a project (locally, or in cloud if authenticated)
-2. Create a workspace for this directory
+2. Create a main workspace for this directory
 3. Set up the local .fst/ directory
 4. Create an initial snapshot of current files
 
@@ -55,7 +55,7 @@ If no name is provided, the current directory name will be used.`,
 func runInit(args []string, workspaceName string, noSnapshot bool) error {
 	// Check if already initialized
 	if config.IsInitialized() {
-		return fmt.Errorf("already initialized - .fst/ directory exists")
+		return fmt.Errorf("already initialized - .fst directory exists")
 	}
 
 	// Get current directory
@@ -121,13 +121,14 @@ func runInit(args []string, workspaceName string, noSnapshot bool) error {
 		workspaceID = generateWorkspaceID()
 	}
 
-	// Create .fst directory structure
+	// Create .fst directory structure (main workspace)
 	fstDir := filepath.Join(cwd, ".fst")
 	if err := os.MkdirAll(fstDir, 0755); err != nil {
 		return fmt.Errorf("failed to create .fst directory: %w", err)
 	}
 
-	for _, subdir := range []string{"cache", "cache/blobs", "cache/manifests"} {
+	// Create subdirectories including workspaces/ for linked workspaces
+	for _, subdir := range []string{"cache", "cache/blobs", "cache/manifests", "workspaces"} {
 		if err := os.MkdirAll(filepath.Join(fstDir, subdir), 0755); err != nil {
 			return fmt.Errorf("failed to create %s: %w", subdir, err)
 		}
@@ -195,13 +196,14 @@ func runInit(args []string, workspaceName string, noSnapshot bool) error {
 		fmt.Printf("Captured %d files.\n", m.FileCount())
 	}
 
-	// Write config
+	// Write config (main workspace)
 	configData := fmt.Sprintf(`{
   "project_id": "%s",
   "workspace_id": "%s",
   "workspace_name": "%s",
   "base_snapshot_id": "%s",
-  "mode": "%s"
+  "mode": "%s",
+  "is_main": true
 }`, projectID, workspaceID, workspaceName, snapshotID, modeString(cloudSynced))
 
 	configPath := filepath.Join(fstDir, "config.json")
@@ -212,6 +214,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool) error {
 	// Create .gitignore for .fst
 	gitignore := `# Fastest local cache
 cache/
+workspaces/
 *.log
 `
 	if err := os.WriteFile(filepath.Join(fstDir, ".gitignore"), []byte(gitignore), 0644); err != nil {
@@ -234,7 +237,7 @@ cache/
 	fmt.Println("✓ Project initialized!")
 	fmt.Println()
 	fmt.Printf("  Project:   %s\n", projectName)
-	fmt.Printf("  Workspace: %s\n", workspaceName)
+	fmt.Printf("  Workspace: %s (main)\n", workspaceName)
 	fmt.Printf("  Directory: %s\n", cwd)
 	if snapshotID != "" {
 		fmt.Printf("  Snapshot:  %s\n", snapshotID)
@@ -245,7 +248,7 @@ cache/
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  fst drift       # Check for changes")
-	fmt.Println("  fst copy -n feature -t ../feature  # Create workspace copy")
+	fmt.Println("  fst copy -n feature -t ../feature  # Create linked workspace")
 
 	return nil
 }

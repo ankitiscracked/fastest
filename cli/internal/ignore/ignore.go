@@ -10,6 +10,7 @@ import (
 // DefaultPatterns are always ignored
 var DefaultPatterns = []string{
 	".fst/",
+	".fst", // For linked workspaces where .fst is a file
 	".git/",
 	".svn/",
 	".hg/",
