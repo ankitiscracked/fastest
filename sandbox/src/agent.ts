@@ -2,7 +2,7 @@
  * Agent execution - run OpenCode or other agents
  */
 
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 
 export interface AgentConfig {
   /** Working directory for the agent */
@@ -25,25 +25,24 @@ export interface AgentResult {
 }
 
 /**
- * Run OpenCode with a prompt
+ * Get default model for a provider
  */
-export async function runOpenCode(
-  prompt: string,
-  config: AgentConfig
-): Promise<AgentResult> {
-  const args = [
-    '-p', prompt,           // Non-interactive prompt mode
-    '-f', 'json',           // JSON output format
-    '-q',                   // Quiet mode (no spinner)
-    '-c', config.workDir,   // Working directory
-  ];
-
-  // Add max steps if specified
-  if (config.maxSteps) {
-    args.push('--max-steps', config.maxSteps.toString());
+function getDefaultModel(provider: string): string {
+  switch (provider) {
+    case 'google':
+      return 'gemini-2.0-flash';
+    case 'openai':
+      return 'gpt-4o';
+    case 'anthropic':
+    default:
+      return 'claude-sonnet-4-20250514';
   }
+}
 
-  // Build environment with API keys
+/**
+ * Start OpenCode serve process
+ */
+function startServe(config: AgentConfig, port: number): ChildProcess {
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
     HOME: process.env.HOME || '/root',
@@ -55,75 +54,193 @@ export async function runOpenCode(
     if (config.provider === 'openai') {
       env.OPENAI_API_KEY = config.apiKey;
     } else if (config.provider === 'google') {
-      env.GOOGLE_API_KEY = config.apiKey;
+      env.GOOGLE_GENERATIVE_AI_API_KEY = config.apiKey;
     } else {
-      // Default to Anthropic
       env.ANTHROPIC_API_KEY = config.apiKey;
     }
   }
 
+  const proc = spawn('opencode', ['serve', '--port', port.toString()], {
+    cwd: config.workDir,
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
+  });
+
+  return proc;
+}
+
+/**
+ * Wait for serve to be ready
+ */
+async function waitForServe(port: number, timeoutMs: number = 30000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`http://localhost:${port}/doc`);
+      if (response.ok) return true;
+    } catch {
+      // Not ready yet
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
+/**
+ * Run OpenCode with a prompt using the serve API
+ */
+export async function runOpenCode(
+  prompt: string,
+  config: AgentConfig
+): Promise<AgentResult> {
+  const port = 19000 + Math.floor(Math.random() * 1000);
+  let serveProc: ChildProcess | null = null;
+
   console.log(`Running OpenCode with prompt: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   console.log(`  Working directory: ${config.workDir}`);
+  console.log(`  Starting serve on port ${port}...`);
 
-  return new Promise((resolve) => {
-    const proc = spawn('opencode', args, {
-      cwd: config.workDir,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+  try {
+    // Start serve process
+    serveProc = startServe(config, port);
 
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    proc.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    proc.on('error', (error) => {
-      resolve({
+    // Wait for serve to be ready
+    const ready = await waitForServe(port);
+    if (!ready) {
+      return {
         success: false,
-        output: stdout,
-        error: `Failed to start OpenCode: ${error.message}`,
+        output: '',
+        error: 'OpenCode serve failed to start',
         exitCode: -1,
+      };
+    }
+
+    console.log('  Serve ready, warming up...');
+
+    // Send a warmup message to initialize the model
+    try {
+      const warmupResponse = await fetch(`http://localhost:${port}/session?directory=${config.workDir}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
       });
-    });
-
-    proc.on('close', (code) => {
-      const exitCode = code ?? 0;
-      const success = exitCode === 0;
-
-      if (!success) {
-        console.log(`OpenCode exited with code ${exitCode}`);
-        if (stderr) {
-          console.log(`  stderr: ${stderr.slice(0, 500)}`);
-        }
+      if (warmupResponse.ok) {
+        const session = await warmupResponse.json() as { id: string };
+        await fetch(`http://localhost:${port}/session/${session.id}/message?directory=${config.workDir}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: { providerID: config.provider, modelID: config.model || getDefaultModel(config.provider || 'anthropic') },
+            parts: [{ type: 'text', text: 'say hi' }],
+          }),
+        });
       }
+    } catch {
+      // Warmup failed, continue anyway
+    }
 
-      resolve({
-        success,
-        output: stdout,
-        error: success ? undefined : (stderr || `Exit code ${exitCode}`),
-        exitCode,
+    console.log('  Running prompt...');
+
+    // Build environment for run command
+    const env: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      HOME: process.env.HOME || '/root',
+      PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    };
+
+    if (config.apiKey) {
+      if (config.provider === 'openai') {
+        env.OPENAI_API_KEY = config.apiKey;
+      } else if (config.provider === 'google') {
+        env.GOOGLE_GENERATIVE_AI_API_KEY = config.apiKey;
+      } else {
+        env.ANTHROPIC_API_KEY = config.apiKey;
+      }
+    }
+
+    // Build run command args
+    const model = config.model || getDefaultModel(config.provider || 'anthropic');
+    const args = [
+      'run',
+      prompt,
+      '--model', `${config.provider}/${model}`,
+      '--attach', `http://localhost:${port}`,
+      '--format', 'json',
+    ];
+
+    // Run opencode run with --attach
+    const result = await new Promise<AgentResult>((resolve) => {
+      const proc = spawn('opencode', args, {
+        cwd: config.workDir,
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
+
+      // Close stdin immediately to prevent TTY issues
+      proc.stdin?.end();
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('error', (error) => {
+        resolve({
+          success: false,
+          output: stdout,
+          error: `Failed to start OpenCode: ${error.message}`,
+          exitCode: -1,
+        });
+      });
+
+      proc.on('close', (code) => {
+        const exitCode = code ?? 0;
+        const success = exitCode === 0;
+
+        if (!success) {
+          console.log(`OpenCode exited with code ${exitCode}`);
+          if (stderr) {
+            console.log(`  stderr: ${stderr.slice(0, 500)}`);
+          }
+        }
+
+        resolve({
+          success,
+          output: stdout,
+          error: success ? undefined : (stderr || `Exit code ${exitCode}`),
+          exitCode,
+        });
+      });
+
+      // Set a timeout (10 minutes)
+      const timeout = setTimeout(() => {
+        proc.kill('SIGTERM');
+        resolve({
+          success: false,
+          output: stdout,
+          error: 'Agent execution timed out after 10 minutes',
+          exitCode: -1,
+        });
+      }, 10 * 60 * 1000);
+
+      proc.on('close', () => clearTimeout(timeout));
     });
 
-    // Set a timeout (10 minutes by default)
-    const timeout = setTimeout(() => {
-      proc.kill('SIGTERM');
-      resolve({
-        success: false,
-        output: stdout,
-        error: 'Agent execution timed out after 10 minutes',
-        exitCode: -1,
-      });
-    }, 10 * 60 * 1000);
+    return result;
 
-    proc.on('close', () => clearTimeout(timeout));
-  });
+  } finally {
+    // Clean up serve process
+    if (serveProc) {
+      serveProc.kill('SIGTERM');
+    }
+  }
 }
 
 /**
@@ -131,21 +248,37 @@ export async function runOpenCode(
  */
 export function parseOpenCodeOutput(output: string): {
   success: boolean;
-  messages?: Array<{ role: string; content: string }>;
+  toolCalls?: Array<{ tool: string; status: string }>;
   error?: string;
 } {
   try {
-    // OpenCode outputs JSON when using -f json
-    const result = JSON.parse(output);
+    const lines = output.trim().split('\n');
+    const toolCalls: Array<{ tool: string; status: string }> = [];
+    let hasError = false;
+
+    for (const line of lines) {
+      if (!line) continue;
+      const event = JSON.parse(line);
+
+      if (event.type === 'tool_use' && event.part?.state) {
+        toolCalls.push({
+          tool: event.part.tool,
+          status: event.part.state.status,
+        });
+      }
+
+      if (event.type === 'error') {
+        hasError = true;
+      }
+    }
+
     return {
-      success: true,
-      messages: result.messages || [],
+      success: !hasError,
+      toolCalls,
     };
   } catch {
-    // If not valid JSON, treat as plain text output
     return {
       success: true,
-      messages: [{ role: 'assistant', content: output }],
     };
   }
 }

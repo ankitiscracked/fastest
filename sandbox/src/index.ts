@@ -24,6 +24,7 @@ const config = {
   workDir: process.env.WORK_DIR || '/tmp/workspace',
   anthropicKey: process.env.ANTHROPIC_API_KEY,
   openaiKey: process.env.OPENAI_API_KEY,
+  googleKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
   provider: process.env.PROVIDER || 'anthropic',
   maxSteps: parseInt(process.env.MAX_STEPS || '50'),
 };
@@ -105,10 +106,15 @@ async function runJob(api: ApiClient, job: Job) {
     console.log('\nRestoring workspace...');
     await ws.restore(workspace.base_snapshot_id);
 
-    // Determine API key
-    const apiKey = config.provider === 'openai'
-      ? config.openaiKey
-      : config.anthropicKey;
+    // Determine API key based on provider
+    let apiKey: string | undefined;
+    if (config.provider === 'openai') {
+      apiKey = config.openaiKey;
+    } else if (config.provider === 'google') {
+      apiKey = config.googleKey;
+    } else {
+      apiKey = config.anthropicKey;
+    }
 
     if (!apiKey) {
       throw new Error(`No API key provided for provider: ${config.provider}`);
