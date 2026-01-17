@@ -110,10 +110,15 @@ async function waitForServe(port, timeoutMs = 30000) {
 
 async function uploadBlob(hash, content) {
   const { urls } = await apiRequest('POST', '/v1/blobs/presign-upload', { hashes: [hash] });
-  const url = urls[hash];
+  const relativeUrl = urls[hash];
 
+  // Make URL absolute by prepending API_URL
+  const url = relativeUrl.startsWith('http') ? relativeUrl : API_URL + relativeUrl;
   const response = await fetch(url, {
     method: 'PUT',
+    headers: {
+      'Authorization': 'Bearer ' + API_TOKEN,
+    },
     body: content,
   });
 

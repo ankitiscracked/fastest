@@ -4,7 +4,9 @@
   "compatibility_date": "2024-09-23",
 
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "development",
+    "PROVIDER": "google",
+    "GOOGLE_GENERATIVE_AI_API_KEY": "AIzaSyDPtCD0hRivw45iOA-B0HH747HWoQ-diKE"
   },
 
   // D1 Database
