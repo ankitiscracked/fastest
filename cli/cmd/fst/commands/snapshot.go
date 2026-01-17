@@ -107,6 +107,39 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 		}
 	}
 
+	// Cache blobs (file contents) for rollback support
+	blobDir := filepath.Join(configDir, "cache", "blobs")
+	if err := os.MkdirAll(blobDir, 0755); err != nil {
+		return fmt.Errorf("failed to create blob cache: %w", err)
+	}
+
+	blobsCached := 0
+	for _, f := range m.Files {
+		blobPath := filepath.Join(blobDir, f.Hash)
+		// Skip if blob already cached
+		if _, err := os.Stat(blobPath); err == nil {
+			continue
+		}
+
+		// Read file content and cache it
+		srcPath := filepath.Join(root, f.Path)
+		content, err := os.ReadFile(srcPath)
+		if err != nil {
+			fmt.Printf("Warning: Could not cache %s: %v\n", f.Path, err)
+			continue
+		}
+
+		if err := os.WriteFile(blobPath, content, 0644); err != nil {
+			fmt.Printf("Warning: Could not cache %s: %v\n", f.Path, err)
+			continue
+		}
+		blobsCached++
+	}
+
+	if blobsCached > 0 {
+		fmt.Printf("Cached %d new blobs.\n", blobsCached)
+	}
+
 	// Save manifest locally
 	if !alreadyExists {
 		manifestJSON, err := m.ToJSON()
