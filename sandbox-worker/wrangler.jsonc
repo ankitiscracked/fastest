@@ -1,0 +1,38 @@
+{
+  "name": "fastest-sandbox-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-18",
+
+  // Sandbox container configuration
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "instance_type": "lite",
+      "max_instances": 10
+    }
+  ],
+
+  // Durable Objects for managing sandbox instances
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "Sandbox",
+        "class_name": "Sandbox"
+      }
+    ]
+  },
+
+  // Migrations for Durable Objects (note: new_sqlite_classes for Sandbox SDK)
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Sandbox"]
+    }
+  ],
+
+  // Environment variables (for local dev - set these in .dev.vars)
+  "vars": {
+    "API_URL": "http://localhost:8788"
+  }
+}
