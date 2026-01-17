@@ -1,14 +1,17 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/drift"
 )
 
 func init() {
@@ -16,103 +19,264 @@ func init() {
 	rootCmd.AddCommand(newWorkspaceCmd())
 }
 
-func newWorkspacesCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:     "workspaces",
-		Aliases: []string{"ws"},
-		Short:   "List workspaces for the current project",
-		RunE:    runWorkspaces,
-	}
+// WorkspaceRegistry holds all registered workspaces
+type WorkspaceRegistry struct {
+	Workspaces []RegisteredWorkspace `json:"workspaces"`
 }
 
-func runWorkspaces(cmd *cobra.Command, args []string) error {
-	token, err := auth.GetToken()
-	if err != nil || token == "" {
-		return fmt.Errorf("not logged in - run 'fst login' first")
+// RegisteredWorkspace represents a workspace in the registry
+type RegisteredWorkspace struct {
+	ID             string `json:"id"`
+	ProjectID      string `json:"project_id"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	BaseSnapshotID string `json:"base_snapshot_id"`
+	CreatedAt      string `json:"created_at"`
+}
+
+// GetRegistryPath returns the path to the workspace registry
+func GetRegistryPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".config", "fst", "workspaces.json"), nil
+}
+
+// LoadRegistry loads the workspace registry
+func LoadRegistry() (*WorkspaceRegistry, error) {
+	path, err := GetRegistryPath()
+	if err != nil {
+		return nil, err
 	}
 
-	cfg, err := config.Load()
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		if os.IsNotExist(err) {
+			return &WorkspaceRegistry{Workspaces: []RegisteredWorkspace{}}, nil
+		}
+		return nil, err
 	}
 
-	client := api.NewClient(token)
-	_, workspaces, err := client.GetProject(cfg.ProjectID)
+	var registry WorkspaceRegistry
+	if err := json.Unmarshal(data, &registry); err != nil {
+		return nil, err
+	}
+
+	return &registry, nil
+}
+
+// SaveRegistry saves the workspace registry
+func SaveRegistry(registry *WorkspaceRegistry) error {
+	path, err := GetRegistryPath()
 	if err != nil {
-		return fmt.Errorf("failed to get project: %w", err)
+		return err
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, data, 0644)
+}
+
+// RegisterWorkspace adds a workspace to the registry
+func RegisterWorkspace(ws RegisteredWorkspace) error {
+	registry, err := LoadRegistry()
+	if err != nil {
+		return err
+	}
+
+	// Check if already registered (by path)
+	for i, existing := range registry.Workspaces {
+		if existing.Path == ws.Path {
+			// Update existing entry
+			registry.Workspaces[i] = ws
+			return SaveRegistry(registry)
+		}
+	}
+
+	// Add new entry
+	registry.Workspaces = append(registry.Workspaces, ws)
+	return SaveRegistry(registry)
+}
+
+// UnregisterWorkspace removes a workspace from the registry
+func UnregisterWorkspace(path string) error {
+	registry, err := LoadRegistry()
+	if err != nil {
+		return err
+	}
+
+	filtered := []RegisteredWorkspace{}
+	for _, ws := range registry.Workspaces {
+		if ws.Path != path {
+			filtered = append(filtered, ws)
+		}
+	}
+
+	registry.Workspaces = filtered
+	return SaveRegistry(registry)
+}
+
+func newWorkspacesCmd() *cobra.Command {
+	var showAll bool
+
+	cmd := &cobra.Command{
+		Use:     "workspaces",
+		Aliases: []string{"ws"},
+		Short:   "List workspaces for this project",
+		Long: `List all registered workspaces for the current project.
+
+Shows workspace name, path, base snapshot, and current drift status.
+Use --all to show workspaces from all projects.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWorkspaces(showAll)
+		},
+	}
+
+	cmd.Flags().BoolVarP(&showAll, "all", "a", false, "Show workspaces from all projects")
+
+	return cmd
+}
+
+func runWorkspaces(showAll bool) error {
+	var currentProjectID string
+
+	if !showAll {
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("not in a project directory - use --all to see all workspaces")
+		}
+		currentProjectID = cfg.ProjectID
+	}
+
+	registry, err := LoadRegistry()
+	if err != nil {
+		return fmt.Errorf("failed to load workspace registry: %w", err)
+	}
+
+	// Filter workspaces
+	var workspaces []RegisteredWorkspace
+	for _, ws := range registry.Workspaces {
+		if showAll || ws.ProjectID == currentProjectID {
+			workspaces = append(workspaces, ws)
+		}
 	}
 
 	if len(workspaces) == 0 {
-		fmt.Println("No workspaces found.")
+		if showAll {
+			fmt.Println("No workspaces registered.")
+		} else {
+			fmt.Println("No workspaces found for this project.")
+		}
+		fmt.Println()
+		fmt.Println("Create one with: fst init")
 		return nil
 	}
 
-	fmt.Printf("Workspaces for project (current: %s):\n", cfg.WorkspaceName)
-	fmt.Println()
-
-	fmt.Printf("  %-12s  %-20s  %-15s  %-12s  %s\n", "ID", "NAME", "MACHINE", "BASE", "LAST SEEN")
-	fmt.Printf("  %-12s  %-20s  %-15s  %-12s  %s\n",
-		strings.Repeat("-", 12),
-		strings.Repeat("-", 20),
-		strings.Repeat("-", 15),
-		strings.Repeat("-", 12),
-		strings.Repeat("-", 15))
-
-	for _, w := range workspaces {
-		shortID := w.ID
-		if len(shortID) > 12 {
-			shortID = shortID[:12]
-		}
-
-		name := w.Name
-		if w.ID == cfg.WorkspaceID {
-			name = "* " + name // Mark current workspace
-		}
-		if len(name) > 20 {
-			name = name[:17] + "..."
-		}
-
-		machineID := "-"
-		if w.MachineID != nil && *w.MachineID != "" {
-			machineID = *w.MachineID
-			if len(machineID) > 15 {
-				machineID = machineID[:12] + "..."
-			}
-		}
-
-		baseSnapshot := "-"
-		if w.BaseSnapshotID != nil && *w.BaseSnapshotID != "" {
-			baseSnapshot = *w.BaseSnapshotID
-			if len(baseSnapshot) > 12 {
-				baseSnapshot = baseSnapshot[:12]
-			}
-		}
-
-		lastSeen := "never"
-		if w.LastSeenAt != nil && *w.LastSeenAt != "" {
-			lastSeen = formatRelativeTime(*w.LastSeenAt)
-		}
-
-		fmt.Printf("  %-12s  %-20s  %-15s  %-12s  %s\n", shortID, name, machineID, baseSnapshot, lastSeen)
+	// Get current workspace path for highlighting
+	currentPath := ""
+	if root, err := config.FindProjectRoot(); err == nil {
+		currentPath = root
 	}
 
-	fmt.Println()
-	fmt.Println("* = current workspace")
+	// Display header
+	if showAll {
+		fmt.Printf("All workspaces (%d):\n\n", len(workspaces))
+	} else {
+		fmt.Printf("Workspaces for project (%d):\n\n", len(workspaces))
+	}
+
+	// Table header
+	fmt.Printf("  %-10s  %-15s  %-35s  %s\n", "STATUS", "NAME", "PATH", "DRIFT")
+	fmt.Printf("  %-10s  %-15s  %-35s  %s\n",
+		strings.Repeat("-", 10),
+		strings.Repeat("-", 15),
+		strings.Repeat("-", 35),
+		strings.Repeat("-", 15))
+
+	for _, ws := range workspaces {
+		displayWorkspace(ws, currentPath)
+	}
 
 	return nil
+}
+
+func displayWorkspace(ws RegisteredWorkspace, currentPath string) {
+	// Check if this is the current workspace
+	isCurrent := ws.Path == currentPath
+	indicator := " "
+	if isCurrent {
+		indicator = "*"
+	}
+
+	// Check if workspace still exists
+	status := "ok"
+	exists := true
+	if _, err := os.Stat(filepath.Join(ws.Path, ".fst")); os.IsNotExist(err) {
+		status = "missing"
+		exists = false
+	}
+
+	// Get drift info if workspace exists
+	driftStr := "-"
+	if exists {
+		// Try to compute drift
+		report, err := drift.ComputeFromCache(ws.Path)
+		if err == nil && report.HasChanges() {
+			driftStr = fmt.Sprintf("+%d ~%d -%d",
+				len(report.FilesAdded),
+				len(report.FilesModified),
+				len(report.FilesDeleted))
+		} else if err == nil {
+			driftStr = "clean"
+		}
+	}
+
+	// Truncate path for display
+	displayPath := ws.Path
+	if len(displayPath) > 35 {
+		displayPath = "..." + displayPath[len(displayPath)-32:]
+	}
+
+	// Truncate name
+	name := ws.Name
+	if len(name) > 15 {
+		name = name[:12] + "..."
+	}
+
+	// Status with color
+	statusStr := status
+	if status == "missing" {
+		statusStr = "\033[31mmissing\033[0m"
+	} else if isCurrent {
+		statusStr = "\033[32mcurrent\033[0m"
+	}
+
+	fmt.Printf("%s %-10s  %-15s  %-35s  %s\n",
+		indicator,
+		statusStr,
+		name,
+		displayPath,
+		driftStr)
 }
 
 func newWorkspaceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workspace",
-		Short: "Workspace management commands",
-		Long: `Manage workspaces for the current project.
+		Short: "Show current workspace status",
+		Long: `Show the status of the current workspace.
 
-Without subcommands, shows the current workspace status.`,
+Displays workspace name, ID, project, base snapshot, and mode.`,
 		RunE: runWorkspaceStatus,
 	}
-
-	cmd.AddCommand(newWorkspaceCreateCmd())
 
 	return cmd
 }
@@ -123,11 +287,14 @@ func runWorkspaceStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
 	}
 
+	root, _ := config.FindProjectRoot()
+
 	fmt.Printf("Current workspace:\n")
 	fmt.Println()
 	fmt.Printf("  Name:       %s\n", cfg.WorkspaceName)
 	fmt.Printf("  ID:         %s\n", cfg.WorkspaceID)
 	fmt.Printf("  Project:    %s\n", cfg.ProjectID)
+	fmt.Printf("  Directory:  %s\n", root)
 
 	if cfg.BaseSnapshotID != "" {
 		fmt.Printf("  Base:       %s\n", cfg.BaseSnapshotID)
@@ -137,80 +304,46 @@ func runWorkspaceStatus(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("  Mode:       %s\n", cfg.Mode)
 
-	// TODO: Show drift summary when implemented
-
-	return nil
-}
-
-func newWorkspaceCreateCmd() *cobra.Command {
-	var baseSnapshotID string
-	var targetDir string
-
-	cmd := &cobra.Command{
-		Use:   "create [name]",
-		Short: "Create a new workspace",
-		Long: `Create a new workspace for the current project.
-
-This registers a new workspace with the cloud. If --to is specified,
-it will also set up the workspace in that directory.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWorkspaceCreate(args[0], baseSnapshotID, targetDir)
-		},
-	}
-
-	cmd.Flags().StringVar(&baseSnapshotID, "base", "", "Base snapshot ID for the workspace")
-	cmd.Flags().StringVar(&targetDir, "to", "", "Target directory for the workspace")
-
-	return cmd
-}
-
-func runWorkspaceCreate(name, baseSnapshotID, targetDir string) error {
-	token, err := auth.GetToken()
-	if err != nil || token == "" {
-		return fmt.Errorf("not logged in - run 'fst login' first")
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
-	}
-
-	client := api.NewClient(token)
-
-	// Build request
-	machineID := config.GetMachineID()
-	req := api.CreateWorkspaceRequest{
-		Name:      name,
-		MachineID: &machineID,
-	}
-
-	if baseSnapshotID != "" {
-		req.BaseSnapshotID = &baseSnapshotID
-	}
-
-	if targetDir != "" {
-		req.LocalPath = &targetDir
-	}
-
-	fmt.Printf("Creating workspace \"%s\"...\n", name)
-	workspace, err := client.CreateWorkspace(cfg.ProjectID, req)
-	if err != nil {
-		return fmt.Errorf("failed to create workspace: %w", err)
-	}
-
-	fmt.Println()
-	fmt.Println("✓ Workspace created!")
-	fmt.Println()
-	fmt.Printf("  ID:   %s\n", workspace.ID)
-	fmt.Printf("  Name: %s\n", workspace.Name)
-
-	if targetDir != "" {
+	// Show drift summary
+	report, err := drift.ComputeFromCache(root)
+	if err == nil {
 		fmt.Println()
-		fmt.Println("To initialize this workspace in the target directory:")
-		fmt.Printf("  cd %s\n", targetDir)
-		fmt.Printf("  fst clone %s --workspace %s\n", cfg.ProjectID, workspace.ID)
+		if report.HasChanges() {
+			fmt.Printf("  Drift:      +%d added, ~%d modified, -%d deleted\n",
+				len(report.FilesAdded),
+				len(report.FilesModified),
+				len(report.FilesDeleted))
+		} else {
+			fmt.Printf("  Drift:      clean (no changes)\n")
+		}
 	}
 
 	return nil
+}
+
+// formatWorkspaceTime formats a timestamp for display
+func formatWorkspaceTime(timestamp string) string {
+	t, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return timestamp
+	}
+
+	diff := time.Since(t)
+
+	switch {
+	case diff < time.Hour:
+		mins := int(diff.Minutes())
+		if mins <= 1 {
+			return "just now"
+		}
+		return fmt.Sprintf("%dm ago", mins)
+	case diff < 24*time.Hour:
+		hours := int(diff.Hours())
+		return fmt.Sprintf("%dh ago", hours)
+	case diff < 7*24*time.Hour:
+		days := int(diff.Hours() / 24)
+		return fmt.Sprintf("%dd ago", days)
+	default:
+		return t.Format("Jan 2")
+	}
 }

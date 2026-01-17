@@ -218,6 +218,18 @@ cache/
 		return fmt.Errorf("failed to write .gitignore: %w", err)
 	}
 
+	// Register workspace in global registry
+	if err := RegisterWorkspace(RegisteredWorkspace{
+		ID:             workspaceID,
+		ProjectID:      projectID,
+		Name:           workspaceName,
+		Path:           cwd,
+		BaseSnapshotID: snapshotID,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		fmt.Printf("Warning: Could not register workspace: %v\n", err)
+	}
+
 	fmt.Println()
 	fmt.Println("✓ Project initialized!")
 	fmt.Println()

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -246,6 +247,18 @@ cache/
 `
 	if err := os.WriteFile(filepath.Join(fstDir, ".gitignore"), []byte(gitignore), 0644); err != nil {
 		return fmt.Errorf("failed to write .gitignore: %w", err)
+	}
+
+	// Register workspace in global registry
+	if err := RegisterWorkspace(RegisteredWorkspace{
+		ID:             workspaceID,
+		ProjectID:      cfg.ProjectID,
+		Name:           name,
+		Path:           targetDir,
+		BaseSnapshotID: cfg.BaseSnapshotID,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		fmt.Printf("Warning: Could not register workspace: %v\n", err)
 	}
 
 	fmt.Println()
