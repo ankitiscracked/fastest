@@ -1,57 +1,143 @@
-# Mental model
+# Mental Model
 
-## Primitives (v1)
+## Core Primitives
 
 ### Project
 A container for identity and history.
-- stable ID
-- human-friendly name (can collide; ID cannot)
+- Stable ID (e.g., `proj-abc123`)
+- Human-friendly name
+- Can have multiple workspaces
+
+### Workspace
+A local working copy of a project.
+- Tracks a base snapshot
+- Can detect drift (changes from base)
+- Two types:
+  - **Main workspace** — owns the `.fst/` directory with blob cache
+  - **Linked workspace** — lightweight copy, shares cache with main
+
+```
+                    Project
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+   workspace-1    workspace-2    workspace-3
+   (main)         (feature)      (experiment)
+   ~/proj         ~/proj-feature ~/proj-exp
+```
 
 ### Snapshot
-An immutable “project state”:
-- content-addressed
-- reproducible
-- upload/download deduped by blob hashes
+An immutable project state:
+- Content-addressed (SHA-256)
+- Reproducible
+- Has optional parent (forms a chain)
+- Upload/download deduped by blob hashes
 
-### Status
-A small, shared “what’s current” view:
-- latest snapshot
-- last activity (what happened last)
-- timestamps
+### Drift
+Changes from the base snapshot to current files:
+- Files added, modified, deleted
+- Can generate LLM summary via coding agents
+
+### Merge
+Combine changes from one workspace into another:
+- 3-way merge (base ↔ target ↔ source)
+- Agent-assisted conflict resolution
+- Manual fallback with conflict markers
 
 ---
 
-## What “sync” means
+## Directory Structure
+
+### Main Workspace
+```
+myproject/
+├── .fst/
+│   ├── config.json           # workspace config
+│   ├── cache/
+│   │   ├── blobs/<sha256>    # content-addressed files
+│   │   └── manifests/<id>.json
+│   ├── workspaces/           # linked workspace configs
+│   └── export/
+│       └── git-map.json      # snapshot→commit mapping
+├── src/
+└── ...
+```
+
+### Linked Workspace
+```
+myproject-feature/
+├── .fst                      # FILE (not directory) pointing to main
+├── src/
+└── ...
+```
+
+The `.fst` file contains:
+```
+main: /path/to/myproject
+workspace_id: local-abc123
+```
+
+---
+
+## What "Sync" Means
 
 When cloud is enabled:
-- the Project registry is shared
-- snapshot history is shared
-- status is shared
+- Project registry is shared
+- Snapshot history is shared
+- Workspace status visible in Web UI
 
 So:
 - Create in CLI → visible in Web
-- Create in Web → pull/link in CLI
 - Snapshot in CLI → visible in Web, clonable anywhere
+- Multiple agents can work in parallel, all visible in dashboard
 
 ---
 
-## What “resume work” means (v1)
+## Workflow Example
 
-It does **not** mean resuming a running process.
+```bash
+# 1. Initialize project
+cd myproject
+fst init
 
-It means:
-1) identify the latest snapshot for a project (or env head if you use envs)
-2) materialize it locally (`fast clone`)
-3) continue from that state
+# 2. Create parallel workspaces
+fst copy -n agent-a
+fst copy -n agent-b
+
+# 3. Work in each workspace independently
+cd ../myproject-agent-a
+# ... make changes ...
+fst drift --summary
+fst snapshot -m "Added auth"
+
+# 4. Merge best changes back
+cd ../myproject
+fst merge agent-a
+fst merge agent-b --theirs  # prefer their version
+
+# 5. Export to git
+fst export git --branch main
+```
 
 ---
 
-## Out of scope (v1)
+## Global Registry
 
-- remote command execution
-- streaming logs / attach
-- multi-workspace parallel merging
-- changesets / semantic diff merging
-- cloud sandboxes
+Workspaces are registered in `~/.config/fst/workspaces.json`:
+```json
+{
+  "workspaces": [
+    {
+      "id": "ws-abc123",
+      "project_id": "proj-xyz",
+      "name": "main",
+      "path": "/Users/me/myproject",
+      "base_snapshot_id": "snap-123"
+    }
+  ]
+}
+```
 
-We can add these later once the foundation is stable.
+This enables:
+- `fst workspaces` to list all workspaces
+- `fst merge <name>` to find workspace by name
