@@ -4,6 +4,7 @@
   "workspaces": [
     "api",
     "web",
+    "sandbox",
     "packages/*"
   ],
   "scripts": {

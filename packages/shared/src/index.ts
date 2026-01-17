@@ -81,7 +81,22 @@ export type {
   GenerateOptions,
   FileContent,
 } from './manifest';
-export { IgnoreMatcher, DEFAULT_PATTERNS } from './manifest';
+export {
+  IgnoreMatcher,
+  DEFAULT_PATTERNS,
+  sha256,
+  generateFromFiles,
+  toJSON,
+  fromJSON,
+  hashManifest,
+  diff,
+  totalSize,
+  fileCount,
+  getFile,
+  getBlobHashes,
+  getNewBlobHashes,
+  empty,
+} from './manifest';
 
 // Drift types
 
