@@ -34,16 +34,19 @@ This will:
 3. Share the blob cache with the main workspace (no duplication)
 
 The new workspace shares storage with the main workspace, making copies fast
-and storage-efficient even for large projects.`,
+and storage-efficient even for large projects.
+
+If --to is not specified, creates a sibling directory of the project root
+named {project}-{workspace}. For example, if the project is at /code/myapp,
+running 'fst copy -n feature' creates /code/myapp-feature.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCopy(name, targetDir)
 		},
 	}
 
 	cmd.Flags().StringVarP(&name, "name", "n", "", "Name for the new workspace (required)")
-	cmd.Flags().StringVarP(&targetDir, "to", "t", "", "Target directory (required)")
+	cmd.Flags().StringVarP(&targetDir, "to", "t", "", "Target directory (default: sibling of project root)")
 	cmd.MarkFlagRequired("name")
-	cmd.MarkFlagRequired("to")
 
 	return cmd
 }
@@ -66,8 +69,14 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("failed to find main workspace: %w", err)
 	}
 
-	// Resolve target directory
-	if !filepath.IsAbs(targetDir) {
+	// Compute default target directory if not specified
+	if targetDir == "" {
+		// Create sibling of project root: {parent}/{project-name}-{workspace-name}
+		projectName := filepath.Base(root)
+		parentDir := filepath.Dir(root)
+		targetDir = filepath.Join(parentDir, projectName+"-"+name)
+	} else if !filepath.IsAbs(targetDir) {
+		// Relative path - resolve from current directory
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
