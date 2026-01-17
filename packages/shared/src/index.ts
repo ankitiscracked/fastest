@@ -57,24 +57,16 @@ export interface ActivityEvent {
   created_at: string;
 }
 
-// Manifest types
-
-export interface ManifestFile {
-  path: string;
-  mode: number;
-  size: number;
-  sha256: string;
-}
-
-export interface Manifest {
-  version: number;
-  created_at: string;
-  root: {
-    total_files: number;
-    total_bytes: number;
-  };
-  files: ManifestFile[];
-}
+// Manifest module - re-export for convenience
+export * as manifest from './manifest';
+export type {
+  FileEntry,
+  Manifest,
+  ManifestDiff,
+  GenerateOptions,
+  FileContent,
+} from './manifest';
+export { IgnoreMatcher, DEFAULT_PATTERNS } from './manifest';
 
 // Drift types
 
