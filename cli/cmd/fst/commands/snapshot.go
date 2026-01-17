@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -19,6 +22,8 @@ func init() {
 
 func newSnapshotCmd() *cobra.Command {
 	var message string
+	var autoSummary bool
+	var setBase bool
 
 	cmd := &cobra.Command{
 		Use:   "snapshot",
@@ -27,26 +32,24 @@ func newSnapshotCmd() *cobra.Command {
 
 This will:
 1. Generate a manifest of all files (respecting .fstignore)
-2. Upload any new blobs to cloud storage
-3. Register the snapshot with the cloud
+2. Save the manifest locally in .fst/cache/manifests/
+3. Optionally sync to cloud if authenticated
 
-The snapshot ID can be used to restore, clone, or compare against.`,
+Use --summary to auto-generate a description using your coding agent.
+Use --set-base to update this workspace's base snapshot to the new one.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSnapshot(message)
+			return runSnapshot(message, autoSummary, setBase)
 		},
 	}
 
-	cmd.Flags().StringVarP(&message, "message", "m", "", "Optional message for this snapshot")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "Description for this snapshot")
+	cmd.Flags().BoolVar(&autoSummary, "summary", false, "Auto-generate description using coding agent")
+	cmd.Flags().BoolVar(&setBase, "set-base", false, "Update workspace base to this snapshot")
 
 	return cmd
 }
 
-func runSnapshot(message string) error {
-	token, err := auth.GetToken()
-	if err != nil || token == "" {
-		return fmt.Errorf("not logged in - run 'fst login' first")
-	}
-
+func runSnapshot(message string, autoSummary bool, setBase bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -67,13 +70,16 @@ func runSnapshot(message string) error {
 
 	fmt.Printf("Found %d files (%s)\n", m.FileCount(), formatBytesLong(m.TotalSize()))
 
-	// Compute manifest hash
+	// Compute manifest hash - this becomes the snapshot ID
 	manifestHash, err := m.Hash()
 	if err != nil {
 		return fmt.Errorf("failed to hash manifest: %w", err)
 	}
 
-	// Save manifest to cache
+	// Create snapshot ID from hash (use first 16 chars for readability)
+	snapshotID := "snap-" + manifestHash[:16]
+
+	// Check if this exact snapshot already exists
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
@@ -84,53 +90,176 @@ func runSnapshot(message string) error {
 		return fmt.Errorf("failed to create manifest cache: %w", err)
 	}
 
-	manifestJSON, err := m.ToJSON()
-	if err != nil {
-		return fmt.Errorf("failed to serialize manifest: %w", err)
+	manifestPath := filepath.Join(manifestDir, snapshotID+".json")
+	alreadyExists := false
+	if _, err := os.Stat(manifestPath); err == nil {
+		alreadyExists = true
+	}
+
+	// Generate summary if requested
+	if autoSummary && message == "" {
+		fmt.Println("Generating summary...")
+		summary, err := generateSnapshotSummary(root, cfg)
+		if err != nil {
+			fmt.Printf("Warning: Could not generate summary: %v\n", err)
+		} else {
+			message = summary
+		}
 	}
 
 	// Save manifest locally
-	manifestPath := filepath.Join(manifestDir, manifestHash+".json")
-	if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-		return fmt.Errorf("failed to save manifest: %w", err)
+	if !alreadyExists {
+		manifestJSON, err := m.ToJSON()
+		if err != nil {
+			return fmt.Errorf("failed to serialize manifest: %w", err)
+		}
+
+		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
+			return fmt.Errorf("failed to save manifest: %w", err)
+		}
 	}
 
-	// TODO: Upload blobs to R2
-	// For now, we skip blob upload and just register the snapshot
+	// Save snapshot metadata
+	metadataPath := filepath.Join(manifestDir, snapshotID+".meta.json")
+	if !alreadyExists || message != "" {
+		metadata := fmt.Sprintf(`{
+  "id": "%s",
+  "manifest_hash": "%s",
+  "parent_snapshot_id": "%s",
+  "message": "%s",
+  "created_at": "%s",
+  "files": %d,
+  "size": %d
+}`, snapshotID, manifestHash, cfg.BaseSnapshotID, escapeJSON(message),
+			time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
-	fmt.Println("Registering snapshot...")
-
-	client := api.NewClient(token)
-
-	// Create snapshot via API
-	snapshot, created, err := client.CreateSnapshot(cfg.ProjectID, manifestHash, cfg.BaseSnapshotID)
-	if err != nil {
-		return fmt.Errorf("failed to create snapshot: %w", err)
+		if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
+			return fmt.Errorf("failed to save metadata: %w", err)
+		}
 	}
 
-	// Update local config with new base snapshot
-	cfg.BaseSnapshotID = snapshot.ID
-	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("failed to update config: %w", err)
+	// Try to sync to cloud if authenticated
+	token, _ := auth.GetToken()
+	cloudSynced := false
+	if token != "" {
+		client := api.NewClient(token)
+		_, created, err := client.CreateSnapshot(cfg.ProjectID, manifestHash, cfg.BaseSnapshotID)
+		if err == nil {
+			cloudSynced = true
+			if created {
+				fmt.Println("Synced to cloud.")
+			}
+		}
 	}
 
+	// Update base snapshot if requested
+	if setBase {
+		cfg.BaseSnapshotID = snapshotID
+		if err := config.Save(cfg); err != nil {
+			return fmt.Errorf("failed to update config: %w", err)
+		}
+	}
+
+	// Output result
 	fmt.Println()
-	if created {
-		fmt.Println("✓ Snapshot created!")
+	if alreadyExists {
+		fmt.Println("✓ Snapshot already exists (no changes since last snapshot)")
 	} else {
-		fmt.Println("✓ Snapshot already exists (no changes)")
+		fmt.Println("✓ Snapshot created!")
 	}
 	fmt.Println()
-	fmt.Printf("  ID:       %s\n", snapshot.ID)
+	fmt.Printf("  ID:       %s\n", snapshotID)
 	fmt.Printf("  Hash:     %s\n", manifestHash[:16]+"...")
 	fmt.Printf("  Files:    %d\n", m.FileCount())
 	fmt.Printf("  Size:     %s\n", formatBytesLong(m.TotalSize()))
-
 	if message != "" {
 		fmt.Printf("  Message:  %s\n", message)
 	}
+	if cfg.BaseSnapshotID != "" && cfg.BaseSnapshotID != snapshotID {
+		fmt.Printf("  Parent:   %s\n", cfg.BaseSnapshotID)
+	}
+	if setBase {
+		fmt.Printf("  (base updated to this snapshot)\n")
+	}
+	if !cloudSynced && token == "" {
+		fmt.Println("  (local only - not synced to cloud)")
+	}
 
 	return nil
+}
+
+// generateSnapshotSummary uses the coding agent to describe changes
+func generateSnapshotSummary(root string, cfg *config.ProjectConfig) (string, error) {
+	// Get preferred agent
+	preferredAgent, err := agent.GetPreferredAgent()
+	if err != nil {
+		return "", err
+	}
+
+	// Compute drift from base
+	report, err := drift.ComputeFromCache(root)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute drift: %w", err)
+	}
+
+	// If no changes, return simple message
+	if !report.HasChanges() {
+		return "No changes from previous snapshot", nil
+	}
+
+	fmt.Printf("Using %s to generate summary...\n", preferredAgent.Name)
+
+	// Build context with file contents
+	fileContents := make(map[string]string)
+	for _, f := range report.FilesAdded {
+		content, err := agent.ReadFileContent(filepath.Join(root, f), 4000)
+		if err == nil {
+			fileContents[f] = content
+		}
+	}
+	for _, f := range report.FilesModified {
+		content, err := agent.ReadFileContent(filepath.Join(root, f), 4000)
+		if err == nil {
+			fileContents[f] = content
+		}
+	}
+
+	diffContext := agent.BuildDiffContext(
+		report.FilesAdded,
+		report.FilesModified,
+		report.FilesDeleted,
+		fileContents,
+	)
+
+	// Invoke agent for summary
+	summary, err := agent.InvokeSummary(preferredAgent, diffContext)
+	if err != nil {
+		return "", err
+	}
+
+	return summary, nil
+}
+
+// escapeJSON escapes a string for JSON
+func escapeJSON(s string) string {
+	result := ""
+	for _, c := range s {
+		switch c {
+		case '"':
+			result += `\"`
+		case '\\':
+			result += `\\`
+		case '\n':
+			result += `\n`
+		case '\r':
+			result += `\r`
+		case '\t':
+			result += `\t`
+		default:
+			result += string(c)
+		}
+	}
+	return result
 }
 
 func formatBytesLong(bytes int64) string {
