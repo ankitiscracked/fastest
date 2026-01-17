@@ -107,3 +107,21 @@ CREATE TABLE IF NOT EXISTS activity_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_project ON activity_events(project_id, created_at DESC);
+
+-- Jobs (agent execution queue)
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending, running, completed, failed, cancelled
+  output_snapshot_id TEXT REFERENCES snapshots(id),
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at TEXT,
+  completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at ASC);

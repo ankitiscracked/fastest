@@ -7,6 +7,7 @@ import { projectRoutes } from './routes/projects';
 import { snapshotRoutes } from './routes/snapshots';
 import { workspaceRoutes } from './routes/workspaces';
 import { blobRoutes } from './routes/blobs';
+import { jobRoutes } from './routes/jobs';
 
 export interface Env {
   DB: D1Database;
@@ -38,6 +39,7 @@ v1.route('/projects', projectRoutes);
 v1.route('/snapshots', snapshotRoutes);
 v1.route('/workspaces', workspaceRoutes);
 v1.route('/blobs', blobRoutes);
+v1.route('/jobs', jobRoutes);
 
 app.route('/v1', v1);
 

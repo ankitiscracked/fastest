@@ -46,6 +46,21 @@ export interface DriftReport {
   reported_at: string;
 }
 
+export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface Job {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  prompt: string;
+  status: JobStatus;
+  output_snapshot_id: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
 export interface ActivityEvent {
   id: string;
   project_id: string;
@@ -143,6 +158,29 @@ export interface ReportDriftRequest {
 
 export interface ReportDriftResponse {
   drift_report: DriftReport;
+}
+
+// Job API types
+
+export interface CreateJobRequest {
+  workspace_id: string;
+  prompt: string;
+}
+
+export interface CreateJobResponse {
+  job: Job;
+}
+
+export interface GetJobResponse {
+  job: Job;
+}
+
+export interface ListJobsResponse {
+  jobs: Job[];
+}
+
+export interface CancelJobResponse {
+  job: Job;
 }
 
 // Error response

@@ -64,3 +64,16 @@ export interface DbActivityEvent {
   message: string | null;
   created_at: string;
 }
+
+export interface DbJob {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  prompt: string;
+  status: string;
+  output_snapshot_id: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
