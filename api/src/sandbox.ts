@@ -60,10 +60,16 @@ async function apiRequest(method, path, body) {
 
 async function downloadBlob(hash) {
   const { urls } = await apiRequest('POST', '/v1/blobs/presign-download', { hashes: [hash] });
-  const url = urls[hash];
-  if (!url) throw new Error('No download URL for blob: ' + hash);
+  const relativeUrl = urls[hash];
+  if (!relativeUrl) throw new Error('No download URL for blob: ' + hash);
 
-  const response = await fetch(url);
+  // Make URL absolute by prepending API_URL
+  const url = relativeUrl.startsWith('http') ? relativeUrl : API_URL + relativeUrl;
+  const response = await fetch(url, {
+    headers: {
+      'Authorization': 'Bearer ' + API_TOKEN,
+    },
+  });
   if (!response.ok) throw new Error('Failed to download blob: ' + hash);
 
   return new Uint8Array(await response.arrayBuffer());
@@ -133,34 +139,35 @@ async function main() {
   console.log('Fetching workspace...');
   const { workspace } = await apiRequest('GET', '/v1/workspaces/' + job.workspace_id);
 
-  if (!workspace.base_snapshot_id) {
-    throw new Error('Workspace has no base snapshot');
-  }
-
-  // Get snapshot manifest
-  console.log('Fetching snapshot...');
-  const { snapshot } = await apiRequest('GET', '/v1/snapshots/' + workspace.base_snapshot_id);
-
-  // Download manifest
-  console.log('Downloading manifest...');
-  const manifestData = await downloadBlob(snapshot.manifest_hash);
-  const manifest = JSON.parse(new TextDecoder().decode(manifestData));
-  console.log('Files in manifest:', manifest.files.length);
-
-  // Restore files
-  console.log('Restoring workspace files...');
   const workDir = '/workspace';
-  await Bun.$\\\`mkdir -p \${workDir}\\\`.quiet();
+  await Bun.spawn(['mkdir', '-p', workDir]).exited;
 
-  for (const file of manifest.files) {
-    const filePath = workDir + '/' + file.path;
-    const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+  if (workspace.base_snapshot_id) {
+    // Get snapshot manifest
+    console.log('Fetching snapshot...');
+    const { snapshot } = await apiRequest('GET', '/v1/snapshots/' + workspace.base_snapshot_id);
 
-    await Bun.$\\\`mkdir -p \${dirPath}\\\`.quiet();
-    const content = await downloadBlob(file.hash);
-    await Bun.write(filePath, content);
+    // Download manifest
+    console.log('Downloading manifest...');
+    const manifestData = await downloadBlob(snapshot.manifest_hash);
+    const manifest = JSON.parse(new TextDecoder().decode(manifestData));
+    console.log('Files in manifest:', manifest.files.length);
+
+    // Restore files
+    console.log('Restoring workspace files...');
+
+    for (const file of manifest.files) {
+      const filePath = workDir + '/' + file.path;
+      const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+
+      await Bun.spawn(['mkdir', '-p', dirPath]).exited;
+      const content = await downloadBlob(file.hash);
+      await Bun.write(filePath, content);
+    }
+    console.log('Restored', manifest.files.length, 'files');
+  } else {
+    console.log('No base snapshot - starting with empty workspace');
   }
-  console.log('Restored', manifest.files.length, 'files');
 
   // Run OpenCode using serve + attach approach
   console.log('\\nRunning OpenCode...');

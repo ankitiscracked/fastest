@@ -429,7 +429,11 @@ jobRoutes.post('/:jobId/run', async (c) => {
   }
 
   // Get the API URL from the request
-  const apiUrl = new URL(c.req.url).origin;
+  // For local development, the container needs to use host.docker.internal instead of localhost
+  let apiUrl = new URL(c.req.url).origin;
+  if (c.env.ENVIRONMENT === 'development' && apiUrl.includes('localhost')) {
+    apiUrl = apiUrl.replace('localhost', 'host.docker.internal');
+  }
 
   // Get auth token from request
   const authHeader = c.req.header('Authorization');
@@ -446,6 +450,8 @@ jobRoutes.post('/:jobId/run', async (c) => {
       },
       job_id: jobId,
       duration_ms: result.duration_ms,
+      stdout: result.stdout,
+      stderr: result.stderr,
     }, 500);
   }
 
