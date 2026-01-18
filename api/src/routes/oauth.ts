@@ -1,12 +1,14 @@
 import { Hono } from 'hono';
+import { eq, and, gt, sql } from 'drizzle-orm';
 import type { Env } from '../index';
+import { createDb, deviceCodes, users, sessions } from '../db';
+import { hashToken } from '../middleware/auth';
 
 export const oauthRoutes = new Hono<{ Bindings: Env }>();
 
 // Constants for device flow
 const DEVICE_CODE_EXPIRY_SECONDS = 900; // 15 minutes
 const POLL_INTERVAL_SECONDS = 5;
-const USER_CODE_LENGTH = 8; // ABCD-1234 format
 
 /**
  * POST /oauth/device
@@ -15,7 +17,7 @@ const USER_CODE_LENGTH = 8; // ABCD-1234 format
  * CLI calls this to get a device_code and user_code
  */
 oauthRoutes.post('/device', async (c) => {
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   const id = generateULID();
   const deviceCode = generateSecureToken(32);
@@ -23,10 +25,13 @@ oauthRoutes.post('/device', async (c) => {
   const expiresAt = new Date(Date.now() + DEVICE_CODE_EXPIRY_SECONDS * 1000).toISOString();
 
   // Store in database
-  await db.prepare(`
-    INSERT INTO device_codes (id, device_code, user_code, status, expires_at)
-    VALUES (?, ?, ?, 'pending', ?)
-  `).bind(id, deviceCode, userCode, expiresAt).run();
+  await db.insert(deviceCodes).values({
+    id,
+    deviceCode,
+    userCode,
+    status: 'pending',
+    expiresAt,
+  });
 
   // Return per RFC 8628
   return c.json({
@@ -46,7 +51,7 @@ oauthRoutes.post('/device', async (c) => {
  * Per RFC 8628, returns specific error codes while pending
  */
 oauthRoutes.post('/token', async (c) => {
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
   const body = await c.req.json<{
     grant_type: string;
     device_code: string;
@@ -68,18 +73,13 @@ oauthRoutes.post('/token', async (c) => {
   }
 
   // Look up device code
-  const record = await db.prepare(`
-    SELECT id, device_code, user_code, user_id, status, expires_at
-    FROM device_codes
-    WHERE device_code = ?
-  `).bind(body.device_code).first<{
-    id: string;
-    device_code: string;
-    user_code: string;
-    user_id: string | null;
-    status: string;
-    expires_at: string;
-  }>();
+  const records = await db
+    .select()
+    .from(deviceCodes)
+    .where(eq(deviceCodes.deviceCode, body.device_code))
+    .limit(1);
+
+  const record = records[0];
 
   if (!record) {
     return c.json({
@@ -89,7 +89,7 @@ oauthRoutes.post('/token', async (c) => {
   }
 
   // Check expiration
-  if (new Date(record.expires_at) < new Date()) {
+  if (new Date(record.expiresAt) < new Date()) {
     return c.json({
       error: 'expired_token',
       error_description: 'Device code has expired'
@@ -112,7 +112,7 @@ oauthRoutes.post('/token', async (c) => {
       }, 400);
 
     case 'authorized':
-      if (!record.user_id) {
+      if (!record.userId) {
         return c.json({
           error: 'server_error',
           error_description: 'Authorization incomplete'
@@ -125,18 +125,24 @@ oauthRoutes.post('/token', async (c) => {
 
       // Create session
       const sessionId = generateULID();
-      await db.prepare(`
-        INSERT INTO sessions (id, user_id, token_hash, expires_at)
-        VALUES (?, ?, ?, ?)
-      `).bind(sessionId, record.user_id, hashToken(accessToken), tokenExpiresAt).run();
+      await db.insert(sessions).values({
+        id: sessionId,
+        userId: record.userId,
+        tokenHash: hashToken(accessToken),
+        expiresAt: tokenExpiresAt,
+      });
 
       // Mark device code as used (delete it)
-      await db.prepare(`DELETE FROM device_codes WHERE id = ?`).bind(record.id).run();
+      await db.delete(deviceCodes).where(eq(deviceCodes.id, record.id));
 
       // Get user info
-      const user = await db.prepare(`
-        SELECT id, email FROM users WHERE id = ?
-      `).bind(record.user_id).first<{ id: string; email: string }>();
+      const userRecords = await db
+        .select({ id: users.id, email: users.email })
+        .from(users)
+        .where(eq(users.id, record.userId))
+        .limit(1);
+
+      const user = userRecords[0];
 
       return c.json({
         access_token: accessToken,
@@ -162,7 +168,7 @@ oauthRoutes.post('/token', async (c) => {
  * - Bearer token in Authorization header (for already logged-in users)
  */
 oauthRoutes.post('/device/authorize', async (c) => {
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
   const body = await c.req.json<{
     user_code: string;
     credential?: string;
@@ -174,7 +180,7 @@ oauthRoutes.post('/device/authorize', async (c) => {
     }, 422);
   }
 
-  let userEmail: string;
+  let userEmail: string | undefined;
   let userName: string | null = null;
   let userPicture: string | null = null;
 
@@ -184,17 +190,22 @@ oauthRoutes.post('/device/authorize', async (c) => {
     const token = authHeader.slice(7);
     const tokenHash = hashToken(token);
 
-    const session = await db.prepare(`
-      SELECT u.id, u.email, u.name, u.picture
-      FROM sessions s
-      JOIN users u ON s.user_id = u.id
-      WHERE s.token_hash = ? AND s.expires_at > datetime('now')
-    `).bind(tokenHash).first<{
-      id: string;
-      email: string;
-      name: string | null;
-      picture: string | null;
-    }>();
+    const sessionResult = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        picture: users.picture,
+      })
+      .from(sessions)
+      .innerJoin(users, eq(sessions.userId, users.id))
+      .where(and(
+        eq(sessions.tokenHash, tokenHash),
+        gt(sessions.expiresAt, new Date().toISOString())
+      ))
+      .limit(1);
+
+    const session = sessionResult[0];
 
     if (session) {
       userEmail = session.email;
@@ -208,7 +219,7 @@ oauthRoutes.post('/device/authorize', async (c) => {
   }
 
   // If no valid session, require Google credential
-  if (!userEmail!) {
+  if (!userEmail) {
     if (!body.credential) {
       return c.json({
         error: { code: 'VALIDATION_ERROR', message: 'credential is required when not logged in' }
@@ -230,16 +241,14 @@ oauthRoutes.post('/device/authorize', async (c) => {
   // Normalize user code (remove dashes, uppercase)
   const normalizedCode = body.user_code.replace(/-/g, '').toUpperCase();
 
-  // Find the device code
-  const record = await db.prepare(`
-    SELECT id, status, expires_at
-    FROM device_codes
-    WHERE REPLACE(UPPER(user_code), '-', '') = ?
-  `).bind(normalizedCode).first<{
-    id: string;
-    status: string;
-    expires_at: string;
-  }>();
+  // Find the device code using SQL function for normalization
+  const deviceCodeRecords = await db
+    .select()
+    .from(deviceCodes)
+    .where(eq(sql`REPLACE(UPPER(${deviceCodes.userCode}), '-', '')`, normalizedCode))
+    .limit(1);
+
+  const record = deviceCodeRecords[0];
 
   if (!record) {
     return c.json({
@@ -247,7 +256,7 @@ oauthRoutes.post('/device/authorize', async (c) => {
     }, 400);
   }
 
-  if (new Date(record.expires_at) < new Date()) {
+  if (new Date(record.expiresAt) < new Date()) {
     return c.json({
       error: { code: 'EXPIRED_CODE', message: 'Code has expired' }
     }, 400);
@@ -260,25 +269,31 @@ oauthRoutes.post('/device/authorize', async (c) => {
   }
 
   // Find or create user
-  let user = await db.prepare(`
-    SELECT id, email FROM users WHERE email = ?
-  `).bind(userEmail.toLowerCase()).first<{ id: string; email: string }>();
+  const existingUsers = await db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(eq(users.email, userEmail.toLowerCase()))
+    .limit(1);
+
+  let user = existingUsers[0];
 
   if (!user) {
     // Create new user
     const userId = generateULID();
-    await db.prepare(`
-      INSERT INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)
-    `).bind(userId, userEmail.toLowerCase(), userName, userPicture).run();
+    await db.insert(users).values({
+      id: userId,
+      email: userEmail.toLowerCase(),
+      name: userName,
+      picture: userPicture,
+    });
     user = { id: userId, email: userEmail.toLowerCase() };
   }
 
   // Authorize the device code
-  await db.prepare(`
-    UPDATE device_codes
-    SET status = 'authorized', user_id = ?
-    WHERE id = ?
-  `).bind(user.id, record.id).run();
+  await db
+    .update(deviceCodes)
+    .set({ status: 'authorized', userId: user.id })
+    .where(eq(deviceCodes.id, record.id));
 
   return c.json({
     success: true,
@@ -292,7 +307,7 @@ oauthRoutes.post('/device/authorize', async (c) => {
  * Called from web UI if user denies the authorization
  */
 oauthRoutes.post('/device/deny', async (c) => {
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
   const body = await c.req.json<{ user_code: string }>();
 
   if (!body.user_code) {
@@ -303,11 +318,13 @@ oauthRoutes.post('/device/deny', async (c) => {
 
   const normalizedCode = body.user_code.replace(/-/g, '').toUpperCase();
 
-  await db.prepare(`
-    UPDATE device_codes
-    SET status = 'denied'
-    WHERE REPLACE(UPPER(user_code), '-', '') = ? AND status = 'pending'
-  `).bind(normalizedCode).run();
+  await db
+    .update(deviceCodes)
+    .set({ status: 'denied' })
+    .where(and(
+      eq(sql`REPLACE(UPPER(${deviceCodes.userCode}), '-', '')`, normalizedCode),
+      eq(deviceCodes.status, 'pending')
+    ));
 
   return c.json({ success: true });
 });
@@ -343,18 +360,6 @@ function generateUserCode(): string {
   ).join('');
 
   return `${letterPart}-${digitPart}`;
-}
-
-function hashToken(token: string): string {
-  // Simple hash for token storage
-  // In production, use a proper crypto hash
-  let hash = 0;
-  for (let i = 0; i < token.length; i++) {
-    const char = token.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return `hash_${Math.abs(hash).toString(16)}`;
 }
 
 function getBaseUrl(c: { req: { url: string } }): string {

@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
+import { eq, and, desc } from 'drizzle-orm';
 import type { Env } from '../index';
 import type { Workspace, DriftReport, ReportDriftRequest } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
+import { createDb, workspaces, projects, driftReports, activityEvents } from '../db';
 
 export const workspaceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -13,34 +15,65 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
   }
 
   const workspaceId = c.req.param('workspaceId');
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Fetch workspace with ownership check through project
-  const workspace = await db.prepare(`
-    SELECT w.id, w.project_id, w.name, w.machine_id, w.base_snapshot_id,
-           w.local_path, w.last_seen_at, w.created_at
-    FROM workspaces w
-    JOIN projects p ON w.project_id = p.id
-    WHERE w.id = ? AND p.owner_user_id = ?
-  `).bind(workspaceId, user.id).first<Workspace>();
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      name: workspaces.name,
+      machine_id: workspaces.machineId,
+      base_snapshot_id: workspaces.baseSnapshotId,
+      local_path: workspaces.localPath,
+      last_seen_at: workspaces.lastSeenAt,
+      created_at: workspaces.createdAt,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
 
-  if (!workspace) {
+  const row = workspaceResult[0];
+
+  if (!row) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
   }
 
+  const workspace: Workspace = {
+    id: row.id,
+    project_id: row.project_id,
+    name: row.name,
+    machine_id: row.machine_id,
+    base_snapshot_id: row.base_snapshot_id,
+    local_path: row.local_path,
+    last_seen_at: row.last_seen_at,
+    created_at: row.created_at,
+  };
+
   // Fetch latest drift report
-  const drift = await db.prepare(`
-    SELECT id, workspace_id, files_added, files_modified, files_deleted,
-           bytes_changed, summary, reported_at
-    FROM drift_reports
-    WHERE workspace_id = ?
-    ORDER BY reported_at DESC
-    LIMIT 1
-  `).bind(workspaceId).first<DriftReport>();
+  const driftResult = await db
+    .select({
+      id: driftReports.id,
+      workspace_id: driftReports.workspaceId,
+      files_added: driftReports.filesAdded,
+      files_modified: driftReports.filesModified,
+      files_deleted: driftReports.filesDeleted,
+      bytes_changed: driftReports.bytesChanged,
+      summary: driftReports.summary,
+      reported_at: driftReports.reportedAt,
+    })
+    .from(driftReports)
+    .where(eq(driftReports.workspaceId, workspaceId))
+    .orderBy(desc(driftReports.reportedAt))
+    .limit(1);
+
+  const drift = driftResult[0] || null;
 
   return c.json({
     workspace,
-    drift: drift || null
+    drift
   });
 });
 
@@ -52,21 +85,26 @@ workspaceRoutes.post('/:workspaceId/heartbeat', async (c) => {
   }
 
   const workspaceId = c.req.param('workspaceId');
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
   const now = new Date().toISOString();
 
-  // Update with ownership check
-  const result = await db.prepare(`
-    UPDATE workspaces
-    SET last_seen_at = ?
-    WHERE id = ? AND project_id IN (
-      SELECT id FROM projects WHERE owner_user_id = ?
-    )
-  `).bind(now, workspaceId, user.id).run();
+  // First verify ownership
+  const workspaceResult = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
 
-  if (result.meta.changes === 0) {
+  if (!workspaceResult[0]) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
   }
+
+  // Update heartbeat
+  await db
+    .update(workspaces)
+    .set({ lastSeenAt: now })
+    .where(eq(workspaces.id, workspaceId));
 
   return c.json({ success: true, last_seen_at: now });
 });
@@ -80,15 +118,20 @@ workspaceRoutes.post('/:workspaceId/drift', async (c) => {
 
   const workspaceId = c.req.param('workspaceId');
   const body = await c.req.json<ReportDriftRequest>();
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Verify ownership through project
-  const workspace = await db.prepare(`
-    SELECT w.id, w.project_id
-    FROM workspaces w
-    JOIN projects p ON w.project_id = p.id
-    WHERE w.id = ? AND p.owner_user_id = ?
-  `).bind(workspaceId, user.id).first<{ id: string; project_id: string }>();
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
 
   if (!workspace) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
@@ -97,33 +140,36 @@ workspaceRoutes.post('/:workspaceId/drift', async (c) => {
   const driftId = generateULID();
   const now = new Date().toISOString();
 
-  await db.prepare(`
-    INSERT INTO drift_reports (id, workspace_id, files_added, files_modified, files_deleted, bytes_changed, summary, reported_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    driftId,
+  await db.insert(driftReports).values({
+    id: driftId,
     workspaceId,
-    body.files_added || 0,
-    body.files_modified || 0,
-    body.files_deleted || 0,
-    body.bytes_changed || 0,
-    body.summary || null,
-    now
-  ).run();
+    filesAdded: body.files_added || 0,
+    filesModified: body.files_modified || 0,
+    filesDeleted: body.files_deleted || 0,
+    bytesChanged: body.bytes_changed || 0,
+    summary: body.summary || null,
+    reportedAt: now,
+  });
 
   // Update workspace heartbeat
-  await db.prepare(`
-    UPDATE workspaces SET last_seen_at = ? WHERE id = ?
-  `).bind(now, workspaceId).run();
+  await db
+    .update(workspaces)
+    .set({ lastSeenAt: now })
+    .where(eq(workspaces.id, workspaceId));
 
   // Insert activity event if there's meaningful drift
   if ((body.files_added || 0) + (body.files_modified || 0) + (body.files_deleted || 0) > 0) {
     const eventId = generateULID();
     const message = `Drift: +${body.files_added || 0} ~${body.files_modified || 0} -${body.files_deleted || 0}`;
-    await db.prepare(`
-      INSERT INTO activity_events (id, project_id, workspace_id, actor, type, message, created_at)
-      VALUES (?, ?, ?, 'cli', 'drift.reported', ?, ?)
-    `).bind(eventId, workspace.project_id, workspaceId, message, now).run();
+    await db.insert(activityEvents).values({
+      id: eventId,
+      projectId: workspace.project_id,
+      workspaceId,
+      actor: 'cli',
+      type: 'drift.reported',
+      message,
+      createdAt: now,
+    });
   }
 
   const driftReport: DriftReport = {
@@ -149,32 +195,39 @@ workspaceRoutes.get('/:workspaceId/drift', async (c) => {
 
   const workspaceId = c.req.param('workspaceId');
   const limit = Math.min(parseInt(c.req.query('limit') || '10'), 100);
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Verify ownership through project
-  const workspace = await db.prepare(`
-    SELECT w.id
-    FROM workspaces w
-    JOIN projects p ON w.project_id = p.id
-    WHERE w.id = ? AND p.owner_user_id = ?
-  `).bind(workspaceId, user.id).first();
+  const workspaceResult = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
 
-  if (!workspace) {
+  if (!workspaceResult[0]) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
   }
 
-  const result = await db.prepare(`
-    SELECT id, workspace_id, files_added, files_modified, files_deleted,
-           bytes_changed, summary, reported_at
-    FROM drift_reports
-    WHERE workspace_id = ?
-    ORDER BY reported_at DESC
-    LIMIT ?
-  `).bind(workspaceId, limit).all<DriftReport>();
+  const result = await db
+    .select({
+      id: driftReports.id,
+      workspace_id: driftReports.workspaceId,
+      files_added: driftReports.filesAdded,
+      files_modified: driftReports.filesModified,
+      files_deleted: driftReports.filesDeleted,
+      bytes_changed: driftReports.bytesChanged,
+      summary: driftReports.summary,
+      reported_at: driftReports.reportedAt,
+    })
+    .from(driftReports)
+    .where(eq(driftReports.workspaceId, workspaceId))
+    .orderBy(desc(driftReports.reportedAt))
+    .limit(limit);
 
   return c.json({
-    drift_reports: result.results || [],
-    latest: result.results?.[0] || null
+    drift_reports: result,
+    latest: result[0] || null
   });
 });
 

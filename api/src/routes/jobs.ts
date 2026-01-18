@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
+import { eq, and, asc, desc } from 'drizzle-orm';
 import type { Env } from '../index';
 import type { Job, CreateJobRequest, JobStatus } from '@fastest/shared';
-import type { DbJob } from '../types';
 import { getAuthUser } from '../middleware/auth';
 import { runJobInSandbox } from '../sandbox';
+import { createDb, jobs, workspaces, projects, activityEvents } from '../db';
 
 export const jobRoutes = new Hono<{ Bindings: Env }>();
 
@@ -16,17 +17,29 @@ jobRoutes.get('/next', async (c) => {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
   }
 
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Get oldest pending job that belongs to this user's projects
-  const job = await db.prepare(`
-    SELECT j.*
-    FROM jobs j
-    JOIN projects p ON j.project_id = p.id
-    WHERE j.status = 'pending' AND p.owner_user_id = ?
-    ORDER BY j.created_at ASC
-    LIMIT 1
-  `).bind(user.id).first<DbJob>();
+  const result = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+    })
+    .from(jobs)
+    .innerJoin(projects, eq(jobs.projectId, projects.id))
+    .where(and(eq(jobs.status, 'pending'), eq(projects.ownerUserId, user.id)))
+    .orderBy(asc(jobs.createdAt))
+    .limit(1);
+
+  const job = result[0];
 
   if (!job) {
     return c.json({ job: null });
@@ -34,16 +47,8 @@ jobRoutes.get('/next', async (c) => {
 
   return c.json({
     job: {
-      id: job.id,
-      workspace_id: job.workspace_id,
-      project_id: job.project_id,
-      prompt: job.prompt,
+      ...job,
       status: job.status as JobStatus,
-      output_snapshot_id: job.output_snapshot_id,
-      error: job.error,
-      created_at: job.created_at,
-      started_at: job.started_at,
-      completed_at: job.completed_at,
     } as Job
   });
 });
@@ -56,7 +61,7 @@ jobRoutes.post('/', async (c) => {
   }
 
   const body = await c.req.json<CreateJobRequest>();
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   if (!body.workspace_id) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'workspace_id is required' } }, 422);
@@ -67,17 +72,19 @@ jobRoutes.post('/', async (c) => {
   }
 
   // Get workspace and verify ownership through project
-  const workspace = await db.prepare(`
-    SELECT w.id, w.project_id, w.name, p.owner_user_id
-    FROM workspaces w
-    JOIN projects p ON w.project_id = p.id
-    WHERE w.id = ?
-  `).bind(body.workspace_id).first<{
-    id: string;
-    project_id: string;
-    name: string;
-    owner_user_id: string;
-  }>();
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      name: workspaces.name,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(eq(workspaces.id, body.workspace_id))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
 
   if (!workspace) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
@@ -90,17 +97,26 @@ jobRoutes.post('/', async (c) => {
   const jobId = generateULID();
   const now = new Date().toISOString();
 
-  await db.prepare(`
-    INSERT INTO jobs (id, workspace_id, project_id, prompt, status, created_at)
-    VALUES (?, ?, ?, ?, 'pending', ?)
-  `).bind(jobId, workspace.id, workspace.project_id, body.prompt.trim(), now).run();
+  await db.insert(jobs).values({
+    id: jobId,
+    workspaceId: workspace.id,
+    projectId: workspace.project_id,
+    prompt: body.prompt.trim(),
+    status: 'pending',
+    createdAt: now,
+  });
 
   // Insert activity event
   const eventId = generateULID();
-  await db.prepare(`
-    INSERT INTO activity_events (id, project_id, workspace_id, actor, type, message, created_at)
-    VALUES (?, ?, ?, 'web', 'job.created', ?, ?)
-  `).bind(eventId, workspace.project_id, workspace.id, `Job created: "${body.prompt.trim().slice(0, 50)}..."`, now).run();
+  await db.insert(activityEvents).values({
+    id: eventId,
+    projectId: workspace.project_id,
+    workspaceId: workspace.id,
+    actor: 'web',
+    type: 'job.created',
+    message: `Job created: "${body.prompt.trim().slice(0, 50)}..."`,
+    createdAt: now,
+  });
 
   const job: Job = {
     id: jobId,
@@ -126,15 +142,29 @@ jobRoutes.get('/:jobId', async (c) => {
   }
 
   const jobId = c.req.param('jobId');
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Get job and verify ownership through project
-  const job = await db.prepare(`
-    SELECT j.*, p.owner_user_id
-    FROM jobs j
-    JOIN projects p ON j.project_id = p.id
-    WHERE j.id = ?
-  `).bind(jobId).first<DbJob & { owner_user_id: string }>();
+  const result = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(jobs)
+    .innerJoin(projects, eq(jobs.projectId, projects.id))
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  const job = result[0];
 
   if (!job) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404);
@@ -171,37 +201,43 @@ jobRoutes.get('/', async (c) => {
   const projectId = c.req.query('project_id');
   const status = c.req.query('status');
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
-  let query = `
-    SELECT j.*
-    FROM jobs j
-    JOIN projects p ON j.project_id = p.id
-    WHERE p.owner_user_id = ?
-  `;
-  const params: (string | number)[] = [user.id];
+  // Build conditions
+  let conditions = [eq(projects.ownerUserId, user.id)];
 
   if (workspaceId) {
-    query += ' AND j.workspace_id = ?';
-    params.push(workspaceId);
+    conditions.push(eq(jobs.workspaceId, workspaceId));
   }
 
   if (projectId) {
-    query += ' AND j.project_id = ?';
-    params.push(projectId);
+    conditions.push(eq(jobs.projectId, projectId));
   }
 
   if (status) {
-    query += ' AND j.status = ?';
-    params.push(status);
+    conditions.push(eq(jobs.status, status));
   }
 
-  query += ' ORDER BY j.created_at DESC LIMIT ?';
-  params.push(limit);
+  const result = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+    })
+    .from(jobs)
+    .innerJoin(projects, eq(jobs.projectId, projects.id))
+    .where(and(...conditions))
+    .orderBy(desc(jobs.createdAt))
+    .limit(limit);
 
-  const result = await db.prepare(query).bind(...params).all<DbJob>();
-
-  const jobs: Job[] = (result.results || []).map((j) => ({
+  const jobsList: Job[] = result.map((j) => ({
     id: j.id,
     workspace_id: j.workspace_id,
     project_id: j.project_id,
@@ -214,7 +250,7 @@ jobRoutes.get('/', async (c) => {
     completed_at: j.completed_at,
   }));
 
-  return c.json({ jobs });
+  return c.json({ jobs: jobsList });
 });
 
 // Cancel a job
@@ -225,15 +261,29 @@ jobRoutes.post('/:jobId/cancel', async (c) => {
   }
 
   const jobId = c.req.param('jobId');
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Get job and verify ownership
-  const job = await db.prepare(`
-    SELECT j.*, p.owner_user_id
-    FROM jobs j
-    JOIN projects p ON j.project_id = p.id
-    WHERE j.id = ?
-  `).bind(jobId).first<DbJob & { owner_user_id: string }>();
+  const result = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(jobs)
+    .innerJoin(projects, eq(jobs.projectId, projects.id))
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  const job = result[0];
 
   if (!job) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404);
@@ -255,16 +305,22 @@ jobRoutes.post('/:jobId/cancel', async (c) => {
 
   const now = new Date().toISOString();
 
-  await db.prepare(`
-    UPDATE jobs SET status = 'cancelled', completed_at = ? WHERE id = ?
-  `).bind(now, jobId).run();
+  await db
+    .update(jobs)
+    .set({ status: 'cancelled', completedAt: now })
+    .where(eq(jobs.id, jobId));
 
   // Insert activity event
   const eventId = generateULID();
-  await db.prepare(`
-    INSERT INTO activity_events (id, project_id, workspace_id, actor, type, message, created_at)
-    VALUES (?, ?, ?, 'web', 'job.cancelled', ?, ?)
-  `).bind(eventId, job.project_id, job.workspace_id, `Job ${jobId.slice(0, 8)}... cancelled`, now).run();
+  await db.insert(activityEvents).values({
+    id: eventId,
+    projectId: job.project_id,
+    workspaceId: job.workspace_id,
+    actor: 'web',
+    type: 'job.cancelled',
+    message: `Job ${jobId.slice(0, 8)}... cancelled`,
+    createdAt: now,
+  });
 
   return c.json({
     job: {
@@ -298,7 +354,7 @@ jobRoutes.post('/:jobId/status', async (c) => {
     output_snapshot_id?: string;
     error?: string;
   }>();
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Validate status
   const validStatuses: JobStatus[] = ['pending', 'running', 'completed', 'failed', 'cancelled'];
@@ -307,12 +363,26 @@ jobRoutes.post('/:jobId/status', async (c) => {
   }
 
   // Get job and verify ownership
-  const job = await db.prepare(`
-    SELECT j.*, p.owner_user_id
-    FROM jobs j
-    JOIN projects p ON j.project_id = p.id
-    WHERE j.id = ?
-  `).bind(jobId).first<DbJob & { owner_user_id: string }>();
+  const result = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(jobs)
+    .innerJoin(projects, eq(jobs.projectId, projects.id))
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  const job = result[0];
 
   if (!job) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404);
@@ -323,38 +393,32 @@ jobRoutes.post('/:jobId/status', async (c) => {
   }
 
   const now = new Date().toISOString();
-  const updates: string[] = ['status = ?'];
-  const params: (string | null)[] = [body.status];
+  const updates: Record<string, string | null> = { status: body.status };
 
   // Set started_at when transitioning to running
   if (body.status === 'running' && !job.started_at) {
-    updates.push('started_at = ?');
-    params.push(now);
+    updates.startedAt = now;
   }
 
   // Set completed_at when transitioning to terminal state
   if (['completed', 'failed', 'cancelled'].includes(body.status) && !job.completed_at) {
-    updates.push('completed_at = ?');
-    params.push(now);
+    updates.completedAt = now;
   }
 
   // Set output_snapshot_id if provided
   if (body.output_snapshot_id) {
-    updates.push('output_snapshot_id = ?');
-    params.push(body.output_snapshot_id);
+    updates.outputSnapshotId = body.output_snapshot_id;
   }
 
   // Set error if provided
   if (body.error) {
-    updates.push('error = ?');
-    params.push(body.error);
+    updates.error = body.error;
   }
 
-  params.push(jobId);
-
-  await db.prepare(`
-    UPDATE jobs SET ${updates.join(', ')} WHERE id = ?
-  `).bind(...params).run();
+  await db
+    .update(jobs)
+    .set(updates)
+    .where(eq(jobs.id, jobId));
 
   // Insert activity event for status changes
   const eventId = generateULID();
@@ -366,28 +430,48 @@ jobRoutes.post('/:jobId/status', async (c) => {
                   body.status === 'running' ? `Job ${jobId.slice(0, 8)}... started` :
                   `Job ${jobId.slice(0, 8)}... status: ${body.status}`;
 
-  await db.prepare(`
-    INSERT INTO activity_events (id, project_id, workspace_id, actor, type, message, created_at)
-    VALUES (?, ?, ?, 'system', ?, ?, ?)
-  `).bind(eventId, job.project_id, job.workspace_id, eventType, message, now).run();
+  await db.insert(activityEvents).values({
+    id: eventId,
+    projectId: job.project_id,
+    workspaceId: job.workspace_id,
+    actor: 'system',
+    type: eventType,
+    message,
+    createdAt: now,
+  });
 
   // Fetch updated job
-  const updatedJob = await db.prepare(`
-    SELECT * FROM jobs WHERE id = ?
-  `).bind(jobId).first<DbJob>();
+  const updatedResult = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+    })
+    .from(jobs)
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  const updatedJob = updatedResult[0]!;
 
   return c.json({
     job: {
-      id: updatedJob!.id,
-      workspace_id: updatedJob!.workspace_id,
-      project_id: updatedJob!.project_id,
-      prompt: updatedJob!.prompt,
-      status: updatedJob!.status as JobStatus,
-      output_snapshot_id: updatedJob!.output_snapshot_id,
-      error: updatedJob!.error,
-      created_at: updatedJob!.created_at,
-      started_at: updatedJob!.started_at,
-      completed_at: updatedJob!.completed_at,
+      id: updatedJob.id,
+      workspace_id: updatedJob.workspace_id,
+      project_id: updatedJob.project_id,
+      prompt: updatedJob.prompt,
+      status: updatedJob.status as JobStatus,
+      output_snapshot_id: updatedJob.output_snapshot_id,
+      error: updatedJob.error,
+      created_at: updatedJob.created_at,
+      started_at: updatedJob.started_at,
+      completed_at: updatedJob.completed_at,
     } as Job
   });
 });
@@ -400,15 +484,29 @@ jobRoutes.post('/:jobId/run', async (c) => {
   }
 
   const jobId = c.req.param('jobId');
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Get job and verify ownership
-  const job = await db.prepare(`
-    SELECT j.*, p.owner_user_id
-    FROM jobs j
-    JOIN projects p ON j.project_id = p.id
-    WHERE j.id = ?
-  `).bind(jobId).first<DbJob & { owner_user_id: string }>();
+  const result = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(jobs)
+    .innerJoin(projects, eq(jobs.projectId, projects.id))
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  const job = result[0];
 
   if (!job) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404);
@@ -440,40 +538,55 @@ jobRoutes.post('/:jobId/run', async (c) => {
   const apiToken = authHeader?.replace('Bearer ', '') || '';
 
   // Run job in sandbox
-  const result = await runJobInSandbox(c.env, jobId, apiUrl, apiToken);
+  const sandboxResult = await runJobInSandbox(c.env, jobId, apiUrl, apiToken);
 
-  if (!result.success) {
+  if (!sandboxResult.success) {
     return c.json({
       error: {
         code: 'EXECUTION_FAILED',
-        message: result.error || 'Job execution failed',
+        message: sandboxResult.error || 'Job execution failed',
       },
       job_id: jobId,
-      duration_ms: result.duration_ms,
-      stdout: result.stdout,
-      stderr: result.stderr,
+      duration_ms: sandboxResult.duration_ms,
+      stdout: sandboxResult.stdout,
+      stderr: sandboxResult.stderr,
     }, 500);
   }
 
   // Fetch updated job
-  const updatedJob = await db.prepare(`
-    SELECT * FROM jobs WHERE id = ?
-  `).bind(jobId).first<DbJob>();
+  const updatedResult = await db
+    .select({
+      id: jobs.id,
+      workspace_id: jobs.workspaceId,
+      project_id: jobs.projectId,
+      prompt: jobs.prompt,
+      status: jobs.status,
+      output_snapshot_id: jobs.outputSnapshotId,
+      error: jobs.error,
+      created_at: jobs.createdAt,
+      started_at: jobs.startedAt,
+      completed_at: jobs.completedAt,
+    })
+    .from(jobs)
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  const updatedJob = updatedResult[0]!;
 
   return c.json({
     job: {
-      id: updatedJob!.id,
-      workspace_id: updatedJob!.workspace_id,
-      project_id: updatedJob!.project_id,
-      prompt: updatedJob!.prompt,
-      status: updatedJob!.status as JobStatus,
-      output_snapshot_id: updatedJob!.output_snapshot_id,
-      error: updatedJob!.error,
-      created_at: updatedJob!.created_at,
-      started_at: updatedJob!.started_at,
-      completed_at: updatedJob!.completed_at,
+      id: updatedJob.id,
+      workspace_id: updatedJob.workspace_id,
+      project_id: updatedJob.project_id,
+      prompt: updatedJob.prompt,
+      status: updatedJob.status as JobStatus,
+      output_snapshot_id: updatedJob.output_snapshot_id,
+      error: updatedJob.error,
+      created_at: updatedJob.created_at,
+      started_at: updatedJob.started_at,
+      completed_at: updatedJob.completed_at,
     } as Job,
-    duration_ms: result.duration_ms,
+    duration_ms: sandboxResult.duration_ms,
   });
 });
 

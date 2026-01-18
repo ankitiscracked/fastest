@@ -1,11 +1,14 @@
 import { Hono } from 'hono';
+import { eq } from 'drizzle-orm';
 import type { Env } from '../index';
+import { createDb, users, sessions } from '../db';
+import { hashToken } from '../middleware/auth';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
 // Google OAuth - verify ID token and create session
 authRoutes.post('/google', async (c) => {
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
   const body = await c.req.json<{ credential: string }>();
 
   if (!body.credential) {
@@ -21,16 +24,23 @@ authRoutes.post('/google', async (c) => {
     }
 
     // Find or create user
-    let user = await db.prepare(`
-      SELECT id, email FROM users WHERE email = ?
-    `).bind(googleUser.email.toLowerCase()).first<{ id: string; email: string }>();
+    const existingUsers = await db
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(eq(users.email, googleUser.email.toLowerCase()))
+      .limit(1);
+
+    let user = existingUsers[0];
 
     if (!user) {
       // Create new user
       const userId = generateULID();
-      await db.prepare(`
-        INSERT INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)
-      `).bind(userId, googleUser.email.toLowerCase(), googleUser.name || null, googleUser.picture || null).run();
+      await db.insert(users).values({
+        id: userId,
+        email: googleUser.email.toLowerCase(),
+        name: googleUser.name || null,
+        picture: googleUser.picture || null,
+      });
       user = { id: userId, email: googleUser.email.toLowerCase() };
     }
 
@@ -39,10 +49,12 @@ authRoutes.post('/google', async (c) => {
     const tokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days
 
     const sessionId = generateULID();
-    await db.prepare(`
-      INSERT INTO sessions (id, user_id, token_hash, expires_at)
-      VALUES (?, ?, ?, ?)
-    `).bind(sessionId, user.id, hashToken(accessToken), tokenExpiresAt).run();
+    await db.insert(sessions).values({
+      id: sessionId,
+      userId: user.id,
+      tokenHash: hashToken(accessToken),
+      expiresAt: tokenExpiresAt,
+    });
 
     return c.json({
       access_token: accessToken,
@@ -93,7 +105,7 @@ authRoutes.post('/complete', async (c) => {
 
 // Get current user
 authRoutes.get('/me', async (c) => {
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
   const authHeader = c.req.header('Authorization');
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -103,31 +115,33 @@ authRoutes.get('/me', async (c) => {
   const token = authHeader.slice(7);
   const tokenHash = hashToken(token);
 
-  // Look up session
-  const session = await db.prepare(`
-    SELECT s.user_id, s.expires_at, u.email, u.name, u.picture
-    FROM sessions s
-    JOIN users u ON s.user_id = u.id
-    WHERE s.token_hash = ?
-  `).bind(tokenHash).first<{
-    user_id: string;
-    expires_at: string;
-    email: string;
-    name: string | null;
-    picture: string | null;
-  }>();
+  // Look up session with user info
+  const result = await db
+    .select({
+      userId: sessions.userId,
+      expiresAt: sessions.expiresAt,
+      email: users.email,
+      name: users.name,
+      picture: users.picture,
+    })
+    .from(sessions)
+    .innerJoin(users, eq(sessions.userId, users.id))
+    .where(eq(sessions.tokenHash, tokenHash))
+    .limit(1);
+
+  const session = result[0];
 
   if (!session) {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Invalid token' } }, 401);
   }
 
-  if (new Date(session.expires_at) < new Date()) {
+  if (new Date(session.expiresAt) < new Date()) {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Token expired' } }, 401);
   }
 
   return c.json({
     user: {
-      id: session.user_id,
+      id: session.userId,
       email: session.email,
       name: session.name,
       picture: session.picture,
@@ -192,14 +206,4 @@ function generateSecureToken(length: number): string {
   const array = new Uint8Array(length);
   crypto.getRandomValues(array);
   return Array.from(array, (byte) => chars[byte % chars.length]).join('');
-}
-
-function hashToken(token: string): string {
-  let hash = 0;
-  for (let i = 0; i < token.length; i++) {
-    const char = token.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return `hash_${Math.abs(hash).toString(16)}`;
 }

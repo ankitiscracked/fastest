@@ -9,3 +9,6 @@ export function createDb(d1: D1Database) {
 
 // Re-export schema for convenience
 export * from './schema';
+
+// Export schema namespace for queries
+export { schema };

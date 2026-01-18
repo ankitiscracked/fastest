@@ -1,5 +1,7 @@
 import type { Context } from 'hono';
+import { eq, and, gt } from 'drizzle-orm';
 import type { Env } from '../index';
+import { createDb, sessions, users } from '../db';
 
 interface AuthUser {
   id: string;
@@ -23,33 +25,33 @@ export async function getAuthUser(c: Context<{ Bindings: Env }>): Promise<AuthUs
     return null;
   }
 
-  const db = c.env.DB;
-
-  // Look up session by token hash
+  const db = createDb(c.env.DB);
   const tokenHash = hashToken(token);
 
-  const session = await db.prepare(`
-    SELECT s.user_id, s.expires_at, u.email
-    FROM sessions s
-    JOIN users u ON s.user_id = u.id
-    WHERE s.token_hash = ?
-  `).bind(tokenHash).first<{
-    user_id: string;
-    expires_at: string;
-    email: string;
-  }>();
+  const result = await db
+    .select({
+      userId: sessions.userId,
+      expiresAt: sessions.expiresAt,
+      email: users.email,
+    })
+    .from(sessions)
+    .innerJoin(users, eq(sessions.userId, users.id))
+    .where(eq(sessions.tokenHash, tokenHash))
+    .limit(1);
+
+  const session = result[0];
 
   if (!session) {
     return null;
   }
 
   // Check if session is expired
-  if (new Date(session.expires_at) < new Date()) {
+  if (new Date(session.expiresAt) < new Date()) {
     return null;
   }
 
   return {
-    id: session.user_id,
+    id: session.userId,
     email: session.email
   };
 }
@@ -71,7 +73,7 @@ export async function requireAuth(c: Context<{ Bindings: Env }>): Promise<AuthUs
  * Simple hash function for token storage
  * In production, use a proper crypto hash
  */
-function hashToken(token: string): string {
+export function hashToken(token: string): string {
   let hash = 0;
   for (let i = 0; i < token.length; i++) {
     const char = token.charCodeAt(i);

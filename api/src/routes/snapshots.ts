@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
+import { eq } from 'drizzle-orm';
 import type { Env } from '../index';
 import type { Snapshot } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
+import { createDb, snapshots, projects } from '../db';
 
 export const snapshotRoutes = new Hono<{ Bindings: Env }>();
 
@@ -13,16 +15,25 @@ snapshotRoutes.get('/:snapshotId', async (c) => {
   }
 
   const snapshotId = c.req.param('snapshotId');
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Get snapshot and verify ownership through project
-  const snapshot = await db.prepare(`
-    SELECT s.id, s.project_id, s.manifest_hash, s.parent_snapshot_id, s.source, s.created_at,
-           p.owner_user_id
-    FROM snapshots s
-    JOIN projects p ON s.project_id = p.id
-    WHERE s.id = ?
-  `).bind(snapshotId).first<Snapshot & { owner_user_id: string }>();
+  const result = await db
+    .select({
+      id: snapshots.id,
+      project_id: snapshots.projectId,
+      manifest_hash: snapshots.manifestHash,
+      parent_snapshot_id: snapshots.parentSnapshotId,
+      source: snapshots.source,
+      created_at: snapshots.createdAt,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(snapshots)
+    .innerJoin(projects, eq(snapshots.projectId, projects.id))
+    .where(eq(snapshots.id, snapshotId))
+    .limit(1);
+
+  const snapshot = result[0];
 
   if (!snapshot) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Snapshot not found' } }, 404);
