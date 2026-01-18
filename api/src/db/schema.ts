@@ -1,0 +1,130 @@
+import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+
+// Users
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  email: text('email').notNull().unique(),
+  name: text('name'),
+  picture: text('picture'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+});
+
+// Auth codes (for web magic link flow)
+export const authCodes = sqliteTable('auth_codes', {
+  id: text('id').primaryKey(),
+  userId: text('user_id'),
+  email: text('email').notNull(),
+  code: text('code').notNull().unique(),
+  expiresAt: text('expires_at').notNull(),
+  used: integer('used').default(0),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+});
+
+// Device codes (for CLI OAuth device flow - RFC 8628)
+export const deviceCodes = sqliteTable('device_codes', {
+  id: text('id').primaryKey(),
+  deviceCode: text('device_code').notNull().unique(),
+  userCode: text('user_code').notNull().unique(),
+  userId: text('user_id').references(() => users.id),
+  status: text('status').notNull().default('pending'),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_device_codes_device_code').on(table.deviceCode),
+  index('idx_device_codes_user_code').on(table.userCode),
+]);
+
+// Sessions
+export const sessions = sqliteTable('sessions', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+});
+
+// Projects
+export const projects = sqliteTable('projects', {
+  id: text('id').primaryKey(),
+  ownerUserId: text('owner_user_id').notNull().references(() => users.id),
+  name: text('name').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+  lastSnapshotId: text('last_snapshot_id'),
+}, (table) => [
+  index('idx_projects_owner').on(table.ownerUserId, table.updatedAt),
+]);
+
+// Snapshots
+export const snapshots = sqliteTable('snapshots', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  manifestHash: text('manifest_hash').notNull(),
+  parentSnapshotId: text('parent_snapshot_id'),
+  source: text('source').notNull().default('cli'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex('idx_snapshots_project_manifest').on(table.projectId, table.manifestHash),
+  index('idx_snapshots_project').on(table.projectId, table.createdAt),
+]);
+
+// Workspaces
+export const workspaces = sqliteTable('workspaces', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  name: text('name').notNull(),
+  machineId: text('machine_id'),
+  baseSnapshotId: text('base_snapshot_id').references(() => snapshots.id),
+  localPath: text('local_path'),
+  lastSeenAt: text('last_seen_at'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_workspaces_project').on(table.projectId, table.createdAt),
+]);
+
+// Drift reports
+export const driftReports = sqliteTable('drift_reports', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id),
+  filesAdded: integer('files_added').default(0),
+  filesModified: integer('files_modified').default(0),
+  filesDeleted: integer('files_deleted').default(0),
+  bytesChanged: integer('bytes_changed').default(0),
+  summary: text('summary'),
+  reportedAt: text('reported_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_drift_reports_workspace').on(table.workspaceId, table.reportedAt),
+]);
+
+// Activity events
+export const activityEvents = sqliteTable('activity_events', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  workspaceId: text('workspace_id'),
+  actor: text('actor').notNull(),
+  type: text('type').notNull(),
+  snapshotId: text('snapshot_id'),
+  message: text('message'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_events_project').on(table.projectId, table.createdAt),
+]);
+
+// Jobs (agent execution queue)
+export const jobs = sqliteTable('jobs', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  prompt: text('prompt').notNull(),
+  status: text('status').notNull().default('pending'),
+  outputSnapshotId: text('output_snapshot_id').references(() => snapshots.id),
+  error: text('error'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  startedAt: text('started_at'),
+  completedAt: text('completed_at'),
+}, (table) => [
+  index('idx_jobs_workspace').on(table.workspaceId, table.createdAt),
+  index('idx_jobs_project').on(table.projectId, table.createdAt),
+  index('idx_jobs_status').on(table.status, table.createdAt),
+]);

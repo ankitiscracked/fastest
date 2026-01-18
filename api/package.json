@@ -6,15 +6,20 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "wrangler d1 execute fastest-db --local --file=./src/db/schema.sql"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply fastest-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply fastest-db --remote",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "hono": "^4.0.0",
+    "@cloudflare/sandbox": "^0.7.0",
     "@fastest/shared": "workspace:*",
-    "@cloudflare/sandbox": "^0.7.0"
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260117.0",
+    "drizzle-kit": "^0.31.8",
     "typescript": "^5.3.3",
     "wrangler": "^4.59.2"
   }
