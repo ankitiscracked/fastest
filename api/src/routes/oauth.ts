@@ -156,28 +156,75 @@ oauthRoutes.post('/token', async (c) => {
 /**
  * POST /oauth/device/authorize
  *
- * Called from web UI when user enters code and authenticates via Google
- * This authorizes the device code for a specific user
+ * Called from web UI when user enters code and authenticates
+ * Accepts either:
+ * - Google credential (for new users)
+ * - Bearer token in Authorization header (for already logged-in users)
  */
 oauthRoutes.post('/device/authorize', async (c) => {
   const db = c.env.DB;
   const body = await c.req.json<{
     user_code: string;
-    credential: string;
+    credential?: string;
   }>();
 
-  if (!body.user_code || !body.credential) {
+  if (!body.user_code) {
     return c.json({
-      error: { code: 'VALIDATION_ERROR', message: 'user_code and credential are required' }
+      error: { code: 'VALIDATION_ERROR', message: 'user_code is required' }
     }, 422);
   }
 
-  // Verify Google credential
-  const googleUser = await verifyGoogleToken(body.credential, c.env.GOOGLE_CLIENT_ID);
-  if (!googleUser || !googleUser.email) {
-    return c.json({
-      error: { code: 'INVALID_CREDENTIAL', message: 'Invalid Google credential' }
-    }, 401);
+  let userEmail: string;
+  let userName: string | null = null;
+  let userPicture: string | null = null;
+
+  // Check for existing session token first
+  const authHeader = c.req.header('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    const tokenHash = hashToken(token);
+
+    const session = await db.prepare(`
+      SELECT u.id, u.email, u.name, u.picture
+      FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.token_hash = ? AND s.expires_at > datetime('now')
+    `).bind(tokenHash).first<{
+      id: string;
+      email: string;
+      name: string | null;
+      picture: string | null;
+    }>();
+
+    if (session) {
+      userEmail = session.email;
+      userName = session.name;
+      userPicture = session.picture;
+    } else if (!body.credential) {
+      return c.json({
+        error: { code: 'UNAUTHORIZED', message: 'Invalid session or credential required' }
+      }, 401);
+    }
+  }
+
+  // If no valid session, require Google credential
+  if (!userEmail!) {
+    if (!body.credential) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'credential is required when not logged in' }
+      }, 422);
+    }
+
+    const googleUser = await verifyGoogleToken(body.credential, c.env.GOOGLE_CLIENT_ID);
+    if (!googleUser || !googleUser.email) {
+      return c.json({
+        error: { code: 'INVALID_CREDENTIAL', message: 'Invalid Google credential' }
+      }, 401);
+    }
+
+    userEmail = googleUser.email;
+    userName = googleUser.name || null;
+    userPicture = googleUser.picture || null;
   }
 
   // Normalize user code (remove dashes, uppercase)
@@ -215,15 +262,15 @@ oauthRoutes.post('/device/authorize', async (c) => {
   // Find or create user
   let user = await db.prepare(`
     SELECT id, email FROM users WHERE email = ?
-  `).bind(googleUser.email.toLowerCase()).first<{ id: string; email: string }>();
+  `).bind(userEmail.toLowerCase()).first<{ id: string; email: string }>();
 
   if (!user) {
     // Create new user
     const userId = generateULID();
     await db.prepare(`
       INSERT INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)
-    `).bind(userId, googleUser.email.toLowerCase(), googleUser.name || null, googleUser.picture || null).run();
-    user = { id: userId, email: googleUser.email.toLowerCase() };
+    `).bind(userId, userEmail.toLowerCase(), userName, userPicture).run();
+    user = { id: userId, email: userEmail.toLowerCase() };
   }
 
   // Authorize the device code

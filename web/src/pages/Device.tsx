@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { api } from '../api/client';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -34,6 +36,7 @@ type Step = 'code' | 'authorize' | 'success' | 'error';
 
 export function Device() {
   const [searchParams] = useSearchParams();
+  const { user, isAuthenticated, loading: authLoading } = useAuth();
   const [step, setStep] = useState<Step>('code');
   const [userCode, setUserCode] = useState(searchParams.get('code') || '');
   const [loading, setLoading] = useState(false);
@@ -48,9 +51,9 @@ export function Device() {
     }
   }, [searchParams]);
 
-  // Load Google Identity Services when on authorize step
+  // Load Google Identity Services when on authorize step (only if not logged in)
   useEffect(() => {
-    if (step === 'authorize' && !googleInitialized.current) {
+    if (step === 'authorize' && !isAuthenticated && !googleInitialized.current) {
       const script = document.createElement('script');
       script.src = 'https://accounts.google.com/gsi/client';
       script.async = true;
@@ -63,11 +66,10 @@ export function Device() {
           document.body.removeChild(script);
         }
       };
-    } else if (step === 'authorize' && googleInitialized.current && window.google) {
-      // Re-render button if already initialized
+    } else if (step === 'authorize' && !isAuthenticated && googleInitialized.current && window.google) {
       renderGoogleButton();
     }
-  }, [step]);
+  }, [step, isAuthenticated]);
 
   const initializeGoogle = () => {
     if (!window.google || !GOOGLE_CLIENT_ID) {
@@ -86,7 +88,7 @@ export function Device() {
 
   const renderGoogleButton = () => {
     if (googleButtonRef.current && window.google) {
-      googleButtonRef.current.innerHTML = ''; // Clear previous button
+      googleButtonRef.current.innerHTML = '';
       window.google.accounts.id.renderButton(googleButtonRef.current, {
         theme: 'filled_blue',
         size: 'large',
@@ -98,16 +100,34 @@ export function Device() {
   };
 
   const handleGoogleCallback = async (response: { credential: string }) => {
+    await authorizeDevice(response.credential);
+  };
+
+  const handleAuthorizeWithSession = async () => {
+    await authorizeDevice();
+  };
+
+  const authorizeDevice = async (credential?: string) => {
     setLoading(true);
     setError(null);
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      // If logged in, use the session token
+      const token = api.getToken();
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const res = await fetch('/v1/oauth/device/authorize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           user_code: userCode,
-          credential: response.credential,
+          ...(credential && { credential }),
         }),
       });
 
@@ -149,12 +169,20 @@ export function Device() {
     }
   };
 
-  // Format code as user types (ABCD-1234)
   const formatCode = (value: string) => {
     const cleaned = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
     if (cleaned.length <= 4) return cleaned;
     return `${cleaned.slice(0, 4)}-${cleaned.slice(4, 8)}`;
   };
+
+  // Show loading while checking auth state
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-gray-500">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -210,26 +238,46 @@ export function Device() {
               <p className="text-xl font-mono font-bold text-gray-900">{userCode}</p>
             </div>
 
-            <div className="text-center">
-              <p className="text-sm text-gray-600 mb-4">
-                Sign in with Google to authorize this device
-              </p>
-
-              {GOOGLE_CLIENT_ID ? (
-                <div className="flex justify-center">
-                  <div ref={googleButtonRef} />
+            {isAuthenticated && user ? (
+              // User is already logged in - show simple authorize button
+              <div className="text-center space-y-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-700">
+                    Logged in as <strong>{user.email}</strong>
+                  </p>
                 </div>
-              ) : (
-                <div className="text-sm text-gray-500">
-                  <p>Google Sign-In not configured.</p>
-                  <p className="mt-1 text-xs">Set VITE_GOOGLE_CLIENT_ID in your environment.</p>
-                </div>
-              )}
 
-              {loading && (
-                <p className="mt-4 text-sm text-gray-500">Authorizing...</p>
-              )}
-            </div>
+                <button
+                  onClick={handleAuthorizeWithSession}
+                  disabled={loading}
+                  className="w-full py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                >
+                  {loading ? 'Authorizing...' : 'Authorize this device'}
+                </button>
+              </div>
+            ) : (
+              // User is not logged in - show Google Sign-In
+              <div className="text-center">
+                <p className="text-sm text-gray-600 mb-4">
+                  Sign in with Google to authorize this device
+                </p>
+
+                {GOOGLE_CLIENT_ID ? (
+                  <div className="flex justify-center">
+                    <div ref={googleButtonRef} />
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500">
+                    <p>Google Sign-In not configured.</p>
+                    <p className="mt-1 text-xs">Set VITE_GOOGLE_CLIENT_ID in your environment.</p>
+                  </div>
+                )}
+
+                {loading && (
+                  <p className="mt-4 text-sm text-gray-500">Authorizing...</p>
+                )}
+              </div>
+            )}
 
             <div className="flex space-x-4">
               <button
