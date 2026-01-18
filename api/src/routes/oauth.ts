@@ -156,20 +156,28 @@ oauthRoutes.post('/token', async (c) => {
 /**
  * POST /oauth/device/authorize
  *
- * Called from web UI when user enters code and authenticates
+ * Called from web UI when user enters code and authenticates via Google
  * This authorizes the device code for a specific user
  */
 oauthRoutes.post('/device/authorize', async (c) => {
   const db = c.env.DB;
   const body = await c.req.json<{
     user_code: string;
-    email: string;
+    credential: string;
   }>();
 
-  if (!body.user_code || !body.email) {
+  if (!body.user_code || !body.credential) {
     return c.json({
-      error: { code: 'VALIDATION_ERROR', message: 'user_code and email are required' }
+      error: { code: 'VALIDATION_ERROR', message: 'user_code and credential are required' }
     }, 422);
+  }
+
+  // Verify Google credential
+  const googleUser = await verifyGoogleToken(body.credential, c.env.GOOGLE_CLIENT_ID);
+  if (!googleUser || !googleUser.email) {
+    return c.json({
+      error: { code: 'INVALID_CREDENTIAL', message: 'Invalid Google credential' }
+    }, 401);
   }
 
   // Normalize user code (remove dashes, uppercase)
@@ -207,15 +215,15 @@ oauthRoutes.post('/device/authorize', async (c) => {
   // Find or create user
   let user = await db.prepare(`
     SELECT id, email FROM users WHERE email = ?
-  `).bind(body.email.toLowerCase()).first<{ id: string; email: string }>();
+  `).bind(googleUser.email.toLowerCase()).first<{ id: string; email: string }>();
 
   if (!user) {
     // Create new user
     const userId = generateULID();
     await db.prepare(`
-      INSERT INTO users (id, email) VALUES (?, ?)
-    `).bind(userId, body.email.toLowerCase()).run();
-    user = { id: userId, email: body.email.toLowerCase() };
+      INSERT INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)
+    `).bind(userId, googleUser.email.toLowerCase(), googleUser.name || null, googleUser.picture || null).run();
+    user = { id: userId, email: googleUser.email.toLowerCase() };
   }
 
   // Authorize the device code
@@ -309,4 +317,46 @@ function getBaseUrl(c: { req: { url: string } }): string {
     return `http://localhost:3000`; // Web UI port in dev
   }
   return `${url.protocol}//${url.hostname}`;
+}
+
+interface GoogleUser {
+  email: string;
+  name?: string;
+  picture?: string;
+  email_verified?: boolean;
+}
+
+async function verifyGoogleToken(credential: string, clientId?: string): Promise<GoogleUser | null> {
+  // Verify the token with Google's tokeninfo endpoint
+  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = await response.json() as {
+    aud: string;
+    email: string;
+    email_verified: string;
+    name?: string;
+    picture?: string;
+  };
+
+  // Verify the audience matches our client ID (if provided)
+  if (clientId && payload.aud !== clientId) {
+    console.error('Token audience mismatch:', payload.aud, 'vs', clientId);
+    return null;
+  }
+
+  // Verify email is verified
+  if (payload.email_verified !== 'true') {
+    return null;
+  }
+
+  return {
+    email: payload.email,
+    name: payload.name,
+    picture: payload.picture,
+    email_verified: true,
+  };
 }

@@ -1,32 +1,103 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-type Step = 'code' | 'email' | 'success' | 'error';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: { credential: string }) => void;
+            auto_select?: boolean;
+          }) => void;
+          renderButton: (
+            element: HTMLElement,
+            config: {
+              theme?: 'outline' | 'filled_blue' | 'filled_black';
+              size?: 'large' | 'medium' | 'small';
+              type?: 'standard' | 'icon';
+              text?: 'signin_with' | 'signup_with' | 'continue_with' | 'signin';
+              width?: number;
+            }
+          ) => void;
+          prompt: () => void;
+        };
+      };
+    };
+  }
+}
+
+type Step = 'code' | 'authorize' | 'success' | 'error';
 
 export function Device() {
   const [searchParams] = useSearchParams();
   const [step, setStep] = useState<Step>('code');
   const [userCode, setUserCode] = useState(searchParams.get('code') || '');
-  const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const googleButtonRef = useRef<HTMLDivElement>(null);
+  const googleInitialized = useRef(false);
 
   // Auto-advance if code is in URL
   useEffect(() => {
     if (searchParams.get('code')) {
-      setStep('email');
+      setStep('authorize');
     }
   }, [searchParams]);
 
-  const handleCodeSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (userCode.length >= 8) {
-      setStep('email');
+  // Load Google Identity Services when on authorize step
+  useEffect(() => {
+    if (step === 'authorize' && !googleInitialized.current) {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = initializeGoogle;
+      document.body.appendChild(script);
+
+      return () => {
+        if (document.body.contains(script)) {
+          document.body.removeChild(script);
+        }
+      };
+    } else if (step === 'authorize' && googleInitialized.current && window.google) {
+      // Re-render button if already initialized
+      renderGoogleButton();
+    }
+  }, [step]);
+
+  const initializeGoogle = () => {
+    if (!window.google || !GOOGLE_CLIENT_ID) {
+      console.error('Google Identity Services not loaded or client ID missing');
+      return;
+    }
+
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: handleGoogleCallback,
+    });
+
+    googleInitialized.current = true;
+    renderGoogleButton();
+  };
+
+  const renderGoogleButton = () => {
+    if (googleButtonRef.current && window.google) {
+      googleButtonRef.current.innerHTML = ''; // Clear previous button
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: 'filled_blue',
+        size: 'large',
+        type: 'standard',
+        text: 'continue_with',
+        width: 280,
+      });
     }
   };
 
-  const handleAuthorize = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoogleCallback = async (response: { credential: string }) => {
     setLoading(true);
     setError(null);
 
@@ -36,7 +107,7 @@ export function Device() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           user_code: userCode,
-          email: email,
+          credential: response.credential,
         }),
       });
 
@@ -54,6 +125,13 @@ export function Device() {
     }
   };
 
+  const handleCodeSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (userCode.replace(/-/g, '').length >= 8) {
+      setStep('authorize');
+    }
+  };
+
   const handleDeny = async () => {
     setLoading(true);
     try {
@@ -65,7 +143,6 @@ export function Device() {
       setStep('error');
       setError('Authorization denied. You can close this window.');
     } catch {
-      // Ignore errors on deny
       setStep('error');
     } finally {
       setLoading(false);
@@ -126,55 +203,55 @@ export function Device() {
           </form>
         )}
 
-        {step === 'email' && (
-          <form onSubmit={handleAuthorize} className="mt-8 space-y-6">
+        {step === 'authorize' && (
+          <div className="mt-8 space-y-6">
             <div className="bg-gray-100 rounded-lg p-4 text-center">
-              <p className="text-sm text-gray-600">Authorizing code</p>
+              <p className="text-sm text-gray-600">Authorizing device with code</p>
               <p className="text-xl font-mono font-bold text-gray-900">{userCode}</p>
             </div>
 
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Enter your email to continue
-              </label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                placeholder="you@example.com"
-                autoFocus
-                required
-              />
+            <div className="text-center">
+              <p className="text-sm text-gray-600 mb-4">
+                Sign in with Google to authorize this device
+              </p>
+
+              {GOOGLE_CLIENT_ID ? (
+                <div className="flex justify-center">
+                  <div ref={googleButtonRef} />
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500">
+                  <p>Google Sign-In not configured.</p>
+                  <p className="mt-1 text-xs">Set VITE_GOOGLE_CLIENT_ID in your environment.</p>
+                </div>
+              )}
+
+              {loading && (
+                <p className="mt-4 text-sm text-gray-500">Authorizing...</p>
+              )}
             </div>
 
             <div className="flex space-x-4">
               <button
                 type="button"
+                onClick={() => {
+                  setStep('code');
+                  setUserCode('');
+                }}
+                className="flex-1 py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              >
+                Back
+              </button>
+              <button
+                type="button"
                 onClick={handleDeny}
                 disabled={loading}
-                className="flex-1 py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                className="flex-1 py-2 px-4 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
               >
                 Deny
               </button>
-              <button
-                type="submit"
-                disabled={loading || !email}
-                className="flex-1 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
-              >
-                {loading ? 'Authorizing...' : 'Authorize'}
-              </button>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setStep('code')}
-              className="w-full text-sm text-gray-500 hover:text-gray-700"
-            >
-              ← Enter a different code
-            </button>
-          </form>
+          </div>
         )}
 
         {step === 'success' && (
