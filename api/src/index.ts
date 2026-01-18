@@ -24,6 +24,9 @@ export interface Env {
   OPENAI_API_KEY?: string;
   GOOGLE_GENERATIVE_AI_API_KEY?: string;
   PROVIDER?: string;
+  // Google OAuth
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();

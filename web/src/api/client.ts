@@ -60,7 +60,16 @@ class ApiClient {
   }
 
   async getMe() {
-    return this.request<{ user: { id: string; email: string } }>('GET', '/auth/me');
+    return this.request<{ user: { id: string; email: string; name?: string; picture?: string } }>('GET', '/auth/me');
+  }
+
+  async googleAuth(credential: string) {
+    return this.request<{
+      access_token: string;
+      token_type: string;
+      expires_in: number;
+      user: { id: string; email: string };
+    }>('POST', '/auth/google', { credential });
   }
 
   // Projects
