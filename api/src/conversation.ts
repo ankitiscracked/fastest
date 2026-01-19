@@ -12,7 +12,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { getSandbox, parseSSEStream, type Sandbox } from '@cloudflare/sandbox';
 import type { Env } from './index';
-import type { TimelineItem, FileChange } from '@fastest/shared';
+import type { TimelineItem, FileChange, DeploymentLogEntry, DeploymentLog } from '@fastest/shared';
 
 // Sandbox exec stream event types
 type ExecEvent =
@@ -90,6 +90,7 @@ type StreamEvent =
   | { type: 'timeline_summary'; itemId: string; summary: string }
   | { type: 'project_info'; info: ProjectInfo }
   | { type: 'deployment_started'; deployment: Deployment }
+  | { type: 'deployment_log'; deploymentId: string; entry: DeploymentLogEntry }
   | { type: 'deployment_complete'; deployment: Deployment }
   | { type: 'error'; error: string };
 
@@ -272,6 +273,17 @@ export class ConversationSession extends DurableObject<Env> {
       const deploymentId = crypto.randomUUID();
       this.deploy(deploymentId, apiUrl, apiToken).catch(console.error);
       return Response.json({ deploymentId, message: 'Deployment started' });
+    }
+
+    // Get deployment logs: /deployments/:deploymentId/logs
+    const logsMatch = url.pathname.match(/^\/deployments\/([^/]+)\/logs$/);
+    if (logsMatch && request.method === 'GET') {
+      const deploymentId = logsMatch[1];
+      const log = await this.ctx.storage.get<DeploymentLog>(`deployment_log:${deploymentId}`);
+      if (!log) {
+        return Response.json({ error: { code: 'NOT_FOUND', message: 'Deployment log not found' } }, { status: 404 });
+      }
+      return Response.json({ log });
     }
 
     return new Response('Not found', { status: 404 });
@@ -1050,6 +1062,25 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
     const sandbox = await this.getSandbox();
     const workDir = '/workspace';
 
+    // Initialize deployment log
+    const deploymentLog: DeploymentLog = {
+      deploymentId,
+      entries: [],
+      startedAt: new Date().toISOString(),
+    };
+
+    // Helper to append and broadcast log entries
+    const appendLog = async (step: DeploymentLogEntry['step'], stream: 'stdout' | 'stderr', content: string) => {
+      const entry: DeploymentLogEntry = {
+        timestamp: new Date().toISOString(),
+        step,
+        stream,
+        content,
+      };
+      deploymentLog.entries.push(entry);
+      this.broadcast({ type: 'deployment_log', deploymentId, entry });
+    };
+
     // Create deployment record
     const deployment: Deployment = {
       id: deploymentId,
@@ -1076,13 +1107,14 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
         throw new Error('Only Wrangler projects are supported for deployment');
       }
 
+      // Fetch environment variables for this project
+      const envVars = await this.fetchProjectEnvVars(apiUrl, apiToken, state.projectId);
+
       // Install dependencies if package.json exists
       const packageJsonCheck = await sandbox.exec(`test -f ${workDir}/package.json && echo "exists"`);
       if (packageJsonCheck.stdout.includes('exists')) {
-        const installResult = await sandbox.exec(`cd ${workDir} && npm install`, { timeout: 120000 });
-        if (!installResult.success) {
-          throw new Error(`Failed to install dependencies: ${installResult.stderr}`);
-        }
+        await appendLog('install', 'stdout', 'Installing dependencies...\n');
+        await this.runCommandWithLogs(sandbox, `cd ${workDir} && npm install 2>&1`, 'install', appendLog, { timeout: 120000 });
       }
 
       // Run build if build script exists
@@ -1091,12 +1123,10 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
         try {
           const pkg = JSON.parse(packageJson.stdout);
           if (pkg.scripts?.build) {
-            const buildResult = await sandbox.exec(`cd ${workDir} && npm run build`, { timeout: 120000 });
-            if (!buildResult.success) {
-              throw new Error(`Build failed: ${buildResult.stderr}`);
-            }
+            await appendLog('build', 'stdout', 'Running build...\n');
+            await this.runCommandWithLogs(sandbox, `cd ${workDir} && npm run build 2>&1`, 'build', appendLog, { timeout: 120000 });
           }
-        } catch (e) {
+        } catch {
           // Ignore JSON parse errors
         }
       }
@@ -1104,10 +1134,19 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
       // Generate unique project name for this user/project
       const projectName = `fastest-${state.projectId.slice(0, 8)}`;
 
-      // Run wrangler deploy with our credentials
-      // Override the name in the config to use our namespaced name
-      const deployResult = await sandbox.exec(
-        `cd ${workDir} && npx wrangler deploy --name ${projectName} --compatibility-date 2024-01-01 2>&1`,
+      // Build --var flags for environment variables
+      const varFlags = envVars
+        .map(v => `--var ${v.key}:${this.shellEscape(v.value)}`)
+        .join(' ');
+
+      await appendLog('deploy', 'stdout', 'Deploying to Cloudflare Workers...\n');
+
+      // Run wrangler deploy with streaming logs
+      const deployOutput = await this.runCommandWithLogs(
+        sandbox,
+        `cd ${workDir} && npx wrangler deploy --name ${projectName} --compatibility-date 2024-01-01 ${varFlags} 2>&1`,
+        'deploy',
+        appendLog,
         {
           timeout: 120000,
           env: {
@@ -1117,20 +1156,21 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
         }
       );
 
-      if (!deployResult.success) {
-        throw new Error(`Deployment failed: ${deployResult.stdout}\n${deployResult.stderr}`);
-      }
-
       // Parse the deployed URL from output
-      // Wrangler outputs something like: "Published fastest-xxx (https://fastest-xxx.workers.dev)"
-      const urlMatch = deployResult.stdout.match(/https:\/\/[^\s)]+\.workers\.dev/);
+      const urlMatch = deployOutput.match(/https:\/\/[^\s)]+\.workers\.dev/);
       const deployedUrl = urlMatch?.[0] || `https://${projectName}.workers.dev`;
 
       // Update deployment record
       deployment.url = deployedUrl;
       deployment.status = 'success';
       deployment.completedAt = new Date().toISOString();
+
+      // Save log
+      deploymentLog.completedAt = new Date().toISOString();
+      await this.ctx.storage.put(`deployment_log:${deploymentId}`, deploymentLog);
       await this.ctx.storage.put('state', state);
+
+      await appendLog('deploy', 'stdout', `\nDeployed successfully to ${deployedUrl}\n`);
       this.broadcast({ type: 'deployment_complete', deployment });
 
     } catch (error) {
@@ -1138,8 +1178,82 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
       deployment.status = 'failed';
       deployment.error = error instanceof Error ? error.message : String(error);
       deployment.completedAt = new Date().toISOString();
+
+      // Save log even on failure
+      deploymentLog.completedAt = new Date().toISOString();
+      await this.ctx.storage.put(`deployment_log:${deploymentId}`, deploymentLog);
       await this.ctx.storage.put('state', state);
+
+      await appendLog('deploy', 'stderr', `\nDeployment failed: ${deployment.error}\n`);
       this.broadcast({ type: 'deployment_complete', deployment });
     }
+  }
+
+  /**
+   * Run a command with streaming logs
+   */
+  private async runCommandWithLogs(
+    sandbox: Sandbox,
+    command: string,
+    step: DeploymentLogEntry['step'],
+    appendLog: (step: DeploymentLogEntry['step'], stream: 'stdout' | 'stderr', content: string) => Promise<void>,
+    options?: { env?: Record<string, string>; timeout?: number }
+  ): Promise<string> {
+    const stream = await sandbox.execStream(command, options);
+    let fullOutput = '';
+
+    for await (const event of parseSSEStream(stream) as AsyncIterable<ExecEvent>) {
+      switch (event.type) {
+        case 'stdout':
+          fullOutput += event.data;
+          await appendLog(step, 'stdout', event.data);
+          break;
+        case 'stderr':
+          await appendLog(step, 'stderr', event.data);
+          break;
+        case 'complete':
+          if (event.exitCode !== 0) {
+            throw new Error(`Command failed with exit code ${event.exitCode}`);
+          }
+          return fullOutput;
+        case 'error':
+          throw new Error(event.error);
+      }
+    }
+    return fullOutput;
+  }
+
+  /**
+   * Fetch project env vars from API
+   */
+  private async fetchProjectEnvVars(
+    apiUrl: string,
+    apiToken: string,
+    projectId: string
+  ): Promise<Array<{ key: string; value: string; is_secret: boolean }>> {
+    try {
+      const response = await fetch(`${apiUrl}/v1/projects/${projectId}/env-vars/values`, {
+        headers: { Authorization: `Bearer ${apiToken}` },
+      });
+
+      if (!response.ok) {
+        console.warn('Failed to fetch env vars, proceeding without them');
+        return [];
+      }
+
+      const data = await response.json() as { variables: Array<{ key: string; value: string; is_secret: boolean }> };
+      return data.variables;
+    } catch {
+      console.warn('Error fetching env vars, proceeding without them');
+      return [];
+    }
+  }
+
+  /**
+   * Escape value for shell
+   */
+  private shellEscape(value: string): string {
+    // Use single quotes and escape any single quotes within
+    return `'${value.replace(/'/g, "'\\''")}'`;
   }
 }

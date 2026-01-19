@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import type { Env } from '../index';
-import type { Project, Workspace, Snapshot, CreateProjectRequest, CreateWorkspaceRequest } from '@fastest/shared';
+import type { Project, Workspace, Snapshot, CreateProjectRequest, CreateWorkspaceRequest, SetEnvVarRequest, ProjectEnvVar } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
-import { createDb, projects, workspaces, snapshots, activityEvents, driftReports } from '../db';
+import { createDb, projects, workspaces, snapshots, activityEvents, driftReports, projectEnvVars } from '../db';
 
 export const projectRoutes = new Hono<{ Bindings: Env }>();
 
@@ -552,6 +552,257 @@ projectRoutes.get('/:projectId/snapshots', async (c) => {
   return c.json({ snapshots: result });
 });
 
+// =====================
+// Environment Variables
+// =====================
+
+// List env vars for a project
+projectRoutes.get('/:projectId/env-vars', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const db = createDb(c.env.DB);
+
+  // Verify ownership
+  const projectResult = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  if (!projectResult[0]) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  // Get env vars
+  const vars = await db
+    .select()
+    .from(projectEnvVars)
+    .where(eq(projectEnvVars.projectId, projectId))
+    .orderBy(projectEnvVars.key);
+
+  // Mask secret values
+  const result: ProjectEnvVar[] = vars.map(v => ({
+    id: v.id,
+    project_id: v.projectId,
+    key: v.key,
+    value: v.isSecret ? maskSecret(v.value) : v.value,
+    is_secret: Boolean(v.isSecret),
+    created_at: v.createdAt,
+    updated_at: v.updatedAt,
+  }));
+
+  return c.json({ variables: result });
+});
+
+// Set a single env var
+projectRoutes.post('/:projectId/env-vars', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const db = createDb(c.env.DB);
+
+  // Verify ownership
+  const projectResult = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  if (!projectResult[0]) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  const body = await c.req.json<SetEnvVarRequest>();
+
+  // Validate key format
+  if (!body.key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(body.key)) {
+    return c.json({
+      error: { code: 'VALIDATION_ERROR', message: 'Key must start with letter or underscore and contain only alphanumeric characters' }
+    }, 422);
+  }
+
+  if (body.value === undefined || body.value === null) {
+    return c.json({
+      error: { code: 'VALIDATION_ERROR', message: 'Value is required' }
+    }, 422);
+  }
+
+  const now = new Date().toISOString();
+
+  // Check if exists
+  const existing = await db
+    .select({ id: projectEnvVars.id })
+    .from(projectEnvVars)
+    .where(and(eq(projectEnvVars.projectId, projectId), eq(projectEnvVars.key, body.key)))
+    .limit(1);
+
+  if (existing[0]) {
+    // Update
+    await db
+      .update(projectEnvVars)
+      .set({
+        value: body.value,
+        isSecret: body.is_secret ? 1 : 0,
+        updatedAt: now,
+      })
+      .where(eq(projectEnvVars.id, existing[0].id));
+  } else {
+    // Insert
+    await db.insert(projectEnvVars).values({
+      id: generateULID(),
+      projectId,
+      key: body.key,
+      value: body.value,
+      isSecret: body.is_secret ? 1 : 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  return c.json({ success: true });
+});
+
+// Bulk set env vars
+projectRoutes.put('/:projectId/env-vars', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const db = createDb(c.env.DB);
+
+  // Verify ownership
+  const projectResult = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  if (!projectResult[0]) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  const { variables } = await c.req.json<{ variables: SetEnvVarRequest[] }>();
+
+  if (!Array.isArray(variables)) {
+    return c.json({
+      error: { code: 'VALIDATION_ERROR', message: 'variables array is required' }
+    }, 422);
+  }
+
+  const now = new Date().toISOString();
+
+  for (const v of variables) {
+    if (!v.key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.key)) continue;
+
+    const existing = await db
+      .select({ id: projectEnvVars.id })
+      .from(projectEnvVars)
+      .where(and(eq(projectEnvVars.projectId, projectId), eq(projectEnvVars.key, v.key)))
+      .limit(1);
+
+    if (existing[0]) {
+      await db
+        .update(projectEnvVars)
+        .set({
+          value: v.value,
+          isSecret: v.is_secret ? 1 : 0,
+          updatedAt: now,
+        })
+        .where(eq(projectEnvVars.id, existing[0].id));
+    } else {
+      await db.insert(projectEnvVars).values({
+        id: generateULID(),
+        projectId,
+        key: v.key,
+        value: v.value,
+        isSecret: v.is_secret ? 1 : 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+
+  return c.json({ success: true, count: variables.length });
+});
+
+// Delete an env var
+projectRoutes.delete('/:projectId/env-vars/:key', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const key = c.req.param('key');
+  const db = createDb(c.env.DB);
+
+  // Verify ownership
+  const projectResult = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  if (!projectResult[0]) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  await db
+    .delete(projectEnvVars)
+    .where(and(eq(projectEnvVars.projectId, projectId), eq(projectEnvVars.key, key)));
+
+  return c.json({ success: true });
+});
+
+// Internal: Get env vars with unmasked values (for deployment)
+projectRoutes.get('/:projectId/env-vars/values', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const db = createDb(c.env.DB);
+
+  // Verify ownership
+  const projectResult = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  if (!projectResult[0]) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  // Get env vars with actual values
+  const vars = await db
+    .select({
+      key: projectEnvVars.key,
+      value: projectEnvVars.value,
+      is_secret: projectEnvVars.isSecret,
+    })
+    .from(projectEnvVars)
+    .where(eq(projectEnvVars.projectId, projectId));
+
+  return c.json({
+    variables: vars.map(v => ({
+      key: v.key,
+      value: v.value,
+      is_secret: Boolean(v.is_secret),
+    }))
+  });
+});
+
 // Helper: Generate ULID
 function generateULID(): string {
   const timestamp = Date.now().toString(36).padStart(10, '0');
@@ -559,4 +810,10 @@ function generateULID(): string {
     Math.floor(Math.random() * 36).toString(36)
   ).join('');
   return (timestamp + random).toUpperCase();
+}
+
+// Helper: Mask secret value
+function maskSecret(value: string): string {
+  if (value.length <= 4) return '****';
+  return '****' + value.slice(-4);
 }

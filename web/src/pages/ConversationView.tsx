@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import type { Project, Workspace, ConversationWithContext, TimelineItem } from '@fastest/shared';
-import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo } from '../api/client';
+import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo, type DeploymentLogEntry } from '../api/client';
 import {
   ConversationMessage,
   PromptInput,
@@ -9,6 +9,7 @@ import {
   SuggestionsBar,
   generateSuggestions,
   Timeline,
+  DeploymentLogs,
 } from '../components/conversation';
 
 // Confirmation Dialog Component
@@ -155,6 +156,8 @@ export function ConversationView() {
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [isDeploying, setIsDeploying] = useState(false);
+  const [deploymentLogs, setDeploymentLogs] = useState<Record<string, DeploymentLogEntry[]>>({});
+  const [showingLogsFor, setShowingLogsFor] = useState<string | null>(null);
 
   // Context data (for switching workspaces)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -252,6 +255,15 @@ export function ConversationView() {
       case 'deployment_started':
         setIsDeploying(true);
         setDeployments(prev => [...prev, event.deployment]);
+        setDeploymentLogs(prev => ({ ...prev, [event.deployment.id]: [] }));
+        setShowingLogsFor(event.deployment.id);
+        break;
+
+      case 'deployment_log':
+        setDeploymentLogs(prev => ({
+          ...prev,
+          [event.deploymentId]: [...(prev[event.deploymentId] || []), event.entry],
+        }));
         break;
 
       case 'deployment_complete':
@@ -759,6 +771,18 @@ export function ConversationView() {
         onConfirm={handleClearConversation}
         onCancel={() => setShowClearConfirm(false)}
       />
+
+      {/* Deployment Logs Panel */}
+      {showingLogsFor && (
+        <div className="fixed inset-y-0 right-0 w-[500px] z-50 shadow-xl">
+          <DeploymentLogs
+            deploymentId={showingLogsFor}
+            isStreaming={isDeploying && deployments.find(d => d.id === showingLogsFor)?.status === 'deploying'}
+            entries={deploymentLogs[showingLogsFor] || []}
+            onClose={() => setShowingLogsFor(null)}
+          />
+        </div>
+      )}
 
     </div>
   );

@@ -262,3 +262,45 @@ export interface ApiError {
     details?: Record<string, unknown>;
   };
 }
+
+// Environment variables
+
+export interface ProjectEnvVar {
+  id: string;
+  project_id: string;
+  key: string;
+  value: string;  // Masked for secrets in API responses
+  is_secret: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetEnvVarRequest {
+  key: string;
+  value: string;
+  is_secret?: boolean;
+}
+
+export interface SetEnvVarsRequest {
+  variables: SetEnvVarRequest[];
+}
+
+export interface ListEnvVarsResponse {
+  variables: ProjectEnvVar[];
+}
+
+// Deployment logs
+
+export interface DeploymentLogEntry {
+  timestamp: string;
+  step: 'install' | 'build' | 'deploy';
+  stream: 'stdout' | 'stderr';
+  content: string;
+}
+
+export interface DeploymentLog {
+  deploymentId: string;
+  entries: DeploymentLogEntry[];
+  startedAt: string;
+  completedAt?: string;
+}

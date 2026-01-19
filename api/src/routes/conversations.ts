@@ -533,6 +533,48 @@ conversationRoutes.post('/:conversationId/deploy', async (c) => {
 });
 
 /**
+ * Get deployment logs
+ * GET /v1/conversations/:conversationId/deployments/:deploymentId/logs
+ */
+conversationRoutes.get('/:conversationId/deployments/:deploymentId/logs', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId, deploymentId } = c.req.param();
+  const db = c.env.DB;
+
+  // Verify ownership
+  const existing = await db
+    .prepare(`
+      SELECT c.id
+      FROM conversations c
+      JOIN workspaces w ON c.workspace_id = w.id
+      JOIN projects p ON w.project_id = p.id
+      WHERE c.id = ? AND p.owner_user_id = ?
+    `)
+    .bind(conversationId, user.id)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  const response = await stub.fetch(new Request(`http://do/deployments/${deploymentId}/logs`));
+  const data = await response.json();
+
+  if (!response.ok) {
+    return c.json(data, response.status as 404);
+  }
+
+  return c.json(data);
+});
+
+/**
  * WebSocket endpoint for streaming
  * GET /v1/conversations/:conversationId/stream
  */

@@ -13,8 +13,17 @@ export interface Message {
 }
 
 // Re-export Conversation types from shared
-export type { Conversation, ConversationWithContext, TimelineItem, FileChange } from '@fastest/shared';
-import type { TimelineItem } from '@fastest/shared';
+export type {
+  Conversation,
+  ConversationWithContext,
+  TimelineItem,
+  FileChange,
+  ProjectEnvVar,
+  SetEnvVarRequest,
+  DeploymentLogEntry,
+  DeploymentLog,
+} from '@fastest/shared';
+import type { TimelineItem, DeploymentLogEntry } from '@fastest/shared';
 
 // Deployment types
 export interface ProjectInfo {
@@ -42,6 +51,7 @@ export type StreamEvent =
   | { type: 'timeline_summary'; itemId: string; summary: string }
   | { type: 'project_info'; info: ProjectInfo }
   | { type: 'deployment_started'; deployment: Deployment }
+  | { type: 'deployment_log'; deploymentId: string; entry: DeploymentLogEntry }
   | { type: 'deployment_complete'; deployment: Deployment }
   | { type: 'error'; error: string };
 
@@ -248,6 +258,45 @@ class ApiClient {
     return this.request<{ deploymentId: string; message: string }>(
       'POST',
       `/conversations/${conversationId}/deploy`
+    );
+  }
+
+  async getDeploymentLogs(conversationId: string, deploymentId: string) {
+    return this.request<{ log: import('@fastest/shared').DeploymentLog }>(
+      'GET',
+      `/conversations/${conversationId}/deployments/${deploymentId}/logs`
+    );
+  }
+
+  // Environment Variables
+
+  async getEnvVars(projectId: string) {
+    return this.request<{ variables: import('@fastest/shared').ProjectEnvVar[] }>(
+      'GET',
+      `/projects/${projectId}/env-vars`
+    );
+  }
+
+  async setEnvVar(projectId: string, key: string, value: string, isSecret?: boolean) {
+    return this.request<{ success: boolean }>(
+      'POST',
+      `/projects/${projectId}/env-vars`,
+      { key, value, is_secret: isSecret }
+    );
+  }
+
+  async setEnvVars(projectId: string, variables: import('@fastest/shared').SetEnvVarRequest[]) {
+    return this.request<{ success: boolean; count: number }>(
+      'PUT',
+      `/projects/${projectId}/env-vars`,
+      { variables }
+    );
+  }
+
+  async deleteEnvVar(projectId: string, key: string) {
+    return this.request<{ success: boolean }>(
+      'DELETE',
+      `/projects/${projectId}/env-vars/${key}`
     );
   }
 

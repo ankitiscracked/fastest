@@ -122,6 +122,20 @@ export const conversations = sqliteTable('conversations', {
   index('idx_conversations_workspace').on(table.workspaceId, table.updatedAt),
 ]);
 
+// Project environment variables
+export const projectEnvVars = sqliteTable('project_env_vars', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  key: text('key').notNull(),
+  value: text('value').notNull(),  // Encrypted for secrets
+  isSecret: integer('is_secret').notNull().default(0),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex('idx_env_vars_project_key').on(table.projectId, table.key),
+  index('idx_env_vars_project').on(table.projectId),
+]);
+
 // Jobs (agent execution queue) - DEPRECATED
 export const jobs = sqliteTable('jobs', {
   id: text('id').primaryKey(),

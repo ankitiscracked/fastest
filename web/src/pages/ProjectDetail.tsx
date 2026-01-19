@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
-import type { Project, Workspace, Snapshot } from '@fastest/shared';
+import type { Project, Workspace, Snapshot, ProjectEnvVar } from '@fastest/shared';
 import { api } from '../api/client';
 
 export function ProjectDetail() {
@@ -8,11 +8,21 @@ export function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [envVars, setEnvVars] = useState<ProjectEnvVar[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Env var form state
+  const [newEnvKey, setNewEnvKey] = useState('');
+  const [newEnvValue, setNewEnvValue] = useState('');
+  const [newEnvIsSecret, setNewEnvIsSecret] = useState(false);
+  const [envSaving, setEnvSaving] = useState(false);
+  const [editingEnvKey, setEditingEnvKey] = useState<string | null>(null);
+  const [editEnvValue, setEditEnvValue] = useState('');
+
   useEffect(() => {
     fetchProject();
+    fetchEnvVars();
   }, [projectId]);
 
   const fetchProject = async () => {
@@ -28,6 +38,66 @@ export function ProjectDetail() {
       setError(err instanceof Error ? err.message : 'Failed to fetch project');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchEnvVars = async () => {
+    if (!projectId) return;
+    try {
+      const data = await api.getEnvVars(projectId);
+      setEnvVars(data.variables || []);
+    } catch (err) {
+      console.error('Failed to fetch env vars:', err);
+    }
+  };
+
+  const handleAddEnvVar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!projectId || !newEnvKey.trim()) return;
+
+    setEnvSaving(true);
+    try {
+      await api.setEnvVar(projectId, newEnvKey.trim(), newEnvValue, newEnvIsSecret);
+      setNewEnvKey('');
+      setNewEnvValue('');
+      setNewEnvIsSecret(false);
+      await fetchEnvVars();
+    } catch (err) {
+      console.error('Failed to add env var:', err);
+      setError(err instanceof Error ? err.message : 'Failed to add environment variable');
+    } finally {
+      setEnvSaving(false);
+    }
+  };
+
+  const handleUpdateEnvVar = async (key: string) => {
+    if (!projectId) return;
+
+    setEnvSaving(true);
+    try {
+      const existingVar = envVars.find(v => v.key === key);
+      await api.setEnvVar(projectId, key, editEnvValue, existingVar?.is_secret || false);
+      setEditingEnvKey(null);
+      setEditEnvValue('');
+      await fetchEnvVars();
+    } catch (err) {
+      console.error('Failed to update env var:', err);
+      setError(err instanceof Error ? err.message : 'Failed to update environment variable');
+    } finally {
+      setEnvSaving(false);
+    }
+  };
+
+  const handleDeleteEnvVar = async (key: string) => {
+    if (!projectId) return;
+    if (!confirm(`Delete environment variable "${key}"?`)) return;
+
+    try {
+      await api.deleteEnvVar(projectId, key);
+      await fetchEnvVars();
+    } catch (err) {
+      console.error('Failed to delete env var:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete environment variable');
     }
   };
 
@@ -138,6 +208,138 @@ export function ProjectDetail() {
             </dd>
           </div>
         </dl>
+      </div>
+
+      {/* Environment Variables */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-200">
+          <h3 className="text-sm font-medium text-gray-900">Environment Variables</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            These variables are passed to deployments via Wrangler --var flags
+          </p>
+        </div>
+        <div className="p-4 space-y-4">
+          {/* Existing env vars */}
+          {envVars.length > 0 && (
+            <div className="space-y-2">
+              {envVars.map((envVar) => (
+                <div
+                  key={envVar.key}
+                  className="flex items-center gap-2 bg-gray-50 rounded-md p-2"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm text-gray-900">{envVar.key}</span>
+                      {envVar.is_secret && (
+                        <span className="text-xs bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded">
+                          secret
+                        </span>
+                      )}
+                    </div>
+                    {editingEnvKey === envVar.key ? (
+                      <div className="flex items-center gap-2 mt-1">
+                        <input
+                          type={envVar.is_secret ? 'password' : 'text'}
+                          value={editEnvValue}
+                          onChange={(e) => setEditEnvValue(e.target.value)}
+                          className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 font-mono"
+                          placeholder="New value"
+                        />
+                        <button
+                          onClick={() => handleUpdateEnvVar(envVar.key)}
+                          disabled={envSaving}
+                          className="text-xs px-2 py-1 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditingEnvKey(null);
+                            setEditEnvValue('');
+                          }}
+                          className="text-xs px-2 py-1 text-gray-600 hover:text-gray-900"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500 font-mono truncate">
+                        {envVar.value}
+                      </div>
+                    )}
+                  </div>
+                  {editingEnvKey !== envVar.key && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          setEditingEnvKey(envVar.key);
+                          setEditEnvValue('');
+                        }}
+                        className="p-1 text-gray-400 hover:text-gray-600"
+                        title="Edit value"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteEnvVar(envVar.key)}
+                        className="p-1 text-gray-400 hover:text-red-600"
+                        title="Delete"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add new env var form */}
+          <form onSubmit={handleAddEnvVar} className="border-t border-gray-200 pt-4">
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                value={newEnvKey}
+                onChange={(e) => setNewEnvKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
+                placeholder="KEY"
+                className="flex-1 min-w-[120px] text-sm border border-gray-300 rounded px-3 py-2 font-mono"
+              />
+              <input
+                type={newEnvIsSecret ? 'password' : 'text'}
+                value={newEnvValue}
+                onChange={(e) => setNewEnvValue(e.target.value)}
+                placeholder="value"
+                className="flex-1 min-w-[200px] text-sm border border-gray-300 rounded px-3 py-2 font-mono"
+              />
+              <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newEnvIsSecret}
+                  onChange={(e) => setNewEnvIsSecret(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Secret
+              </label>
+              <button
+                type="submit"
+                disabled={envSaving || !newEnvKey.trim()}
+                className="px-4 py-2 bg-primary-600 text-white rounded text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {envSaving ? 'Adding...' : 'Add Variable'}
+              </button>
+            </div>
+          </form>
+
+          {envVars.length === 0 && (
+            <p className="text-sm text-gray-500 text-center py-2">
+              No environment variables configured
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Active Workspaces */}
