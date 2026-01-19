@@ -5,7 +5,7 @@ import { getAuthUser } from '../middleware/auth';
 
 export const blobRoutes = new Hono<{ Bindings: Env }>();
 
-// Check which blobs exist
+// Check which blobs exist (user-scoped)
 blobRoutes.post('/exists', async (c) => {
   const user = await getAuthUser(c);
   if (!user) {
@@ -18,14 +18,14 @@ blobRoutes.post('/exists', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'hashes array is required' } }, 422);
   }
 
-  // Check R2 for existing blobs (limit to 100)
+  // Check R2 for existing blobs in user's scope (limit to 100)
   const hashes = body.hashes.slice(0, 100);
   const missing: string[] = [];
   const existing: string[] = [];
 
   await Promise.all(
     hashes.map(async (hash) => {
-      const obj = await c.env.BLOBS.head(`blobs/${hash}`);
+      const obj = await c.env.BLOBS.head(`${user.id}/blobs/${hash}`);
       if (!obj) {
         missing.push(hash);
       } else {
@@ -82,7 +82,7 @@ blobRoutes.post('/presign-download', async (c) => {
   return c.json({ urls });
 });
 
-// Upload a blob
+// Upload a blob (user-scoped)
 blobRoutes.put('/upload/:hash', async (c) => {
   const user = await getAuthUser(c);
   if (!user) {
@@ -103,18 +103,20 @@ blobRoutes.put('/upload/:hash', async (c) => {
     }, 400);
   }
 
+  const key = `${user.id}/blobs/${hash}`;
+
   // Check if already exists
-  const existing = await c.env.BLOBS.head(`blobs/${hash}`);
+  const existing = await c.env.BLOBS.head(key);
   if (existing) {
     return c.json({ hash, size: existing.size, created: false });
   }
 
-  await c.env.BLOBS.put(`blobs/${hash}`, body);
+  await c.env.BLOBS.put(key, body);
 
   return c.json({ hash, size: body.byteLength, created: true }, 201);
 });
 
-// Download a blob
+// Download a blob (user-scoped)
 blobRoutes.get('/download/:hash', async (c) => {
   const user = await getAuthUser(c);
   if (!user) {
@@ -122,8 +124,9 @@ blobRoutes.get('/download/:hash', async (c) => {
   }
 
   const hash = c.req.param('hash');
+  const key = `${user.id}/blobs/${hash}`;
 
-  const obj = await c.env.BLOBS.get(`blobs/${hash}`);
+  const obj = await c.env.BLOBS.get(key);
 
   if (!obj) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Blob not found' } }, 404);
@@ -138,7 +141,7 @@ blobRoutes.get('/download/:hash', async (c) => {
   });
 });
 
-// Manifests
+// Manifests (user-scoped)
 
 // Upload a manifest
 blobRoutes.put('/manifests/:hash', async (c) => {
@@ -163,13 +166,15 @@ blobRoutes.put('/manifests/:hash', async (c) => {
     }, 400);
   }
 
+  const key = `${user.id}/manifests/${hash}.json`;
+
   // Check if already exists
-  const existing = await c.env.BLOBS.head(`manifests/${hash}.json`);
+  const existing = await c.env.BLOBS.head(key);
   if (existing) {
     return c.json({ hash, created: false });
   }
 
-  await c.env.BLOBS.put(`manifests/${hash}.json`, body, {
+  await c.env.BLOBS.put(key, body, {
     httpMetadata: { contentType: 'application/json' }
   });
 
@@ -184,8 +189,9 @@ blobRoutes.get('/manifests/:hash', async (c) => {
   }
 
   const hash = c.req.param('hash');
+  const key = `${user.id}/manifests/${hash}.json`;
 
-  const obj = await c.env.BLOBS.get(`manifests/${hash}.json`);
+  const obj = await c.env.BLOBS.get(key);
 
   if (!obj) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Manifest not found' } }, 404);
