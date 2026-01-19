@@ -12,6 +12,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { getSandbox, parseSSEStream, type Sandbox } from '@cloudflare/sandbox';
 import type { Env } from './index';
+import type { TimelineItem, FileChange } from '@fastest/shared';
 
 // Sandbox exec stream event types
 type ExecEvent =
@@ -39,6 +40,9 @@ interface ConversationState {
   projectId: string;
   messages: Message[];
 
+  // Timeline of file changes
+  timeline: TimelineItem[];
+
   // OpenCode session state (for resume)
   openCodeSessionId?: string;
   openCodePort?: number;
@@ -61,6 +65,8 @@ type StreamEvent =
   | { type: 'status'; status: Message['status'] }
   | { type: 'files_changed'; files: string[] }
   | { type: 'message_complete'; message: Message }
+  | { type: 'timeline_item'; item: TimelineItem }
+  | { type: 'timeline_summary'; itemId: string; summary: string }
   | { type: 'error'; error: string };
 
 export class ConversationSession extends DurableObject<Env> {
@@ -105,6 +111,7 @@ export class ConversationSession extends DurableObject<Env> {
       workspaceId,
       projectId,
       messages: [],
+      timeline: [],
       autoCommitOnClear: false,
       createdAt: now,
       updatedAt: now,
@@ -208,6 +215,18 @@ export class ConversationSession extends DurableObject<Env> {
       return Response.json({ success: true });
     }
 
+    if (url.pathname === '/timeline' && request.method === 'GET') {
+      const state = await this.ensureState();
+      return Response.json({ timeline: state.timeline });
+    }
+
+    if (url.pathname === '/timeline/generate-summary' && request.method === 'POST') {
+      const { itemId } = await request.json() as { itemId: string };
+      // This triggers async summary generation - does not wait
+      this.generateTimelineSummary(itemId).catch(console.error);
+      return Response.json({ success: true, message: 'Summary generation started' });
+    }
+
     return new Response('Not found', { status: 404 });
   }
 
@@ -296,16 +315,37 @@ export class ConversationSession extends DurableObject<Env> {
       assistantMessage.content = result.output;
       assistantMessage.status = 'completed';
       assistantMessage.completedAt = new Date().toISOString();
-      assistantMessage.filesChanged = result.filesChanged;
+      assistantMessage.filesChanged = result.fileChanges.map(f => f.path);
 
       if (result.manifestHash) {
         state.lastManifestHash = result.manifestHash;
       }
 
+      // Create timeline item if files changed
+      if (result.fileChanges.length > 0) {
+        const timelineItem: TimelineItem = {
+          id: crypto.randomUUID(),
+          messageId: assistantMessage.id,
+          timestamp: new Date().toISOString(),
+          summary: null,
+          summaryStatus: 'pending',
+          files: result.fileChanges,
+          manifestHash: result.manifestHash,
+          previousManifestHash: result.previousManifestHash,
+        };
+        state.timeline.push(timelineItem);
+
+        // Broadcast timeline item
+        this.broadcast({ type: 'timeline_item', item: timelineItem });
+
+        // Trigger async summary generation (fire and forget)
+        this.generateTimelineSummary(timelineItem.id).catch(console.error);
+      }
+
       await this.ctx.storage.put('state', state);
 
-      if (result.filesChanged?.length) {
-        this.broadcast({ type: 'files_changed', files: result.filesChanged });
+      if (result.fileChanges.length > 0) {
+        this.broadcast({ type: 'files_changed', files: result.fileChanges.map(f => f.path) });
       }
       this.broadcast({ type: 'message_complete', message: assistantMessage });
 
@@ -331,7 +371,7 @@ export class ConversationSession extends DurableObject<Env> {
     apiUrl: string,
     apiToken: string,
     onDelta: (delta: string) => void
-  ): Promise<{ output: string; filesChanged?: string[]; manifestHash?: string }> {
+  ): Promise<{ output: string; fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
     const state = await this.ensureState();
     const sandbox = await this.getSandbox();
 
@@ -362,14 +402,15 @@ export class ConversationSession extends DurableObject<Env> {
     );
 
     // Collect files and create snapshot
-    const { filesChanged, manifestHash } = await this.collectAndUploadFiles(
+    const { fileChanges, manifestHash, previousManifestHash } = await this.collectAndUploadFiles(
       sandbox, apiUrl, apiToken, workDir
     );
 
     return {
       output: fullOutput,
-      filesChanged,
+      fileChanges,
       manifestHash,
+      previousManifestHash,
     };
   }
 
@@ -643,22 +684,44 @@ export class ConversationSession extends DurableObject<Env> {
 
   /**
    * Collect files and upload to blob storage
+   * Returns file changes with proper diff against previous manifest
    */
   private async collectAndUploadFiles(
     sandbox: Sandbox,
     apiUrl: string,
     apiToken: string,
     workDir: string
-  ): Promise<{ filesChanged: string[]; manifestHash: string }> {
+  ): Promise<{ fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
+    const state = await this.ensureState();
+    const previousManifestHash = state.lastManifestHash;
+
+    // Get previous manifest for diffing
+    let previousFiles: Map<string, string> = new Map(); // path -> hash
+    if (previousManifestHash) {
+      try {
+        const manifestResponse = await fetch(`${apiUrl}/v1/blobs/manifests/${previousManifestHash}`, {
+          headers: { Authorization: `Bearer ${apiToken}` },
+        });
+        if (manifestResponse.ok) {
+          const prevManifest = await manifestResponse.json() as { files: Array<{ path: string; hash: string }> };
+          for (const f of prevManifest.files) {
+            previousFiles.set(f.path, f.hash);
+          }
+        }
+      } catch {
+        // Ignore - treat as no previous state
+      }
+    }
+
     // List all files
     const listResult = await sandbox.exec(`find ${workDir} -type f | head -1000`);
     if (!listResult.success) {
-      return { filesChanged: [], manifestHash: '' };
+      return { fileChanges: [], manifestHash: '', previousManifestHash };
     }
 
     const filePaths = listResult.stdout.trim().split('\n').filter(Boolean);
     const files: Array<{ path: string; hash: string; size: number }> = [];
-    const filesChanged: string[] = [];
+    const currentFiles: Map<string, string> = new Map(); // path -> hash
 
     for (const fullPath of filePaths) {
       const path = fullPath.replace(`${workDir}/`, '');
@@ -674,7 +737,27 @@ export class ConversationSession extends DurableObject<Env> {
       const size = parseInt(sizeResult.stdout.trim()) || 0;
 
       files.push({ path, hash, size });
-      filesChanged.push(path);
+      currentFiles.set(path, hash);
+    }
+
+    // Compute file changes
+    const fileChanges: FileChange[] = [];
+
+    // Check for added and modified files
+    for (const [path, hash] of currentFiles) {
+      const prevHash = previousFiles.get(path);
+      if (!prevHash) {
+        fileChanges.push({ path, change: 'added' });
+      } else if (prevHash !== hash) {
+        fileChanges.push({ path, change: 'modified' });
+      }
+    }
+
+    // Check for deleted files
+    for (const [path] of previousFiles) {
+      if (!currentFiles.has(path)) {
+        fileChanges.push({ path, change: 'deleted' });
+      }
     }
 
     // Build manifest
@@ -740,7 +823,7 @@ export class ConversationSession extends DurableObject<Env> {
       body: manifestJson,
     });
 
-    return { filesChanged, manifestHash };
+    return { fileChanges, manifestHash, previousManifestHash };
   }
 
   /**
@@ -772,5 +855,87 @@ export class ConversationSession extends DurableObject<Env> {
       default:
         return 'claude-sonnet-4-20250514';
     }
+  }
+
+  /**
+   * Generate a narrative summary for a timeline item using Workers AI
+   * This runs async and broadcasts the result when complete
+   */
+  private async generateTimelineSummary(itemId: string): Promise<void> {
+    const state = await this.ensureState();
+    const item = state.timeline.find(t => t.id === itemId);
+    if (!item) return;
+
+    // Update status to generating
+    item.summaryStatus = 'generating';
+    await this.ctx.storage.put('state', state);
+
+    try {
+      // Build prompt from file changes
+      const added = item.files.filter(f => f.change === 'added').map(f => f.path);
+      const modified = item.files.filter(f => f.change === 'modified').map(f => f.path);
+      const deleted = item.files.filter(f => f.change === 'deleted').map(f => f.path);
+
+      // Find the corresponding message to get context
+      const message = state.messages.find(m => m.id === item.messageId);
+      const userPrompt = state.messages.find(
+        (m, i) => m.role === 'user' && state.messages[i + 1]?.id === item.messageId
+      );
+
+      const prompt = `You are summarizing code changes for a developer. Generate a concise 1-2 sentence narrative summary of what was accomplished.
+
+User's request: "${userPrompt?.content || 'Unknown'}"
+
+Files changed:
+${added.length > 0 ? `Added: ${added.join(', ')}` : ''}
+${modified.length > 0 ? `Modified: ${modified.join(', ')}` : ''}
+${deleted.length > 0 ? `Deleted: ${deleted.join(', ')}` : ''}
+
+Write a brief summary focusing on what was accomplished, not listing files. Use past tense. Be specific but concise.`;
+
+      // Call Workers AI (using type assertion for newer model)
+      const response = await (this.env.AI as Ai).run(
+        '@cf/meta/llama-3.1-8b-instruct-fast' as Parameters<Ai['run']>[0],
+        {
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 100,
+        }
+      ) as { response?: string };
+
+      const summary = response.response?.trim() || 'Updated project files';
+
+      // Update timeline item
+      item.summary = summary;
+      item.summaryStatus = 'completed';
+      await this.ctx.storage.put('state', state);
+
+      // Broadcast the update
+      this.broadcast({ type: 'timeline_summary', itemId, summary });
+
+    } catch (error) {
+      console.error('Failed to generate timeline summary:', error);
+      item.summaryStatus = 'failed';
+      item.summary = this.generateFallbackSummary(item.files);
+      await this.ctx.storage.put('state', state);
+
+      // Still broadcast the fallback
+      this.broadcast({ type: 'timeline_summary', itemId, summary: item.summary });
+    }
+  }
+
+  /**
+   * Generate a simple fallback summary when AI fails
+   */
+  private generateFallbackSummary(files: FileChange[]): string {
+    const added = files.filter(f => f.change === 'added').length;
+    const modified = files.filter(f => f.change === 'modified').length;
+    const deleted = files.filter(f => f.change === 'deleted').length;
+
+    const parts: string[] = [];
+    if (added > 0) parts.push(`added ${added} file${added > 1 ? 's' : ''}`);
+    if (modified > 0) parts.push(`modified ${modified} file${modified > 1 ? 's' : ''}`);
+    if (deleted > 0) parts.push(`deleted ${deleted} file${deleted > 1 ? 's' : ''}`);
+
+    return parts.length > 0 ? `Changed files: ${parts.join(', ')}` : 'Updated project files';
   }
 }

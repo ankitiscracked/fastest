@@ -13,7 +13,8 @@ export interface Message {
 }
 
 // Re-export Conversation types from shared
-export type { Conversation, ConversationWithContext } from '@fastest/shared';
+export type { Conversation, ConversationWithContext, TimelineItem, FileChange } from '@fastest/shared';
+import type { TimelineItem } from '@fastest/shared';
 
 export type StreamEvent =
   | { type: 'message_start'; messageId: string }
@@ -21,6 +22,8 @@ export type StreamEvent =
   | { type: 'status'; status: Message['status'] }
   | { type: 'files_changed'; files: string[] }
   | { type: 'message_complete'; message: Message }
+  | { type: 'timeline_item'; item: TimelineItem }
+  | { type: 'timeline_summary'; itemId: string; summary: string }
   | { type: 'error'; error: string };
 
 class ApiClient {
@@ -196,6 +199,13 @@ class ApiClient {
     return this.request<{ success: boolean }>(
       'POST',
       `/conversations/${conversationId}/clear`
+    );
+  }
+
+  async getTimeline(conversationId: string) {
+    return this.request<{ timeline: TimelineItem[] }>(
+      'GET',
+      `/conversations/${conversationId}/timeline`
     );
   }
 

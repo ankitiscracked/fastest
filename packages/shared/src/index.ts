@@ -63,6 +63,25 @@ export interface ConversationWithContext extends Conversation {
   message_count?: number;
 }
 
+// Timeline types for tracking file changes in a session
+export interface FileChange {
+  path: string;
+  change: 'added' | 'modified' | 'deleted';
+  additions?: number;
+  deletions?: number;
+}
+
+export interface TimelineItem {
+  id: string;
+  messageId: string;
+  timestamp: string;
+  summary: string | null;  // AI-generated narrative summary (async)
+  summaryStatus: 'pending' | 'generating' | 'completed' | 'failed';
+  files: FileChange[];
+  manifestHash: string;
+  previousManifestHash?: string;
+}
+
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface Job {

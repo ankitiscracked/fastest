@@ -25,6 +25,8 @@ export interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
   // Conversation session bindings
   ConversationSession: DurableObjectNamespace<ConversationSession>;
+  // Workers AI for timeline summaries
+  AI: Ai;
   // API keys for LLM providers
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;

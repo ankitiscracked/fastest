@@ -24,6 +24,11 @@
     }
   ],
 
+  // Workers AI for timeline summaries
+  "ai": {
+    "binding": "AI"
+  },
+
   // Sandbox container configuration
   "containers": [
     {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
-import type { Project, Workspace, ConversationWithContext } from '@fastest/shared';
+import type { Project, Workspace, ConversationWithContext, TimelineItem } from '@fastest/shared';
 import { api, type Message, type StreamEvent } from '../api/client';
 import {
   ConversationMessage,
@@ -8,6 +8,7 @@ import {
   ContextBar,
   SuggestionsBar,
   generateSuggestions,
+  Timeline,
 } from '../components/conversation';
 
 // Confirmation Dialog Component
@@ -147,6 +148,8 @@ export function ConversationView() {
   // Conversation data
   const [conversation, setConversation] = useState<ConversationWithContext | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [timeline, setTimeline] = useState<TimelineItem[]>([]);
+  const [showTimeline, setShowTimeline] = useState(true);
 
   // Context data (for switching workspaces)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -225,6 +228,18 @@ export function ConversationView() {
         setStreamingContent('');
         break;
 
+      case 'timeline_item':
+        setTimeline(prev => [...prev, event.item]);
+        break;
+
+      case 'timeline_summary':
+        setTimeline(prev => prev.map(item =>
+          item.id === event.itemId
+            ? { ...item, summary: event.summary, summaryStatus: 'completed' as const }
+            : item
+        ));
+        break;
+
       case 'error':
         setError(event.error);
         setRunningMessageId(null);
@@ -275,12 +290,17 @@ export function ConversationView() {
       const { conversation: conv } = await api.getConversation(convId);
       setConversation(conv);
 
-      // Load messages
-      const { messages: messageList } = await api.getMessages(convId);
-      setMessages(messageList);
+      // Load messages and timeline in parallel
+      const [messagesRes, timelineRes] = await Promise.all([
+        api.getMessages(convId),
+        api.getTimeline(convId).catch(() => ({ timeline: [] })),
+      ]);
+
+      setMessages(messagesRes.messages);
+      setTimeline(timelineRes.timeline);
 
       // Check if any message is running
-      const running = messageList.find((m) => m.status === 'running');
+      const running = messagesRes.messages.find((m) => m.status === 'running');
       if (running) {
         setRunningMessageId(running.id);
       }
@@ -531,7 +551,7 @@ export function ConversationView() {
       {/* Conversation header */}
       {conversation && (
         <div className="bg-white border-b border-gray-200 px-4 py-2">
-          <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm">
               <button
                 onClick={() => navigate({ to: '/' })}
@@ -547,29 +567,51 @@ export function ConversationView() {
               <span className="text-gray-400">•</span>
               <span className="text-gray-500">{conversation.workspace_name}</span>
             </div>
+            {/* Timeline toggle */}
+            <button
+              onClick={() => setShowTimeline(!showTimeline)}
+              className={`p-2 rounded-lg transition-colors ${
+                showTimeline ? 'bg-primary-100 text-primary-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+              }`}
+              title={showTimeline ? 'Hide timeline' : 'Show timeline'}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
           </div>
         </div>
       )}
 
-      {/* Conversation area */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="max-w-3xl mx-auto space-y-6">
-          {messages.length === 0 ? (
-            <EmptyState />
-          ) : (
-            messagesAsJobs
-              .filter(j => j.prompt || j.output)
-              .map((job) => (
-                <ConversationMessage
-                  key={job.id}
-                  job={job as any}
-                  isStreaming={job.id === runningMessageId}
-                  streamingContent={job.id === runningMessageId ? streamingContent : undefined}
-                />
-              ))
-          )}
-          <div ref={conversationEndRef} />
+      {/* Main content area with sidebar */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Conversation area */}
+        <div className="flex-1 overflow-y-auto px-4 py-6">
+          <div className="max-w-3xl mx-auto space-y-6">
+            {messages.length === 0 ? (
+              <EmptyState />
+            ) : (
+              messagesAsJobs
+                .filter(j => j.prompt || j.output)
+                .map((job) => (
+                  <ConversationMessage
+                    key={job.id}
+                    job={job as any}
+                    isStreaming={job.id === runningMessageId}
+                    streamingContent={job.id === runningMessageId ? streamingContent : undefined}
+                  />
+                ))
+            )}
+            <div ref={conversationEndRef} />
+          </div>
         </div>
+
+        {/* Timeline sidebar */}
+        {showTimeline && (
+          <div className="w-72 border-l border-gray-200 bg-white flex-shrink-0">
+            <Timeline items={timeline} />
+          </div>
+        )}
       </div>
 
       {/* Input area */}

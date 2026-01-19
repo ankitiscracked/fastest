@@ -365,6 +365,44 @@ conversationRoutes.post('/:conversationId/clear', async (c) => {
 });
 
 /**
+ * Get timeline for a conversation
+ * GET /v1/conversations/:conversationId/timeline
+ */
+conversationRoutes.get('/:conversationId/timeline', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId } = c.req.param();
+  const db = c.env.DB;
+
+  // Verify ownership
+  const existing = await db
+    .prepare(`
+      SELECT c.id
+      FROM conversations c
+      JOIN workspaces w ON c.workspace_id = w.id
+      JOIN projects p ON w.project_id = p.id
+      WHERE c.id = ? AND p.owner_user_id = ?
+    `)
+    .bind(conversationId, user.id)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  const response = await stub.fetch(new Request('http://do/timeline'));
+  const data = await response.json();
+
+  return c.json(data);
+});
+
+/**
  * WebSocket endpoint for streaming
  * GET /v1/conversations/:conversationId/stream
  */
