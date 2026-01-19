@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Project, Workspace } from '@fastest/shared';
+import { Menu, MenuTrigger, MenuPopup, MenuItem } from '../ui/menu';
+import { Popover, PopoverTrigger, PopoverPopup } from '../ui/popover';
+import { InfoTooltip } from '../ui/tooltip';
 
 interface ContextBarProps {
   projects: Project[];
@@ -124,51 +127,31 @@ function SelectorWithCreate({
   disabled = false,
   infoContent,
 }: SelectorWithCreateProps) {
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [showCreateInput, setShowCreateInput] = useState(false);
   const [createName, setCreateName] = useState('');
-  const [showInfo, setShowInfo] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const infoRef = useRef<HTMLDivElement>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const label = type === 'project' ? 'Project' : 'Workspace';
   const hasItems = items.length > 0;
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-        setShowCreateInput(false);
-        setCreateName('');
-      }
-      if (infoRef.current && !infoRef.current.contains(e.target as Node)) {
-        setShowInfo(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    if (showCreateInput && inputRef.current) {
+    if (createOpen && inputRef.current) {
       inputRef.current.focus();
     }
-  }, [showCreateInput]);
+  }, [createOpen]);
 
   const handleCreate = async () => {
     if (!createName.trim()) return;
     await onCreate(createName.trim());
     setCreateName('');
-    setShowCreateInput(false);
-    setDropdownOpen(false);
+    setCreateOpen(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       handleCreate();
     } else if (e.key === 'Escape') {
-      setShowCreateInput(false);
+      setCreateOpen(false);
       setCreateName('');
     }
   };
@@ -177,9 +160,8 @@ function SelectorWithCreate({
   if (!hasItems) {
     return (
       <div className="flex items-center gap-1">
-        <div ref={dropdownRef} className="relative">
-          <button
-            onClick={() => setShowCreateInput(true)}
+        <Popover open={createOpen} onOpenChange={setCreateOpen}>
+          <PopoverTrigger
             disabled={disabled || isCreating}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               disabled
@@ -198,47 +180,39 @@ function SelectorWithCreate({
                 Create {label}
               </>
             )}
-          </button>
-
-          {showCreateInput && !disabled && (
-            <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-3">
-              <input
-                ref={inputRef}
-                type="text"
-                value={createName}
-                onChange={(e) => setCreateName(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={`${label} name...`}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              />
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={handleCreate}
-                  disabled={!createName.trim() || isCreating}
-                  className="flex-1 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Create
-                </button>
-                <button
-                  onClick={() => {
-                    setShowCreateInput(false);
-                    setCreateName('');
-                  }}
-                  className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
-                >
-                  Cancel
-                </button>
-              </div>
+          </PopoverTrigger>
+          <PopoverPopup className="w-64 p-3">
+            <input
+              ref={inputRef}
+              type="text"
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={`${label} name...`}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            />
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={handleCreate}
+                disabled={!createName.trim() || isCreating}
+                className="flex-1 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Create
+              </button>
+              <button
+                onClick={() => {
+                  setCreateOpen(false);
+                  setCreateName('');
+                }}
+                className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
+              >
+                Cancel
+              </button>
             </div>
-          )}
-        </div>
+          </PopoverPopup>
+        </Popover>
 
-        <InfoButton
-          containerRef={infoRef}
-          show={showInfo}
-          onToggle={() => setShowInfo(!showInfo)}
-          content={infoContent}
-        />
+        <InfoTooltip>{infoContent}</InfoTooltip>
       </div>
     );
   }
@@ -246,68 +220,36 @@ function SelectorWithCreate({
   // Has items: show dropdown with create action
   return (
     <div className="flex items-center gap-0.5">
-      <div ref={dropdownRef} className="relative flex">
-        {/* Dropdown button */}
-        <button
-          onClick={() => {
-            if (!disabled) {
-              setDropdownOpen(!dropdownOpen);
-              setShowCreateInput(false);
-            }
-          }}
-          disabled={disabled}
-          className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-l-lg text-sm font-medium transition-colors border-r border-gray-200 ${
-            disabled
-              ? 'text-gray-400 cursor-not-allowed bg-gray-50'
-              : 'text-gray-700 hover:bg-gray-100'
-          }`}
-        >
-          <span>{currentItem?.name || `Select ${label.toLowerCase()}`}</span>
-          {currentItem?.badge && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">
-              {currentItem.badge}
-            </span>
-          )}
-          <ChevronDownIcon />
-        </button>
-
-        {/* Create button */}
-        <button
-          onClick={() => {
-            if (!disabled) {
-              setShowCreateInput(true);
-              setDropdownOpen(false);
-            }
-          }}
-          disabled={disabled || isCreating}
-          className={`flex items-center px-2 py-1.5 rounded-r-lg text-sm transition-colors ${
-            disabled
-              ? 'text-gray-400 cursor-not-allowed bg-gray-50'
-              : 'text-gray-500 hover:bg-gray-100 hover:text-primary-600'
-          }`}
-          title={`Create new ${label.toLowerCase()}`}
-        >
-          {isCreating ? <Spinner /> : <PlusIcon />}
-        </button>
-
-        {/* Dropdown menu */}
-        {dropdownOpen && (
-          <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
+      <div className="flex">
+        {/* Dropdown */}
+        <Menu>
+          <MenuTrigger
+            disabled={disabled}
+            className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-l-lg text-sm font-medium transition-colors border-r border-gray-200 ${
+              disabled
+                ? 'text-gray-400 cursor-not-allowed bg-gray-50'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <span>{currentItem?.name || `Select ${label.toLowerCase()}`}</span>
+            {currentItem?.badge && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                {currentItem.badge}
+              </span>
+            )}
+            <ChevronDownIcon />
+          </MenuTrigger>
+          <MenuPopup className="w-64">
             <div className="px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
               {label}s
             </div>
             {items.map((item) => {
               const isSelected = item.id === currentItem?.id;
               return (
-                <button
+                <MenuItem
                   key={item.id}
-                  onClick={() => {
-                    onSelect(item.id);
-                    setDropdownOpen(false);
-                  }}
-                  className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between ${
-                    isSelected ? 'bg-primary-50 text-primary-700' : 'text-gray-700'
-                  }`}
+                  selected={isSelected}
+                  onClick={() => onSelect(item.id)}
                 >
                   <div className="flex items-center gap-2">
                     <span
@@ -320,15 +262,26 @@ function SelectorWithCreate({
                       {item.badge}
                     </span>
                   )}
-                </button>
+                </MenuItem>
               );
             })}
-          </div>
-        )}
+          </MenuPopup>
+        </Menu>
 
-        {/* Create input popup */}
-        {showCreateInput && (
-          <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-3">
+        {/* Create button with popover */}
+        <Popover open={createOpen} onOpenChange={setCreateOpen}>
+          <PopoverTrigger
+            disabled={disabled || isCreating}
+            className={`flex items-center px-2 py-1.5 rounded-r-lg text-sm transition-colors ${
+              disabled
+                ? 'text-gray-400 cursor-not-allowed bg-gray-50'
+                : 'text-gray-500 hover:bg-gray-100 hover:text-primary-600'
+            }`}
+            title={`Create new ${label.toLowerCase()}`}
+          >
+            {isCreating ? <Spinner /> : <PlusIcon />}
+          </PopoverTrigger>
+          <PopoverPopup className="w-64 p-3">
             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
               New {label}
             </div>
@@ -351,7 +304,7 @@ function SelectorWithCreate({
               </button>
               <button
                 onClick={() => {
-                  setShowCreateInput(false);
+                  setCreateOpen(false);
                   setCreateName('');
                 }}
                 className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
@@ -359,52 +312,11 @@ function SelectorWithCreate({
                 Cancel
               </button>
             </div>
-          </div>
-        )}
+          </PopoverPopup>
+        </Popover>
       </div>
 
-      <InfoButton
-        containerRef={infoRef}
-        show={showInfo}
-        onToggle={() => setShowInfo(!showInfo)}
-        content={infoContent}
-      />
-    </div>
-  );
-}
-
-// Info button with popover
-interface InfoButtonProps {
-  show: boolean;
-  onToggle: () => void;
-  content: React.ReactNode;
-  containerRef: React.RefObject<HTMLDivElement | null>;
-}
-
-function InfoButton({ show, onToggle, content, containerRef }: InfoButtonProps) {
-  return (
-    <div ref={containerRef as React.RefObject<HTMLDivElement>} className="relative">
-      <button
-        onClick={onToggle}
-        onMouseEnter={() => !show && onToggle()}
-        className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-        aria-label="Learn more"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
-      </button>
-      {show && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50">
-          <div className="leading-relaxed">{content}</div>
-          <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-900 rotate-45" />
-        </div>
-      )}
+      <InfoTooltip>{infoContent}</InfoTooltip>
     </div>
   );
 }
