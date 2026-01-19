@@ -8,6 +8,7 @@ import { ProjectDetail } from './pages/ProjectDetail';
 import { Workspaces } from './pages/Workspaces';
 import { Home } from './pages/Home';
 import { ConversationView } from './pages/ConversationView';
+import { Settings } from './pages/Settings';
 
 // Router context type
 interface RouterContext {
@@ -99,6 +100,13 @@ const workspacesRoute = createRoute({
   component: Workspaces,
 });
 
+// Settings route
+const settingsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/settings',
+  component: Settings,
+});
+
 // Build route tree
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -111,6 +119,7 @@ const routeTree = rootRoute.addChildren([
     projectsRoute,
     projectDetailRoute,
     workspacesRoute,
+    settingsRoute,
   ]),
 ]);
 

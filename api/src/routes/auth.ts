@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import type { Env } from '../index';
-import { createDb, users, sessions } from '../db';
-import { hashToken } from '../middleware/auth';
+import { createDb, users, sessions, userApiKeys } from '../db';
+import { hashToken, getAuthUser } from '../middleware/auth';
+import type { ApiKeyProvider, UserApiKey } from '@fastest/shared';
+import { API_KEY_PROVIDERS } from '@fastest/shared';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
@@ -147,6 +149,155 @@ authRoutes.get('/me', async (c) => {
       picture: session.picture,
     }
   });
+});
+
+// API Key Management Routes
+
+/**
+ * GET /auth/api-keys
+ * List all API keys for the current user (values masked)
+ */
+authRoutes.get('/api-keys', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const db = createDb(c.env.DB);
+
+  const keys = await db
+    .select()
+    .from(userApiKeys)
+    .where(eq(userApiKeys.userId, user.id));
+
+  // Mask key values - show only last 4 characters
+  const maskedKeys: UserApiKey[] = keys.map(key => ({
+    id: key.id,
+    user_id: key.userId,
+    provider: key.provider as ApiKeyProvider,
+    key_name: key.keyName,
+    key_value: '•'.repeat(20) + key.keyValue.slice(-4),
+    created_at: key.createdAt,
+    updated_at: key.updatedAt,
+  }));
+
+  return c.json({ api_keys: maskedKeys });
+});
+
+/**
+ * POST /auth/api-keys
+ * Set an API key for a provider (creates or updates)
+ */
+authRoutes.post('/api-keys', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const db = createDb(c.env.DB);
+  const body = await c.req.json<{ provider: ApiKeyProvider; key_value: string }>();
+
+  if (!body.provider || !body.key_value) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'provider and key_value are required' } }, 422);
+  }
+
+  const providerConfig = API_KEY_PROVIDERS[body.provider];
+  if (!providerConfig) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid provider' } }, 422);
+  }
+
+  // Check if key already exists
+  const existing = await db
+    .select({ id: userApiKeys.id })
+    .from(userApiKeys)
+    .where(and(
+      eq(userApiKeys.userId, user.id),
+      eq(userApiKeys.provider, body.provider)
+    ))
+    .limit(1);
+
+  const now = new Date().toISOString();
+
+  if (existing.length > 0) {
+    // Update existing key
+    await db
+      .update(userApiKeys)
+      .set({
+        keyValue: body.key_value,
+        updatedAt: now,
+      })
+      .where(eq(userApiKeys.id, existing[0].id));
+  } else {
+    // Insert new key
+    await db.insert(userApiKeys).values({
+      id: generateULID(),
+      userId: user.id,
+      provider: body.provider,
+      keyName: providerConfig.keyName,
+      keyValue: body.key_value,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  return c.json({ success: true });
+});
+
+/**
+ * DELETE /auth/api-keys/:provider
+ * Delete an API key for a provider
+ */
+authRoutes.delete('/api-keys/:provider', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const db = createDb(c.env.DB);
+  const provider = c.req.param('provider') as ApiKeyProvider;
+
+  if (!API_KEY_PROVIDERS[provider]) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid provider' } }, 422);
+  }
+
+  await db
+    .delete(userApiKeys)
+    .where(and(
+      eq(userApiKeys.userId, user.id),
+      eq(userApiKeys.provider, provider)
+    ));
+
+  return c.json({ success: true });
+});
+
+/**
+ * GET /auth/api-keys/values (internal endpoint for OpenCode)
+ * Get unmasked API key values for the current user
+ * Used by the sandbox to pass env vars to OpenCode
+ */
+authRoutes.get('/api-keys/values', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const db = createDb(c.env.DB);
+
+  const keys = await db
+    .select({
+      keyName: userApiKeys.keyName,
+      keyValue: userApiKeys.keyValue,
+    })
+    .from(userApiKeys)
+    .where(eq(userApiKeys.userId, user.id));
+
+  // Return as a map of env var name -> value
+  const envVars: Record<string, string> = {};
+  for (const key of keys) {
+    envVars[key.keyName] = key.keyValue;
+  }
+
+  return c.json({ env_vars: envVars });
 });
 
 // Helper functions

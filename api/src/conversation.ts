@@ -445,7 +445,7 @@ export class ConversationSession extends DurableObject<Env> {
     }
 
     // Ensure OpenCode serve is running and get the port
-    const port = await this.ensureOpenCodeServe(sandbox, workDir);
+    const port = await this.ensureOpenCodeServe(sandbox, workDir, apiUrl, apiToken);
     const openCodeUrl = `http://localhost:${port}`;
 
     // Get or create OpenCode session
@@ -602,7 +602,12 @@ export class ConversationSession extends DurableObject<Env> {
   /**
    * Ensure OpenCode serve is running, start if needed
    */
-  private async ensureOpenCodeServe(sandbox: Sandbox, workDir: string): Promise<number> {
+  private async ensureOpenCodeServe(
+    sandbox: Sandbox,
+    workDir: string,
+    apiUrl: string,
+    apiToken: string
+  ): Promise<number> {
     const state = await this.ensureState();
     const port = state.openCodePort || 19000 + Math.floor(Math.random() * 1000);
 
@@ -616,15 +621,30 @@ export class ConversationSession extends DurableObject<Env> {
       // Not running, need to start
     }
 
-    // Start opencode serve
-    const provider = this.env.PROVIDER || 'anthropic';
+    // Fetch user's API keys from the API
     const envVars: Record<string, string> = {};
-    if (provider === 'anthropic' && this.env.ANTHROPIC_API_KEY) {
-      envVars.ANTHROPIC_API_KEY = this.env.ANTHROPIC_API_KEY;
-    } else if (provider === 'openai' && this.env.OPENAI_API_KEY) {
-      envVars.OPENAI_API_KEY = this.env.OPENAI_API_KEY;
-    } else if (provider === 'google' && this.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-      envVars.GOOGLE_GENERATIVE_AI_API_KEY = this.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    try {
+      const apiKeysResponse = await fetch(`${apiUrl}/v1/auth/api-keys/values`, {
+        headers: { Authorization: `Bearer ${apiToken}` },
+      });
+      if (apiKeysResponse.ok) {
+        const data = await apiKeysResponse.json() as { env_vars: Record<string, string> };
+        Object.assign(envVars, data.env_vars);
+      }
+    } catch (err) {
+      console.error('Failed to fetch user API keys:', err);
+    }
+
+    // Fallback to environment bindings if no user keys found
+    if (Object.keys(envVars).length === 0) {
+      const provider = this.env.PROVIDER || 'anthropic';
+      if (provider === 'anthropic' && this.env.ANTHROPIC_API_KEY) {
+        envVars.ANTHROPIC_API_KEY = this.env.ANTHROPIC_API_KEY;
+      } else if (provider === 'openai' && this.env.OPENAI_API_KEY) {
+        envVars.OPENAI_API_KEY = this.env.OPENAI_API_KEY;
+      } else if (provider === 'google' && this.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+        envVars.GOOGLE_GENERATIVE_AI_API_KEY = this.env.GOOGLE_GENERATIVE_AI_API_KEY;
+      }
     }
 
     // Start in background

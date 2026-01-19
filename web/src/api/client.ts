@@ -127,6 +127,22 @@ class ApiClient {
     }>('POST', '/auth/google', { credential });
   }
 
+  // API Keys
+  async listApiKeys() {
+    return this.request<{ api_keys: import('@fastest/shared').UserApiKey[] }>('GET', '/auth/api-keys');
+  }
+
+  async setApiKey(provider: import('@fastest/shared').ApiKeyProvider, keyValue: string) {
+    return this.request<{ success: boolean }>('POST', '/auth/api-keys', {
+      provider,
+      key_value: keyValue,
+    });
+  }
+
+  async deleteApiKey(provider: import('@fastest/shared').ApiKeyProvider) {
+    return this.request<{ success: boolean }>('DELETE', `/auth/api-keys/${provider}`);
+  }
+
   // Projects
   async createProject(name: string) {
     return this.request<{ project: import('@fastest/shared').Project }>('POST', '/projects', { name });

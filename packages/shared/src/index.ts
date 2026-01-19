@@ -304,3 +304,37 @@ export interface DeploymentLog {
   startedAt: string;
   completedAt?: string;
 }
+
+// User API keys for model providers
+
+export type ApiKeyProvider = 'anthropic' | 'openai' | 'google' | 'azure' | 'aws' | 'groq' | 'mistral';
+
+export interface UserApiKey {
+  id: string;
+  user_id: string;
+  provider: ApiKeyProvider;
+  key_name: string;  // e.g., 'ANTHROPIC_API_KEY'
+  key_value: string; // Masked in API responses (shows last 4 chars)
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetApiKeyRequest {
+  provider: ApiKeyProvider;
+  key_value: string;
+}
+
+export interface ListApiKeysResponse {
+  api_keys: UserApiKey[];
+}
+
+// Provider config with env var names
+export const API_KEY_PROVIDERS: Record<ApiKeyProvider, { name: string; keyName: string; description: string }> = {
+  anthropic: { name: 'Anthropic', keyName: 'ANTHROPIC_API_KEY', description: 'Claude models' },
+  openai: { name: 'OpenAI', keyName: 'OPENAI_API_KEY', description: 'GPT models' },
+  google: { name: 'Google', keyName: 'GOOGLE_GENERATIVE_AI_API_KEY', description: 'Gemini models' },
+  azure: { name: 'Azure OpenAI', keyName: 'AZURE_OPENAI_API_KEY', description: 'Azure-hosted OpenAI' },
+  aws: { name: 'AWS Bedrock', keyName: 'AWS_ACCESS_KEY_ID', description: 'Bedrock models' },
+  groq: { name: 'Groq', keyName: 'GROQ_API_KEY', description: 'Groq-hosted models' },
+  mistral: { name: 'Mistral', keyName: 'MISTRAL_API_KEY', description: 'Mistral models' },
+};

@@ -136,6 +136,20 @@ export const projectEnvVars = sqliteTable('project_env_vars', {
   index('idx_env_vars_project').on(table.projectId),
 ]);
 
+// User API keys for model providers
+export const userApiKeys = sqliteTable('user_api_keys', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),  // e.g., 'anthropic', 'openai', 'google'
+  keyName: text('key_name').notNull(),   // e.g., 'ANTHROPIC_API_KEY'
+  keyValue: text('key_value').notNull(), // The actual key value
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex('idx_api_keys_user_provider').on(table.userId, table.provider),
+  index('idx_api_keys_user').on(table.userId),
+]);
+
 // Jobs (agent execution queue) - DEPRECATED
 export const jobs = sqliteTable('jobs', {
   id: text('id').primaryKey(),
