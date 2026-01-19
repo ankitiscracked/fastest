@@ -10,8 +10,15 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
+import { getSandbox, parseSSEStream, type Sandbox } from '@cloudflare/sandbox';
 import type { Env } from './index';
+
+// Sandbox exec stream event types
+type ExecEvent =
+  | { type: 'stdout'; data: string }
+  | { type: 'stderr'; data: string }
+  | { type: 'complete'; exitCode: number }
+  | { type: 'error'; error: string };
 
 // Message in the conversation
 export interface Message {
@@ -274,10 +281,18 @@ export class ConversationSession extends DurableObject<Env> {
     this.broadcast({ type: 'status', status: 'running' });
 
     try {
-      // Run in sandbox
-      const result = await this.runInSandbox(prompt, apiUrl, apiToken);
+      // Run in sandbox with streaming
+      const result = await this.runInSandboxWithStreaming(
+        prompt,
+        apiUrl,
+        apiToken,
+        (delta) => {
+          // Broadcast each delta as it arrives
+          this.broadcast({ type: 'content_delta', content: delta });
+        }
+      );
 
-      // Update assistant message
+      // Update assistant message with full content
       assistantMessage.content = result.output;
       assistantMessage.status = 'completed';
       assistantMessage.completedAt = new Date().toISOString();
@@ -289,7 +304,6 @@ export class ConversationSession extends DurableObject<Env> {
 
       await this.ctx.storage.put('state', state);
 
-      this.broadcast({ type: 'content_delta', content: result.output });
       if (result.filesChanged?.length) {
         this.broadcast({ type: 'files_changed', files: result.filesChanged });
       }
@@ -310,12 +324,13 @@ export class ConversationSession extends DurableObject<Env> {
   }
 
   /**
-   * Run prompt in sandbox with OpenCode
+   * Run prompt in sandbox with streaming output via OpenCode HTTP API
    */
-  private async runInSandbox(
+  private async runInSandboxWithStreaming(
     prompt: string,
     apiUrl: string,
-    apiToken: string
+    apiToken: string,
+    onDelta: (delta: string) => void
   ): Promise<{ output: string; filesChanged?: string[]; manifestHash?: string }> {
     const state = await this.ensureState();
     const sandbox = await this.getSandbox();
@@ -330,32 +345,21 @@ export class ConversationSession extends DurableObject<Env> {
       await this.initializeWorkspace(sandbox, apiUrl, apiToken, workDir);
     }
 
-    // Ensure OpenCode serve is running
+    // Ensure OpenCode serve is running and get the port
     const port = await this.ensureOpenCodeServe(sandbox, workDir);
+    const openCodeUrl = `http://localhost:${port}`;
 
-    // Run the prompt
-    const provider = this.env.PROVIDER || 'anthropic';
-    const model = this.getDefaultModel(provider);
+    // Get or create OpenCode session
+    const sessionId = await this.getOrCreateOpenCodeSession(sandbox, openCodeUrl);
 
-    // Set up environment
-    const envVars: Record<string, string> = {};
-    if (provider === 'anthropic' && this.env.ANTHROPIC_API_KEY) {
-      envVars.ANTHROPIC_API_KEY = this.env.ANTHROPIC_API_KEY;
-    } else if (provider === 'openai' && this.env.OPENAI_API_KEY) {
-      envVars.OPENAI_API_KEY = this.env.OPENAI_API_KEY;
-    } else if (provider === 'google' && this.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-      envVars.GOOGLE_GENERATIVE_AI_API_KEY = this.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    }
-
-    // Run opencode with attach to existing serve
-    const result = await sandbox.exec(
-      `opencode run "${prompt.replace(/"/g, '\\"')}" --model ${provider}/${model} --attach http://localhost:${port} --format json`,
-      { cwd: workDir, env: envVars }
+    // Stream response via SSE
+    const fullOutput = await this.streamFromOpenCode(
+      sandbox,
+      openCodeUrl,
+      sessionId,
+      prompt,
+      onDelta
     );
-
-    if (!result.success) {
-      throw new Error(`OpenCode failed: ${result.stderr}`);
-    }
 
     // Collect files and create snapshot
     const { filesChanged, manifestHash } = await this.collectAndUploadFiles(
@@ -363,10 +367,136 @@ export class ConversationSession extends DurableObject<Env> {
     );
 
     return {
-      output: result.stdout,
+      output: fullOutput,
       filesChanged,
       manifestHash,
     };
+  }
+
+  /**
+   * Get or create an OpenCode session for this conversation
+   */
+  private async getOrCreateOpenCodeSession(sandbox: Sandbox, openCodeUrl: string): Promise<string> {
+    const state = await this.ensureState();
+
+    // Reuse existing session if available
+    if (state.openCodeSessionId) {
+      // Verify session still exists
+      const checkResult = await sandbox.exec(
+        `curl -s -o /dev/null -w "%{http_code}" "${openCodeUrl}/session/${state.openCodeSessionId}"`
+      );
+      if (checkResult.stdout.trim() === '200') {
+        return state.openCodeSessionId;
+      }
+    }
+
+    // Create new session
+    const createResult = await sandbox.exec(
+      `curl -s -X POST "${openCodeUrl}/session" -H "Content-Type: application/json" -d '{"title":"conversation-${state.conversationId}"}'`
+    );
+
+    if (!createResult.success) {
+      throw new Error('Failed to create OpenCode session');
+    }
+
+    const session = JSON.parse(createResult.stdout) as { id: string };
+    state.openCodeSessionId = session.id;
+    await this.ctx.storage.put('state', state);
+
+    return session.id;
+  }
+
+  /**
+   * Stream response from OpenCode serve via SSE using execStream
+   */
+  private async streamFromOpenCode(
+    sandbox: Sandbox,
+    openCodeUrl: string,
+    sessionId: string,
+    prompt: string,
+    onDelta: (delta: string) => void
+  ): Promise<string> {
+    const provider = this.env.PROVIDER || 'anthropic';
+    const model = this.getDefaultModel(provider);
+
+    // Send prompt first (this returns the response synchronously via SSE)
+    const escapedPrompt = JSON.stringify(prompt);
+
+    // Use execStream to get real-time output from curl SSE listener
+    const stream = await sandbox.execStream(
+      `curl -s -N "${openCodeUrl}/session/${sessionId}/message" \
+        -H "Content-Type: application/json" \
+        -d '{"parts":[{"type":"text","text":${escapedPrompt}}],"model":"${provider}/${model}"}' \
+        --no-buffer`
+    );
+
+    let fullOutput = '';
+    let sseBuffer = '';
+
+    // Process stream events in real-time
+    for await (const event of parseSSEStream(stream) as AsyncIterable<ExecEvent>) {
+      switch (event.type) {
+        case 'stdout':
+          // Accumulate SSE data and parse complete events
+          sseBuffer += event.data;
+
+          // Process complete SSE events (separated by double newlines)
+          const events = sseBuffer.split('\n\n');
+          sseBuffer = events.pop() || ''; // Keep incomplete event in buffer
+
+          for (const sseEvent of events) {
+            const lines = sseEvent.split('\n');
+            for (const line of lines) {
+              if (line.startsWith('data:')) {
+                try {
+                  const data = JSON.parse(line.slice(5).trim());
+
+                  // Handle different OpenCode event types
+                  if (data.type === 'part' && data.part?.type === 'text') {
+                    const text = data.part.text || '';
+                    if (text) {
+                      fullOutput += text;
+                      onDelta(text);
+                    }
+                  } else if (data.type === 'text.delta' || data.type === 'content.delta') {
+                    // Alternative event format
+                    const text = data.delta || data.text || '';
+                    if (text) {
+                      fullOutput += text;
+                      onDelta(text);
+                    }
+                  } else if (data.type === 'error') {
+                    throw new Error(data.error?.message || data.message || 'OpenCode error');
+                  }
+                  // message.complete will come through but we just continue processing
+                } catch (e) {
+                  // Skip malformed JSON, but rethrow OpenCode errors
+                  if (e instanceof Error && e.message.includes('OpenCode error')) {
+                    throw e;
+                  }
+                }
+              }
+            }
+          }
+          break;
+
+        case 'stderr':
+          // Log stderr but don't fail
+          console.warn('OpenCode stderr:', event.data);
+          break;
+
+        case 'complete':
+          if (event.exitCode !== 0) {
+            throw new Error(`OpenCode exited with code ${event.exitCode}`);
+          }
+          break;
+
+        case 'error':
+          throw new Error(`Stream error: ${event.error}`);
+      }
+    }
+
+    return fullOutput;
   }
 
   /**
