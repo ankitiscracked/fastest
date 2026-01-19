@@ -1,4 +1,4 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Outlet, Link, useLocation } from '@tanstack/react-router';
 
 export function Layout() {
   const location = useLocation();

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearch } from '@tanstack/react-router';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 
@@ -35,10 +35,10 @@ declare global {
 type Step = 'code' | 'authorize' | 'success' | 'error';
 
 export function Device() {
-  const [searchParams] = useSearchParams();
+  const search = useSearch({ strict: false }) as { code?: string };
   const { user, isAuthenticated, loading: authLoading } = useAuth();
   const [step, setStep] = useState<Step>('code');
-  const [userCode, setUserCode] = useState(searchParams.get('code') || '');
+  const [userCode, setUserCode] = useState(search.code || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const googleButtonRef = useRef<HTMLDivElement>(null);
@@ -46,10 +46,10 @@ export function Device() {
 
   // Auto-advance if code is in URL
   useEffect(() => {
-    if (searchParams.get('code')) {
+    if (search.code) {
       setStep('authorize');
     }
-  }, [searchParams]);
+  }, [search.code]);
 
   // Load Google Identity Services when on authorize step (only if not logged in)
   useEffect(() => {

@@ -279,6 +279,19 @@ projectRoutes.post('/:projectId/workspaces', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Workspace name is required' } }, 422);
   }
 
+  // If base_snapshot_id provided, verify it belongs to this project
+  if (body.base_snapshot_id) {
+    const snapshotResult = await db
+      .select({ id: snapshots.id })
+      .from(snapshots)
+      .where(and(eq(snapshots.id, body.base_snapshot_id), eq(snapshots.projectId, projectId)))
+      .limit(1);
+
+    if (!snapshotResult[0]) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'base_snapshot_id does not belong to this project' } }, 422);
+    }
+  }
+
   const workspaceId = generateULID();
   const now = new Date().toISOString();
 

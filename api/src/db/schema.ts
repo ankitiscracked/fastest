@@ -111,7 +111,18 @@ export const activityEvents = sqliteTable('activity_events', {
   index('idx_events_project').on(table.projectId, table.createdAt),
 ]);
 
-// Jobs (agent execution queue)
+// Conversations (chat sessions within a workspace)
+export const conversations = sqliteTable('conversations', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id),
+  title: text('title'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_conversations_workspace').on(table.workspaceId, table.updatedAt),
+]);
+
+// Jobs (agent execution queue) - DEPRECATED
 export const jobs = sqliteTable('jobs', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id),

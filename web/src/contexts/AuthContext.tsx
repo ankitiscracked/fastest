@@ -4,6 +4,8 @@ import { api } from '../api/client';
 interface User {
   id: string;
   email: string;
+  name?: string;
+  picture?: string;
 }
 
 interface AuthContextType {

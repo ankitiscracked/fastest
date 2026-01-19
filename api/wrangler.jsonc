@@ -3,11 +3,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2024-09-23",
 
-  "vars": {
-    "ENVIRONMENT": "development",
-    "PROVIDER": "google",
-    "GOOGLE_GENERATIVE_AI_API_KEY": "AIzaSyDPtCD0hRivw45iOA-B0HH747HWoQ-diKE"
-  },
+  // Environment variables are loaded from .dev.vars for local development
+  // For production, set these in the Cloudflare dashboard or via wrangler secret
 
   // D1 Database
   "d1_databases": [
@@ -43,6 +40,10 @@
       {
         "name": "Sandbox",
         "class_name": "Sandbox"
+      },
+      {
+        "name": "ConversationSession",
+        "class_name": "ConversationSession"
       }
     ]
   },
@@ -52,6 +53,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["Sandbox"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ConversationSession"]
     }
   ]
 }

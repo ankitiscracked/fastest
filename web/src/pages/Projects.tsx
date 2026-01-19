@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import type { Project } from '@fastest/shared';
 import { api } from '../api/client';
 
@@ -116,7 +116,8 @@ export function Projects() {
             {projects.map((project) => (
               <li key={project.id}>
                 <Link
-                  to={`/projects/${project.id}`}
+                  to="/projects/$projectId"
+                  params={{ projectId: project.id }}
                   className="block px-6 py-4 hover:bg-gray-50"
                 >
                   <div className="flex items-center justify-between">

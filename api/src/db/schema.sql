@@ -110,7 +110,18 @@ CREATE TABLE IF NOT EXISTS activity_events (
 
 CREATE INDEX IF NOT EXISTS idx_events_project ON activity_events(project_id, created_at DESC);
 
--- Jobs (agent execution queue)
+-- Conversations (chat sessions within a workspace)
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  title TEXT,  -- auto-generated from first message
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id, updated_at DESC);
+
+-- Jobs (agent execution queue) - DEPRECATED, keeping for migration
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),

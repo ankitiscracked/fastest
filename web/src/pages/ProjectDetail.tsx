@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link } from '@tanstack/react-router';
 import type { Project, Workspace, Snapshot } from '@fastest/shared';
 import { api } from '../api/client';
 
 export function ProjectDetail() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId } = useParams({ strict: false }) as { projectId: string };
   const [project, setProject] = useState<Project | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
@@ -79,7 +79,8 @@ export function ProjectDetail() {
           </p>
         </div>
         <Link
-          to={`/projects/${projectId}/workspaces`}
+          to="/projects/$projectId/workspaces"
+          params={{ projectId: projectId! }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm font-medium"
         >
           View Workspaces
@@ -153,7 +154,7 @@ export function ProjectDetail() {
             {workspaces.map((workspace) => (
               <li key={workspace.id} className="px-4 py-3">
                 <Link
-                  to={`/workspaces/${workspace.id}`}
+                  to="/"
                   className="flex items-center justify-between hover:bg-gray-50 -mx-4 px-4 py-2"
                 >
                   <div>

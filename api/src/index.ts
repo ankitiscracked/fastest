@@ -1,17 +1,21 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import { Sandbox } from '@cloudflare/sandbox';
 import { authRoutes } from './routes/auth';
 import { oauthRoutes } from './routes/oauth';
 import { projectRoutes } from './routes/projects';
 import { snapshotRoutes } from './routes/snapshots';
 import { workspaceRoutes } from './routes/workspaces';
 import { blobRoutes } from './routes/blobs';
-import { jobRoutes } from './routes/jobs';
+import { conversationRoutes } from './routes/conversations';
 
-// Re-export Sandbox class for Durable Object binding
+// Re-export Sandbox class for Durable Object binding (only when containers are enabled)
 export { Sandbox } from '@cloudflare/sandbox';
+import type { Sandbox } from '@cloudflare/sandbox';
+
+// Re-export ConversationSession for Durable Object binding
+export { ConversationSession } from './conversation';
+import type { ConversationSession } from './conversation';
 
 export interface Env {
   DB: D1Database;
@@ -19,6 +23,8 @@ export interface Env {
   ENVIRONMENT: string;
   // Sandbox container bindings
   Sandbox: DurableObjectNamespace<Sandbox>;
+  // Conversation session bindings
+  ConversationSession: DurableObjectNamespace<ConversationSession>;
   // API keys for LLM providers
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
@@ -53,7 +59,7 @@ v1.route('/projects', projectRoutes);
 v1.route('/snapshots', snapshotRoutes);
 v1.route('/workspaces', workspaceRoutes);
 v1.route('/blobs', blobRoutes);
-v1.route('/jobs', jobRoutes);
+v1.route('/conversations', conversationRoutes);
 
 app.route('/v1', v1);
 

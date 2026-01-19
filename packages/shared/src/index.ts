@@ -46,6 +46,23 @@ export interface DriftReport {
   reported_at: string;
 }
 
+export interface Conversation {
+  id: string;
+  workspace_id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Extended conversation with workspace/project info for list views
+export interface ConversationWithContext extends Conversation {
+  workspace_name: string;
+  project_id: string;
+  project_name: string;
+  last_message_preview?: string;
+  message_count?: number;
+}
+
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface Job {
@@ -175,7 +192,26 @@ export interface ReportDriftResponse {
   drift_report: DriftReport;
 }
 
-// Job API types
+// Conversation API types
+
+export interface CreateConversationRequest {
+  workspace_id: string;
+  title?: string;
+}
+
+export interface CreateConversationResponse {
+  conversation: Conversation;
+}
+
+export interface GetConversationResponse {
+  conversation: ConversationWithContext;
+}
+
+export interface ListConversationsResponse {
+  conversations: ConversationWithContext[];
+}
+
+// Job API types (DEPRECATED)
 
 export interface CreateJobRequest {
   workspace_id: string;

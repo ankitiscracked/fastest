@@ -1,4 +1,5 @@
-import type { Context } from 'hono';
+import type { Context, Next } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { eq, and, gt } from 'drizzle-orm';
 import type { Env } from '../index';
 import { createDb, sessions, users } from '../db';
@@ -82,3 +83,16 @@ export function hashToken(token: string): string {
   }
   return `hash_${Math.abs(hash).toString(16)}`;
 }
+
+/**
+ * Auth middleware - rejects requests without valid authentication
+ */
+export const authMiddleware = createMiddleware<{ Bindings: Env }>(async (c, next) => {
+  const user = await getAuthUser(c);
+
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  await next();
+});

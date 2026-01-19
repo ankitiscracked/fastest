@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link } from '@tanstack/react-router';
 import type { Workspace, DriftReport } from '@fastest/shared';
 import { api } from '../api/client';
 
@@ -8,7 +8,7 @@ interface WorkspaceWithDrift extends Workspace {
 }
 
 export function Workspaces() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId } = useParams({ strict: false }) as { projectId: string };
   const [workspaces, setWorkspaces] = useState<WorkspaceWithDrift[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +43,7 @@ export function Workspaces() {
     <div>
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Link to={`/projects/${projectId}`} className="text-sm text-gray-500 hover:text-gray-700">
+          <Link to="/projects/$projectId" params={{ projectId: projectId! }} className="text-sm text-gray-500 hover:text-gray-700">
             &larr; Back to Project
           </Link>
           <h1 className="text-2xl font-bold text-gray-900 mt-1">Workspaces</h1>
@@ -71,7 +71,7 @@ export function Workspaces() {
           {workspaces.map((workspace) => (
             <Link
               key={workspace.id}
-              to={`/workspaces/${workspace.id}`}
+              to="/"
               className="block bg-white rounded-lg border border-gray-200 p-4 hover:border-primary-300 hover:shadow-sm transition-all"
             >
               <div className="flex items-start justify-between">

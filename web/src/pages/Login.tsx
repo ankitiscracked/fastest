@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from '@tanstack/react-router';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 
@@ -78,7 +78,7 @@ export function Login() {
     try {
       const data = await api.googleAuth(response.credential);
       login(data.access_token);
-      navigate('/projects');
+      navigate({ to: '/' });
     } catch (error) {
       console.error('Google auth failed:', error);
     }

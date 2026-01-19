@@ -366,7 +366,7 @@ function getBaseUrl(c: { req: { url: string } }): string {
   const url = new URL(c.req.url);
   // In production, this should be your actual domain
   if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
-    return `http://localhost:3000`; // Web UI port in dev
+    return `http://localhost:5173`; // Web UI port in dev
   }
   return `${url.protocol}//${url.hostname}`;
 }
