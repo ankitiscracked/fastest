@@ -403,6 +403,136 @@ conversationRoutes.get('/:conversationId/timeline', async (c) => {
 });
 
 /**
+ * Get project info for a conversation
+ * GET /v1/conversations/:conversationId/project-info
+ */
+conversationRoutes.get('/:conversationId/project-info', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId } = c.req.param();
+  const db = c.env.DB;
+
+  // Verify ownership
+  const existing = await db
+    .prepare(`
+      SELECT c.id
+      FROM conversations c
+      JOIN workspaces w ON c.workspace_id = w.id
+      JOIN projects p ON w.project_id = p.id
+      WHERE c.id = ? AND p.owner_user_id = ?
+    `)
+    .bind(conversationId, user.id)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  // Get API URL and token for the sandbox
+  const apiUrl = new URL(c.req.url).origin;
+  const apiToken = c.req.header('Authorization')?.replace('Bearer ', '') || '';
+
+  const url = new URL('http://do/project-info');
+  url.searchParams.set('apiUrl', apiUrl);
+  url.searchParams.set('apiToken', apiToken);
+
+  const response = await stub.fetch(new Request(url));
+  const data = await response.json();
+
+  return c.json(data);
+});
+
+/**
+ * Get deployments for a conversation
+ * GET /v1/conversations/:conversationId/deployments
+ */
+conversationRoutes.get('/:conversationId/deployments', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId } = c.req.param();
+  const db = c.env.DB;
+
+  // Verify ownership
+  const existing = await db
+    .prepare(`
+      SELECT c.id
+      FROM conversations c
+      JOIN workspaces w ON c.workspace_id = w.id
+      JOIN projects p ON w.project_id = p.id
+      WHERE c.id = ? AND p.owner_user_id = ?
+    `)
+    .bind(conversationId, user.id)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  const response = await stub.fetch(new Request('http://do/deployments'));
+  const data = await response.json();
+
+  return c.json(data);
+});
+
+/**
+ * Deploy the project
+ * POST /v1/conversations/:conversationId/deploy
+ */
+conversationRoutes.post('/:conversationId/deploy', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId } = c.req.param();
+  const db = c.env.DB;
+
+  // Verify ownership
+  const existing = await db
+    .prepare(`
+      SELECT c.id
+      FROM conversations c
+      JOIN workspaces w ON c.workspace_id = w.id
+      JOIN projects p ON w.project_id = p.id
+      WHERE c.id = ? AND p.owner_user_id = ?
+    `)
+    .bind(conversationId, user.id)
+    .first();
+
+  if (!existing) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  // Get API URL and token for the sandbox to call back
+  const apiUrl = new URL(c.req.url).origin;
+  const apiToken = c.req.header('Authorization')?.replace('Bearer ', '') || '';
+
+  const response = await stub.fetch(new Request('http://do/deploy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiUrl, apiToken }),
+  }));
+
+  const data = await response.json();
+  return c.json(data);
+});
+
+/**
  * WebSocket endpoint for streaming
  * GET /v1/conversations/:conversationId/stream
  */

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import type { Project, Workspace, ConversationWithContext, TimelineItem } from '@fastest/shared';
-import { api, type Message, type StreamEvent } from '../api/client';
+import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo } from '../api/client';
 import {
   ConversationMessage,
   PromptInput,
@@ -151,6 +151,11 @@ export function ConversationView() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [showTimeline, setShowTimeline] = useState(true);
 
+  // Deployment state
+  const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [isDeploying, setIsDeploying] = useState(false);
+
   // Context data (for switching workspaces)
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -240,6 +245,22 @@ export function ConversationView() {
         ));
         break;
 
+      case 'project_info':
+        setProjectInfo(event.info);
+        break;
+
+      case 'deployment_started':
+        setIsDeploying(true);
+        setDeployments(prev => [...prev, event.deployment]);
+        break;
+
+      case 'deployment_complete':
+        setIsDeploying(false);
+        setDeployments(prev => prev.map(d =>
+          d.id === event.deployment.id ? event.deployment : d
+        ));
+        break;
+
       case 'error':
         setError(event.error);
         setRunningMessageId(null);
@@ -290,14 +311,17 @@ export function ConversationView() {
       const { conversation: conv } = await api.getConversation(convId);
       setConversation(conv);
 
-      // Load messages and timeline in parallel
-      const [messagesRes, timelineRes] = await Promise.all([
+      // Load messages, timeline, and deployments in parallel
+      const [messagesRes, timelineRes, deploymentsRes] = await Promise.all([
         api.getMessages(convId),
         api.getTimeline(convId).catch(() => ({ timeline: [] })),
+        api.getDeployments(convId).catch(() => ({ deployments: [], projectInfo: null })),
       ]);
 
       setMessages(messagesRes.messages);
       setTimeline(timelineRes.timeline);
+      setDeployments(deploymentsRes.deployments);
+      setProjectInfo(deploymentsRes.projectInfo);
 
       // Check if any message is running
       const running = messagesRes.messages.find((m) => m.status === 'running');
@@ -506,6 +530,34 @@ export function ConversationView() {
     }
   };
 
+  const handleDeploy = async () => {
+    if (!conversationId || isDeploying) return;
+
+    setError(null);
+    setIsDeploying(true);
+
+    try {
+      // First detect project type if not already done
+      if (!projectInfo) {
+        const { projectInfo: info } = await api.getProjectInfo(conversationId);
+        setProjectInfo(info);
+
+        if (info.type !== 'wrangler') {
+          setError('Only Wrangler projects are supported for deployment');
+          setIsDeploying(false);
+          return;
+        }
+      }
+
+      // Trigger deployment
+      await api.deploy(conversationId);
+      // The actual result will come via WebSocket
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start deployment');
+      setIsDeploying(false);
+    }
+  };
+
   // Convert Message to Job-like structure for existing components
   const messagesAsJobs = messages.map(m => ({
     id: m.id,
@@ -567,18 +619,64 @@ export function ConversationView() {
               <span className="text-gray-400">•</span>
               <span className="text-gray-500">{conversation.workspace_name}</span>
             </div>
-            {/* Timeline toggle */}
-            <button
-              onClick={() => setShowTimeline(!showTimeline)}
-              className={`p-2 rounded-lg transition-colors ${
-                showTimeline ? 'bg-primary-100 text-primary-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
-              }`}
-              title={showTimeline ? 'Hide timeline' : 'Show timeline'}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Latest deployment URL */}
+              {deployments.length > 0 && deployments[deployments.length - 1].status === 'success' && (
+                <a
+                  href={deployments[deployments.length - 1].url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary-600 hover:text-primary-700 hover:underline truncate max-w-48"
+                  title={deployments[deployments.length - 1].url}
+                >
+                  {deployments[deployments.length - 1].url}
+                </a>
+              )}
+
+              {/* Deploy button */}
+              {messages.length > 0 && (
+                <button
+                  onClick={handleDeploy}
+                  disabled={isDeploying || !!runningMessageId}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
+                    isDeploying
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50'
+                  }`}
+                  title={projectInfo?.type === 'wrangler' ? 'Deploy to Cloudflare Workers' : 'Deploy project'}
+                >
+                  {isDeploying ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Deploying...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      Deploy
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Timeline toggle */}
+              <button
+                onClick={() => setShowTimeline(!showTimeline)}
+                className={`p-2 rounded-lg transition-colors ${
+                  showTimeline ? 'bg-primary-100 text-primary-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                }`}
+                title={showTimeline ? 'Hide timeline' : 'Show timeline'}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       )}

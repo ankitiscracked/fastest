@@ -16,6 +16,22 @@ export interface Message {
 export type { Conversation, ConversationWithContext, TimelineItem, FileChange } from '@fastest/shared';
 import type { TimelineItem } from '@fastest/shared';
 
+// Deployment types
+export interface ProjectInfo {
+  type: 'wrangler' | 'unknown';
+  name?: string;
+  configFile?: string;
+}
+
+export interface Deployment {
+  id: string;
+  url: string;
+  status: 'deploying' | 'success' | 'failed';
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
 export type StreamEvent =
   | { type: 'message_start'; messageId: string }
   | { type: 'content_delta'; content: string }
@@ -24,6 +40,9 @@ export type StreamEvent =
   | { type: 'message_complete'; message: Message }
   | { type: 'timeline_item'; item: TimelineItem }
   | { type: 'timeline_summary'; itemId: string; summary: string }
+  | { type: 'project_info'; info: ProjectInfo }
+  | { type: 'deployment_started'; deployment: Deployment }
+  | { type: 'deployment_complete'; deployment: Deployment }
   | { type: 'error'; error: string };
 
 class ApiClient {
@@ -206,6 +225,29 @@ class ApiClient {
     return this.request<{ timeline: TimelineItem[] }>(
       'GET',
       `/conversations/${conversationId}/timeline`
+    );
+  }
+
+  // Deployment
+
+  async getProjectInfo(conversationId: string) {
+    return this.request<{ projectInfo: ProjectInfo }>(
+      'GET',
+      `/conversations/${conversationId}/project-info`
+    );
+  }
+
+  async getDeployments(conversationId: string) {
+    return this.request<{ deployments: Deployment[]; projectInfo: ProjectInfo | null }>(
+      'GET',
+      `/conversations/${conversationId}/deployments`
+    );
+  }
+
+  async deploy(conversationId: string) {
+    return this.request<{ deploymentId: string; message: string }>(
+      'POST',
+      `/conversations/${conversationId}/deploy`
     );
   }
 

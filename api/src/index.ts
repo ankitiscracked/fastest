@@ -35,6 +35,9 @@ export interface Env {
   // Google OAuth
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  // Cloudflare deploy credentials (our account)
+  CLOUDFLARE_DEPLOY_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();

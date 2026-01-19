@@ -33,6 +33,23 @@ export interface Message {
   completedAt?: string;
 }
 
+// Deployment info
+export interface Deployment {
+  id: string;
+  url: string;
+  status: 'deploying' | 'success' | 'failed';
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+// Project type detection
+export interface ProjectInfo {
+  type: 'wrangler' | 'unknown';
+  name?: string;
+  configFile?: string;
+}
+
 // State persisted in the DO
 interface ConversationState {
   conversationId: string;
@@ -49,6 +66,10 @@ interface ConversationState {
 
   // File state
   lastManifestHash?: string;
+
+  // Deployment state
+  projectInfo?: ProjectInfo;
+  deployments: Deployment[];
 
   // Settings
   autoCommitOnClear: boolean;
@@ -67,6 +88,9 @@ type StreamEvent =
   | { type: 'message_complete'; message: Message }
   | { type: 'timeline_item'; item: TimelineItem }
   | { type: 'timeline_summary'; itemId: string; summary: string }
+  | { type: 'project_info'; info: ProjectInfo }
+  | { type: 'deployment_started'; deployment: Deployment }
+  | { type: 'deployment_complete'; deployment: Deployment }
   | { type: 'error'; error: string };
 
 export class ConversationSession extends DurableObject<Env> {
@@ -112,6 +136,7 @@ export class ConversationSession extends DurableObject<Env> {
       projectId,
       messages: [],
       timeline: [],
+      deployments: [],
       autoCommitOnClear: false,
       createdAt: now,
       updatedAt: now,
@@ -225,6 +250,28 @@ export class ConversationSession extends DurableObject<Env> {
       // This triggers async summary generation - does not wait
       this.generateTimelineSummary(itemId).catch(console.error);
       return Response.json({ success: true, message: 'Summary generation started' });
+    }
+
+    if (url.pathname === '/project-info' && request.method === 'GET') {
+      const { apiUrl, apiToken } = Object.fromEntries(url.searchParams) as { apiUrl: string; apiToken: string };
+      const projectInfo = await this.detectProjectType(apiUrl, apiToken);
+      return Response.json({ projectInfo });
+    }
+
+    if (url.pathname === '/deployments' && request.method === 'GET') {
+      const state = await this.ensureState();
+      return Response.json({
+        deployments: state.deployments,
+        projectInfo: state.projectInfo,
+      });
+    }
+
+    if (url.pathname === '/deploy' && request.method === 'POST') {
+      const { apiUrl, apiToken } = await request.json() as { apiUrl: string; apiToken: string };
+      // Trigger async deployment - returns immediately
+      const deploymentId = crypto.randomUUID();
+      this.deploy(deploymentId, apiUrl, apiToken).catch(console.error);
+      return Response.json({ deploymentId, message: 'Deployment started' });
     }
 
     return new Response('Not found', { status: 404 });
@@ -937,5 +984,162 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
     if (deleted > 0) parts.push(`deleted ${deleted} file${deleted > 1 ? 's' : ''}`);
 
     return parts.length > 0 ? `Changed files: ${parts.join(', ')}` : 'Updated project files';
+  }
+
+  /**
+   * Detect project type by checking for wrangler config
+   */
+  private async detectProjectType(apiUrl: string, apiToken: string): Promise<ProjectInfo> {
+    const state = await this.ensureState();
+    const sandbox = await this.getSandbox();
+    const workDir = '/workspace';
+
+    // Restore files if needed
+    if (state.lastManifestHash) {
+      await this.restoreFiles(sandbox, apiUrl, apiToken, state.lastManifestHash, workDir);
+    }
+
+    // Check for wrangler.toml or wrangler.jsonc
+    const tomlCheck = await sandbox.exec(`test -f ${workDir}/wrangler.toml && echo "exists"`);
+    const jsoncCheck = await sandbox.exec(`test -f ${workDir}/wrangler.jsonc && echo "exists"`);
+
+    let projectInfo: ProjectInfo = { type: 'unknown' };
+
+    if (tomlCheck.stdout.includes('exists')) {
+      // Parse wrangler.toml for project name
+      const catResult = await sandbox.exec(`cat ${workDir}/wrangler.toml`);
+      const nameMatch = catResult.stdout.match(/name\s*=\s*["']([^"']+)["']/);
+      projectInfo = {
+        type: 'wrangler',
+        name: nameMatch?.[1],
+        configFile: 'wrangler.toml',
+      };
+    } else if (jsoncCheck.stdout.includes('exists')) {
+      // Parse wrangler.jsonc for project name
+      const catResult = await sandbox.exec(`cat ${workDir}/wrangler.jsonc`);
+      try {
+        // Remove comments for JSON parsing
+        const jsonContent = catResult.stdout.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        const config = JSON.parse(jsonContent);
+        projectInfo = {
+          type: 'wrangler',
+          name: config.name,
+          configFile: 'wrangler.jsonc',
+        };
+      } catch {
+        projectInfo = {
+          type: 'wrangler',
+          configFile: 'wrangler.jsonc',
+        };
+      }
+    }
+
+    // Store and broadcast
+    state.projectInfo = projectInfo;
+    await this.ctx.storage.put('state', state);
+    this.broadcast({ type: 'project_info', info: projectInfo });
+
+    return projectInfo;
+  }
+
+  /**
+   * Deploy the project to Cloudflare Workers
+   */
+  private async deploy(deploymentId: string, apiUrl: string, apiToken: string): Promise<void> {
+    const state = await this.ensureState();
+    const sandbox = await this.getSandbox();
+    const workDir = '/workspace';
+
+    // Create deployment record
+    const deployment: Deployment = {
+      id: deploymentId,
+      url: '',
+      status: 'deploying',
+      createdAt: new Date().toISOString(),
+    };
+    state.deployments.push(deployment);
+    await this.ctx.storage.put('state', state);
+    this.broadcast({ type: 'deployment_started', deployment });
+
+    try {
+      // Restore files if needed
+      if (state.lastManifestHash) {
+        await this.restoreFiles(sandbox, apiUrl, apiToken, state.lastManifestHash, workDir);
+      }
+
+      // Detect project type if not already done
+      if (!state.projectInfo) {
+        await this.detectProjectType(apiUrl, apiToken);
+      }
+
+      if (state.projectInfo?.type !== 'wrangler') {
+        throw new Error('Only Wrangler projects are supported for deployment');
+      }
+
+      // Install dependencies if package.json exists
+      const packageJsonCheck = await sandbox.exec(`test -f ${workDir}/package.json && echo "exists"`);
+      if (packageJsonCheck.stdout.includes('exists')) {
+        const installResult = await sandbox.exec(`cd ${workDir} && npm install`, { timeout: 120000 });
+        if (!installResult.success) {
+          throw new Error(`Failed to install dependencies: ${installResult.stderr}`);
+        }
+      }
+
+      // Run build if build script exists
+      const packageJson = await sandbox.exec(`cat ${workDir}/package.json 2>/dev/null`);
+      if (packageJson.success) {
+        try {
+          const pkg = JSON.parse(packageJson.stdout);
+          if (pkg.scripts?.build) {
+            const buildResult = await sandbox.exec(`cd ${workDir} && npm run build`, { timeout: 120000 });
+            if (!buildResult.success) {
+              throw new Error(`Build failed: ${buildResult.stderr}`);
+            }
+          }
+        } catch (e) {
+          // Ignore JSON parse errors
+        }
+      }
+
+      // Generate unique project name for this user/project
+      const projectName = `fastest-${state.projectId.slice(0, 8)}`;
+
+      // Run wrangler deploy with our credentials
+      // Override the name in the config to use our namespaced name
+      const deployResult = await sandbox.exec(
+        `cd ${workDir} && npx wrangler deploy --name ${projectName} --compatibility-date 2024-01-01 2>&1`,
+        {
+          timeout: 120000,
+          env: {
+            CLOUDFLARE_API_TOKEN: this.env.CLOUDFLARE_DEPLOY_TOKEN || '',
+            CLOUDFLARE_ACCOUNT_ID: this.env.CLOUDFLARE_ACCOUNT_ID || '',
+          },
+        }
+      );
+
+      if (!deployResult.success) {
+        throw new Error(`Deployment failed: ${deployResult.stdout}\n${deployResult.stderr}`);
+      }
+
+      // Parse the deployed URL from output
+      // Wrangler outputs something like: "Published fastest-xxx (https://fastest-xxx.workers.dev)"
+      const urlMatch = deployResult.stdout.match(/https:\/\/[^\s)]+\.workers\.dev/);
+      const deployedUrl = urlMatch?.[0] || `https://${projectName}.workers.dev`;
+
+      // Update deployment record
+      deployment.url = deployedUrl;
+      deployment.status = 'success';
+      deployment.completedAt = new Date().toISOString();
+      await this.ctx.storage.put('state', state);
+      this.broadcast({ type: 'deployment_complete', deployment });
+
+    } catch (error) {
+      // Update deployment with error
+      deployment.status = 'failed';
+      deployment.error = error instanceof Error ? error.message : String(error);
+      deployment.completedAt = new Date().toISOString();
+      await this.ctx.storage.put('state', state);
+      this.broadcast({ type: 'deployment_complete', deployment });
+    }
   }
 }
