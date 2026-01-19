@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
-import type { Project, Workspace, Snapshot, ConversationWithContext } from '@fastest/shared';
+import type { Project, Workspace, ConversationWithContext } from '@fastest/shared';
 import { api, type Message, type StreamEvent } from '../api/client';
 import {
   ConversationMessage,
@@ -9,7 +9,6 @@ import {
   SuggestionsBar,
   generateSuggestions,
 } from '../components/conversation';
-import { NewWorkspaceModal } from '../components/NewWorkspaceModal';
 
 // Confirmation Dialog Component
 interface ConfirmDialogProps {
@@ -162,8 +161,8 @@ export function ConversationView() {
   const [streamingContent, setStreamingContent] = useState<string>('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearingConversation, setClearingConversation] = useState(false);
-  const [showNewWorkspaceModal, setShowNewWorkspaceModal] = useState(false);
-  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
 
   // Refs
   const conversationEndRef = useRef<HTMLDivElement>(null);
@@ -389,29 +388,46 @@ export function ConversationView() {
     }
   };
 
-  const handleNewWorkspace = async () => {
-    if (currentProject) {
-      try {
-        const { snapshots: snapshotList } = await api.getProject(currentProject.id);
-        setSnapshots(snapshotList || []);
-      } catch (err) {
-        console.error('Failed to load snapshots:', err);
-      }
-    }
-    setShowNewWorkspaceModal(true);
-  };
-
-  const handleWorkspaceCreated = async (workspace: Workspace) => {
-    setWorkspaces(prev => [...prev, workspace]);
-    setCurrentWorkspace(workspace);
-    setShowNewWorkspaceModal(false);
-
-    // Create a new conversation in this workspace and navigate to it
+  const handleCreateProject = async (name: string) => {
+    setIsCreatingProject(true);
+    setError(null);
     try {
+      const { project } = await api.createProject(name);
+      setProjects(prev => [project, ...prev]);
+      setCurrentProject(project);
+
+      // Create default 'main' workspace for new project
+      const { workspace } = await api.createWorkspace(project.id, 'main');
+      setWorkspaces([workspace]);
+      setCurrentWorkspace(workspace);
+
+      // Create a new conversation in this workspace and navigate to it
       const { conversation: newConv } = await api.createConversation(workspace.id);
       navigate({ to: '/$conversationId', params: { conversationId: newConv.id } });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create conversation');
+      setError(err instanceof Error ? err.message : 'Failed to create project');
+    } finally {
+      setIsCreatingProject(false);
+    }
+  };
+
+  const handleCreateWorkspace = async (name: string) => {
+    if (!currentProject) return;
+
+    setIsCreatingWorkspace(true);
+    setError(null);
+    try {
+      const { workspace } = await api.createWorkspace(currentProject.id, name);
+      setWorkspaces(prev => [...prev, workspace]);
+      setCurrentWorkspace(workspace);
+
+      // Create a new conversation in this workspace and navigate to it
+      const { conversation: newConv } = await api.createConversation(workspace.id);
+      navigate({ to: '/$conversationId', params: { conversationId: newConv.id } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create workspace');
+    } finally {
+      setIsCreatingWorkspace(false);
     }
   };
 
@@ -574,7 +590,10 @@ export function ConversationView() {
             currentWorkspace={currentWorkspace}
             onProjectChange={handleProjectChange}
             onWorkspaceChange={handleWorkspaceChange}
-            onNewWorkspace={handleNewWorkspace}
+            onCreateProject={handleCreateProject}
+            onCreateWorkspace={handleCreateWorkspace}
+            isCreatingProject={isCreatingProject}
+            isCreatingWorkspace={isCreatingWorkspace}
             runningJobsCount={runningMessageId ? 1 : 0}
           />
 
@@ -601,14 +620,6 @@ export function ConversationView() {
         onCancel={() => setShowClearConfirm(false)}
       />
 
-      {/* New Workspace Modal */}
-      <NewWorkspaceModal
-        isOpen={showNewWorkspaceModal}
-        onClose={() => setShowNewWorkspaceModal(false)}
-        projectId={currentProject?.id || ''}
-        onCreated={handleWorkspaceCreated}
-        snapshots={snapshots}
-      />
     </div>
   );
 }

@@ -3,7 +3,6 @@ import { useNavigate } from '@tanstack/react-router';
 import type { Project, Workspace, ConversationWithContext } from '@fastest/shared';
 import { api } from '../api/client';
 import { PromptInput, ContextBar } from '../components/conversation';
-import { NewWorkspaceModal } from '../components/NewWorkspaceModal';
 
 export function Home() {
   const navigate = useNavigate();
@@ -19,8 +18,8 @@ export function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [showNewWorkspaceModal, setShowNewWorkspaceModal] = useState(false);
-  const [snapshots, setSnapshots] = useState<Array<{ id: string; created_at: string }>>([]);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -84,22 +83,39 @@ export function Home() {
     }
   };
 
-  const handleNewWorkspace = async () => {
-    if (currentProject) {
-      try {
-        const { snapshots: snapshotList } = await api.getProject(currentProject.id);
-        setSnapshots(snapshotList || []);
-      } catch (err) {
-        console.error('Failed to load snapshots:', err);
-      }
+  const handleCreateProject = async (name: string) => {
+    setIsCreatingProject(true);
+    setError(null);
+    try {
+      const { project } = await api.createProject(name);
+      setProjects((prev) => [project, ...prev]);
+      setCurrentProject(project);
+
+      // Create default 'main' workspace for new project
+      const { workspace } = await api.createWorkspace(project.id, 'main');
+      setWorkspaces([workspace]);
+      setCurrentWorkspace(workspace);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project');
+    } finally {
+      setIsCreatingProject(false);
     }
-    setShowNewWorkspaceModal(true);
   };
 
-  const handleWorkspaceCreated = (workspace: Workspace) => {
-    setWorkspaces((prev) => [...prev, workspace]);
-    setCurrentWorkspace(workspace);
-    setShowNewWorkspaceModal(false);
+  const handleCreateWorkspace = async (name: string) => {
+    if (!currentProject) return;
+
+    setIsCreatingWorkspace(true);
+    setError(null);
+    try {
+      const { workspace } = await api.createWorkspace(currentProject.id, name);
+      setWorkspaces((prev) => [...prev, workspace]);
+      setCurrentWorkspace(workspace);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create workspace');
+    } finally {
+      setIsCreatingWorkspace(false);
+    }
   };
 
   const handleSubmitPrompt = async (prompt: string) => {
@@ -187,7 +203,10 @@ export function Home() {
                 currentWorkspace={currentWorkspace}
                 onProjectChange={handleProjectChange}
                 onWorkspaceChange={handleWorkspaceChange}
-                onNewWorkspace={handleNewWorkspace}
+                onCreateProject={handleCreateProject}
+                onCreateWorkspace={handleCreateWorkspace}
+                isCreatingProject={isCreatingProject}
+                isCreatingWorkspace={isCreatingWorkspace}
                 runningJobsCount={0}
               />
             </div>
@@ -316,14 +335,6 @@ export function Home() {
         </div>
       </div>
 
-      {/* New Workspace Modal */}
-      <NewWorkspaceModal
-        isOpen={showNewWorkspaceModal}
-        onClose={() => setShowNewWorkspaceModal(false)}
-        projectId={currentProject?.id || ''}
-        onCreated={handleWorkspaceCreated}
-        snapshots={snapshots}
-      />
     </div>
   );
 }
