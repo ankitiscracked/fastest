@@ -158,6 +158,7 @@ export function ConversationView() {
   const [isDeploying, setIsDeploying] = useState(false);
   const [deploymentLogs, setDeploymentLogs] = useState<Record<string, DeploymentLogEntry[]>>({});
   const [showingLogsFor, setShowingLogsFor] = useState<string | null>(null);
+  const [previewBanner, setPreviewBanner] = useState<{ url: string; deploymentId: string } | null>(null);
 
   // Context data (for switching workspaces)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -271,6 +272,10 @@ export function ConversationView() {
         setDeployments(prev => prev.map(d =>
           d.id === event.deployment.id ? event.deployment : d
         ));
+        // Show preview banner on successful deployment
+        if (event.deployment.status === 'success' && event.deployment.url) {
+          setPreviewBanner({ url: event.deployment.url, deploymentId: event.deployment.id });
+        }
         break;
 
       case 'error':
@@ -686,6 +691,69 @@ export function ConversationView() {
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Preview URL Banner */}
+      {previewBanner && (
+        <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white px-4 py-3 shadow-lg">
+          <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div>
+                <div className="font-medium">Deployment successful!</div>
+                <div className="text-sm text-white/80 font-mono truncate max-w-md">
+                  {previewBanner.url}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={previewBanner.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-white text-green-700 rounded-lg font-medium text-sm hover:bg-green-50 transition-colors flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                Open Site
+              </a>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(previewBanner.url);
+                }}
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                title="Copy URL"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setShowingLogsFor(previewBanner.deploymentId)}
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                title="View logs"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setPreviewBanner(null)}
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                title="Dismiss"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
