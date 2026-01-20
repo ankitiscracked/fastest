@@ -77,7 +77,7 @@ export function Login() {
   const handleGoogleCallback = async (response: { credential: string }) => {
     try {
       const data = await api.googleAuth(response.credential);
-      login(data.access_token);
+      await login(data.access_token);
       navigate({ to: '/' });
     } catch (error) {
       console.error('Google auth failed:', error);

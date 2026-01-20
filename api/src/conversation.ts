@@ -314,7 +314,8 @@ export class ConversationSession extends DurableObject<Env> {
     const state = await this.ensureState();
 
     // Use workspace ID as sandbox ID for persistence
-    const sandbox = getSandbox(this.env.Sandbox, `workspace-${state.workspaceId}`);
+    // normalizeId converts to lowercase to avoid hostname issues with preview URLs
+    const sandbox = getSandbox(this.env.Sandbox, `workspace-${state.workspaceId}`, { normalizeId: true });
     if (!sandbox) {
       throw new Error('Failed to get sandbox instance');
     }
@@ -444,9 +445,15 @@ export class ConversationSession extends DurableObject<Env> {
       await this.initializeWorkspace(sandbox, apiUrl, apiToken, workDir);
     }
 
-    // Ensure OpenCode serve is running and get the port
-    const port = await this.ensureOpenCodeServe(sandbox, workDir, apiUrl, apiToken);
-    const openCodeUrl = `http://localhost:${port}`;
+    // Use external OpenCode server if configured (useful when sandbox CLI is unavailable)
+    let openCodeUrl = (this.env.OPENCODE_URL || '').trim();
+    if (openCodeUrl) {
+      openCodeUrl = openCodeUrl.replace(/\/+$/, '');
+    } else {
+      // Ensure OpenCode serve is running and get the port
+      const port = await this.ensureOpenCodeServe(sandbox, workDir, apiUrl, apiToken);
+      openCodeUrl = `http://localhost:${port}`;
+    }
 
     // Get or create OpenCode session
     const sessionId = await this.getOrCreateOpenCodeSession(sandbox, openCodeUrl);
@@ -621,6 +628,15 @@ export class ConversationSession extends DurableObject<Env> {
       // Not running, need to start
     }
 
+    // Sanity check: ensure the OpenCode CLI has a serve subcommand
+    const serveCheck = await sandbox.exec(`opencode serve --help >/dev/null 2>&1`);
+    if (!serveCheck.success) {
+      const help = await sandbox.exec(`opencode --help 2>/dev/null | head -40`);
+      throw new Error(
+        `OpenCode CLI missing 'serve' subcommand. opencode --help output:\n${help.stdout || help.stderr || ''}`
+      );
+    }
+
     // Fetch user's API keys from the API
     const envVars: Record<string, string> = {};
     try {
@@ -647,9 +663,18 @@ export class ConversationSession extends DurableObject<Env> {
       }
     }
 
+    // Verify OpenCode binary exists and is executable
+    const binaryCheck = await sandbox.exec(`which opencode && opencode --version 2>&1`);
+    if (!binaryCheck.success) {
+      const whichOut = await sandbox.exec(`which opencode 2>&1`);
+      throw new Error(
+        `OpenCode binary not found or not executable. which opencode output:\n${whichOut.stdout || whichOut.stderr || 'No output'}`
+      );
+    }
+
     // Start in background
     await sandbox.exec(
-      `nohup opencode serve --port ${port} > /tmp/opencode.log 2>&1 &`,
+      `nohup opencode serve --port ${port} --hostname 127.0.0.1 > /tmp/opencode.log 2>&1 &`,
       { cwd: workDir, env: envVars }
     );
 
@@ -657,8 +682,8 @@ export class ConversationSession extends DurableObject<Env> {
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 500));
       try {
-        const check = await sandbox.exec(`curl -s http://localhost:${port}/doc`);
-        if (check.success) {
+        const check = await sandbox.exec(`curl -s http://127.0.0.1:${port}/doc 2>&1 | head -1`);
+        if (check.success && check.stdout && check.stdout.includes('<!DOCTYPE')) {
           // Save port to state
           state.openCodePort = port;
           await this.ctx.storage.put('state', state);
@@ -669,7 +694,14 @@ export class ConversationSession extends DurableObject<Env> {
       }
     }
 
-    throw new Error('OpenCode serve failed to start');
+    // Debug: Check if process is running
+    const psCheck = await sandbox.exec(`ps aux | grep -i opencode | grep -v grep || true`);
+    const logResult = await sandbox.exec(`tail -200 /tmp/opencode.log 2>/dev/null || true`);
+    const logText = (logResult.stdout || logResult.stderr || '').trim();
+    const psText = (psCheck.stdout || psCheck.stderr || '').trim();
+    throw new Error(
+      `OpenCode serve failed to start on port ${port}${logText ? `\n\nLogs:\n${logText}` : ''}${psText ? `\n\nProcesses:\n${psText}` : ''}`
+    );
   }
 
   /**

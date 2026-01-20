@@ -12,7 +12,7 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   loading: boolean;
-  login: (token: string) => void;
+  login: (token: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -44,9 +44,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const login = (token: string) => {
+  const login = async (token: string) => {
     api.setToken(token);
-    checkAuth();
+    await checkAuth();
   };
 
   const logout = () => {

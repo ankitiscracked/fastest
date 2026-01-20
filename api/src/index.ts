@@ -32,6 +32,8 @@ export interface Env {
   OPENAI_API_KEY?: string;
   GOOGLE_GENERATIVE_AI_API_KEY?: string;
   PROVIDER?: string;
+  // External OpenCode server URL override (used if sandbox CLI is unavailable)
+  OPENCODE_URL?: string;
   // Google OAuth
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
