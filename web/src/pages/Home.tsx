@@ -26,6 +26,23 @@ export function Home() {
     loadData();
   }, []);
 
+  // Handle Ctrl+X to clear selection
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'x' && !e.shiftKey) {
+        // Only clear if no text is selected (don't interfere with cut)
+        const selection = window.getSelection();
+        if (!selection || selection.toString().length === 0) {
+          e.preventDefault();
+          handleClearSelection();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -83,6 +100,12 @@ export function Home() {
     }
   };
 
+  const handleClearSelection = () => {
+    setCurrentProject(null);
+    setCurrentWorkspace(null);
+    setWorkspaces([]);
+  };
+
   const handleCreateProject = async (name: string) => {
     setIsCreatingProject(true);
     setError(null);
@@ -119,17 +142,38 @@ export function Home() {
   };
 
   const handleSubmitPrompt = async (prompt: string) => {
-    if (!currentWorkspace) {
-      setError('Please select a workspace first');
-      return;
-    }
-
     setIsCreating(true);
     setError(null);
 
     try {
+      let workspaceId = currentWorkspace?.id;
+
+      // Auto-create project and workspace if not selected
+      if (!workspaceId) {
+        // Generate a project name from the prompt (first few words, cleaned up)
+        const projectName = prompt
+          .slice(0, 50)
+          .replace(/[^a-zA-Z0-9\s-]/g, '')
+          .trim()
+          .split(/\s+/)
+          .slice(0, 4)
+          .join('-')
+          .toLowerCase() || 'new-project';
+
+        // Create project
+        const { project } = await api.createProject(projectName);
+        setProjects((prev) => [project, ...prev]);
+        setCurrentProject(project);
+
+        // Create default 'main' workspace
+        const { workspace } = await api.createWorkspace(project.id, 'main');
+        setWorkspaces([workspace]);
+        setCurrentWorkspace(workspace);
+        workspaceId = workspace.id;
+      }
+
       // Create a new conversation
-      const { conversation } = await api.createConversation(currentWorkspace.id);
+      const { conversation } = await api.createConversation(workspaceId);
 
       // Navigate to the conversation
       navigate({ to: '/$conversationId', params: { conversationId: conversation.id } });
@@ -205,6 +249,7 @@ export function Home() {
                 onWorkspaceChange={handleWorkspaceChange}
                 onCreateProject={handleCreateProject}
                 onCreateWorkspace={handleCreateWorkspace}
+                onClearSelection={handleClearSelection}
                 isCreatingProject={isCreatingProject}
                 isCreatingWorkspace={isCreatingWorkspace}
                 runningJobsCount={0}

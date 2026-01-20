@@ -13,6 +13,7 @@ interface ContextBarProps {
   onWorkspaceChange: (workspaceId: string) => void;
   onCreateProject: (name: string) => Promise<void>;
   onCreateWorkspace: (name: string) => Promise<void>;
+  onClearSelection?: () => void;
   isCreatingProject?: boolean;
   isCreatingWorkspace?: boolean;
   driftCount?: number;
@@ -28,11 +29,14 @@ export function ContextBar({
   onWorkspaceChange,
   onCreateProject,
   onCreateWorkspace,
+  onClearSelection,
   isCreatingProject = false,
   isCreatingWorkspace = false,
   driftCount = 0,
   runningJobsCount = 0,
 }: ContextBarProps) {
+  const hasSelection = currentProject !== null || currentWorkspace !== null;
+
   return (
     <div className="flex items-center gap-2 text-sm">
       {/* Project Selector */}
@@ -81,6 +85,20 @@ export function ContextBar({
           </>
         }
       />
+
+      {/* Clear Selection Button */}
+      {hasSelection && onClearSelection && (
+        <button
+          onClick={onClearSelection}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          title="Clear selection (Ctrl+X)"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+          <span className="text-xs">Clear</span>
+        </button>
+      )}
 
       {/* Status Badges */}
       {runningJobsCount > 0 && (
