@@ -5,6 +5,18 @@ interface OpenCodePartsProps {
   parts: OpenCodePart[];
 }
 
+function extractToolOutput(tool: OpenCodeToolPart): { status?: string; output?: string } {
+  const state = tool.state as {
+    status?: string;
+    output?: string;
+    raw?: string;
+    metadata?: { output?: string };
+  } | undefined;
+
+  const output = state?.output || state?.metadata?.output || state?.raw;
+  return { status: state?.status, output };
+}
+
 export function OpenCodeParts({ parts }: OpenCodePartsProps) {
   if (parts.length === 0) return null;
 
@@ -30,10 +42,22 @@ export function OpenCodeParts({ parts }: OpenCodePartsProps) {
           }
           case 'tool': {
             const tool = part as OpenCodeToolPart;
+            const { status, output } = extractToolOutput(tool);
             return (
               <div key={part.id} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-                <div className="text-xs font-medium text-gray-500">Tool</div>
+                <div className="flex items-center justify-between text-xs font-medium text-gray-500">
+                  <span>Tool</span>
+                  {status && <span className="uppercase tracking-wide text-gray-400">{status}</span>}
+                </div>
                 <div className="font-mono text-xs text-gray-700">{tool.tool || 'unknown'}</div>
+                {output ? (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs text-gray-500">Output</summary>
+                    <pre className="mt-2 max-h-64 overflow-auto rounded bg-gray-50 p-2 text-[11px] leading-relaxed text-gray-600">
+                      {output}
+                    </pre>
+                  </details>
+                ) : null}
               </div>
             );
           }

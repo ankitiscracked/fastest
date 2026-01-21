@@ -252,7 +252,7 @@ export function Home() {
                 onClearSelection={handleClearSelection}
                 isCreatingProject={isCreatingProject}
                 isCreatingWorkspace={isCreatingWorkspace}
-                runningJobsCount={0}
+                runningMessagesCount={0}
               />
             </div>
           </div>

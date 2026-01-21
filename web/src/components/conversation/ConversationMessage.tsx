@@ -1,5 +1,6 @@
 import { MarkdownContent } from './MarkdownContent';
 import { OpenCodeParts } from './OpenCodeParts';
+import { OpenCodeQuestion } from './OpenCodeQuestion';
 
 type MessageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -15,42 +16,57 @@ interface MessageData {
 }
 
 interface ConversationMessageProps {
-  job: MessageData;
+  message: MessageData;
   isStreaming?: boolean;
   streamingContent?: string;
   parts?: import('../../api/opencode').OpenCodePart[];
+  questions?: import('../../api/opencode').OpenCodeQuestionRequest[];
+  onQuestionSubmit?: (requestId: string, answers: string[][]) => Promise<void> | void;
+  onQuestionReject?: (requestId: string) => Promise<void> | void;
 }
 
-export function ConversationMessage({ job, isStreaming, streamingContent, parts }: ConversationMessageProps) {
+export function ConversationMessage({ message, isStreaming, streamingContent, parts, questions, onQuestionSubmit, onQuestionReject }: ConversationMessageProps) {
   const hasParts = !!parts && parts.length > 0;
+  const hasQuestions = !!questions && questions.length > 0;
   return (
     <div className="space-y-3">
       {/* User message - only render if there's a prompt */}
-      {job.prompt && (
+      {message.prompt && (
         <div className="flex justify-end">
           <div className="max-w-[85%] bg-primary-600 text-white rounded-2xl rounded-tr-sm px-4 py-3">
-            <p className="text-sm whitespace-pre-wrap">{job.prompt}</p>
+            <p className="text-sm whitespace-pre-wrap">{message.prompt}</p>
           </div>
         </div>
       )}
 
       {/* Agent message - only show for assistant messages (no prompt but has output/streaming/running status) */}
-      {(!job.prompt || job.output || isStreaming) && (
+      {(!message.prompt || message.output || isStreaming) && (
         <div className="flex justify-start">
           <div className="max-w-[85%] bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-gray-500">Agent</span>
-              <StatusBadge status={job.status} />
+              <StatusBadge status={message.status} />
             </div>
 
             {/* Content based on status */}
-            {job.status === 'pending' && (
+            {message.status === 'pending' && (
               <p className="text-sm text-gray-500 italic">Waiting to run...</p>
             )}
 
-            {job.status === 'running' && (
+            {message.status === 'running' && (
               <div className="space-y-2">
-                {hasParts ? (
+                {hasQuestions && onQuestionSubmit && onQuestionReject ? (
+                  <div className="space-y-3">
+                    {questions?.map((question) => (
+                      <OpenCodeQuestion
+                        key={question.id}
+                        request={question}
+                        onSubmit={(answers) => onQuestionSubmit(question.id, answers)}
+                        onReject={() => onQuestionReject(question.id)}
+                      />
+                    ))}
+                  </div>
+                ) : hasParts ? (
                   <OpenCodeParts parts={parts} />
                 ) : isStreaming && streamingContent ? (
                   <MarkdownContent content={streamingContent} mode="streaming" />
@@ -63,10 +79,21 @@ export function ConversationMessage({ job, isStreaming, streamingContent, parts 
               </div>
             )}
 
-            {job.status === 'completed' && (
+            {message.status === 'completed' && (
               <div className="space-y-3">
-                {job.output ? (
-                  <MarkdownContent content={job.output} mode="static" />
+                {message.output ? (
+                  <MarkdownContent content={message.output} mode="static" />
+                ) : hasQuestions && onQuestionSubmit && onQuestionReject ? (
+                  <div className="space-y-3">
+                    {questions?.map((question) => (
+                      <OpenCodeQuestion
+                        key={question.id}
+                        request={question}
+                        onSubmit={(answers) => onQuestionSubmit(question.id, answers)}
+                        onReject={() => onQuestionReject(question.id)}
+                      />
+                    ))}
+                  </div>
                 ) : hasParts ? (
                   <OpenCodeParts parts={parts} />
                 ) : (
@@ -75,22 +102,22 @@ export function ConversationMessage({ job, isStreaming, streamingContent, parts 
               </div>
             )}
 
-            {job.status === 'failed' && (
+            {message.status === 'failed' && (
               <div className="space-y-2">
-                <p className="text-sm text-red-600">{job.error || 'An error occurred'}</p>
+                <p className="text-sm text-red-600">{message.error || 'An error occurred'}</p>
               </div>
             )}
 
-            {job.status === 'cancelled' && (
+            {message.status === 'cancelled' && (
               <p className="text-sm text-gray-500 italic">Cancelled</p>
             )}
 
             {/* Timestamp */}
             <div className="mt-2 text-xs text-gray-400">
-              {formatTimestamp(job.created_at)}
-              {job.completed_at && (
+              {formatTimestamp(message.created_at)}
+              {message.completed_at && (
                 <span className="ml-2">
-                  ({formatDuration(new Date(job.created_at), new Date(job.completed_at))})
+                  ({formatDuration(new Date(message.created_at), new Date(message.completed_at))})
                 </span>
               )}
             </div>

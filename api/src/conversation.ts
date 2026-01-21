@@ -10,7 +10,8 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { getSandbox, parseSSEStream, type Sandbox } from '@cloudflare/sandbox';
+import { getSandbox, parseSSEStream, type Sandbox as CloudflareSandbox } from '@cloudflare/sandbox';
+import { Sandbox as E2BSandbox } from 'e2b';
 import type { Env } from './index';
 import type { TimelineItem, FileChange, DeploymentLogEntry, DeploymentLog } from '@fastest/shared';
 
@@ -20,6 +21,21 @@ type ExecEvent =
   | { type: 'stderr'; data: string }
   | { type: 'complete'; exitCode: number }
   | { type: 'error'; error: string };
+
+type SandboxExecResult = {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode?: number;
+};
+
+type SandboxRunner = {
+  exec: (command: string, opts?: { cwd?: string; env?: Record<string, string> }) => Promise<SandboxExecResult>;
+  execStream?: (command: string, opts?: { env?: Record<string, string>; timeout?: number }) => Promise<ReadableStream>;
+  runBackground?: (command: string, opts?: { cwd?: string; env?: Record<string, string> }) => Promise<void>;
+  getHost?: (port: number) => string;
+  type: 'cloudflare' | 'e2b';
+};
 
 // Message in the conversation
 export interface Message {
@@ -62,6 +78,7 @@ interface ConversationState {
     partsOrder: string[];
   }>;
   openCodeMessageIdMap?: Record<string, string>;
+  e2bSandboxId?: string;
 
   // Timeline of file changes
   timeline: TimelineItem[];
@@ -104,8 +121,9 @@ type StreamEvent =
 export class ConversationSession extends DurableObject<Env> {
   private state: ConversationState | null = null;
   private clients: Set<WebSocket> = new Set();
-  private sandbox: Sandbox | null = null;
+  private sandbox: CloudflareSandbox | null = null;
   private sandboxReady: boolean = false;
+  private e2bSandbox: E2BSandbox | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -196,7 +214,10 @@ export class ConversationSession extends DurableObject<Env> {
       const parts = record.partsOrder.length > 0
         ? record.partsOrder.map(id => record.parts[id]).filter(Boolean)
         : Object.values(record.parts);
-      mapped[conversationMessageId] = { info: record.info, parts };
+      if (!mapped[conversationMessageId]) {
+        mapped[conversationMessageId] = { info: record.info, parts: [] };
+      }
+      mapped[conversationMessageId].parts.push(...parts);
     }
 
     return mapped;
@@ -271,6 +292,27 @@ export class ConversationSession extends DurableObject<Env> {
       return Response.json({ message });
     }
 
+    if (url.pathname === '/opencode-question/reply' && request.method === 'POST') {
+      const { requestId, answers, apiUrl, apiToken } = await request.json() as {
+        requestId: string;
+        answers: string[][];
+        apiUrl: string;
+        apiToken: string;
+      };
+      await this.replyOpenCodeQuestion(requestId, answers, apiUrl, apiToken);
+      return Response.json({ success: true });
+    }
+
+    if (url.pathname === '/opencode-question/reject' && request.method === 'POST') {
+      const { requestId, apiUrl, apiToken } = await request.json() as {
+        requestId: string;
+        apiUrl: string;
+        apiToken: string;
+      };
+      await this.rejectOpenCodeQuestion(requestId, apiUrl, apiToken);
+      return Response.json({ success: true });
+    }
+
     if (url.pathname === '/clear' && request.method === 'POST') {
       await this.clearConversation();
       return Response.json({ success: true });
@@ -343,7 +385,7 @@ export class ConversationSession extends DurableObject<Env> {
   /**
    * Get or create a sandbox instance
    */
-  private async getSandbox(): Promise<Sandbox> {
+  private async getCloudflareSandbox(): Promise<CloudflareSandbox> {
     if (this.sandbox && this.sandboxReady) {
       return this.sandbox;
     }
@@ -360,6 +402,135 @@ export class ConversationSession extends DurableObject<Env> {
     this.sandboxReady = true;
 
     return this.sandbox;
+  }
+
+  private getSandboxProvider(): 'cloudflare' | 'e2b' {
+    const provider = (this.env.SANDBOX_PROVIDER || '').toLowerCase();
+    return provider === 'e2b' ? 'e2b' : 'cloudflare';
+  }
+
+  private async getE2BSandbox(): Promise<E2BSandbox> {
+    const timeoutMs = 30 * 60 * 1000;
+    const apiKey = (this.env.E2B_API_KEY || '').trim();
+    const e2bOpts = apiKey ? { apiKey } : undefined;
+    if (this.e2bSandbox) {
+      try {
+        if (await this.e2bSandbox.isRunning()) {
+          try {
+            await this.e2bSandbox.setTimeout(timeoutMs);
+          } catch (err) {
+            console.warn('[Sandbox][E2B] Failed to extend timeout', err);
+          }
+          return this.e2bSandbox;
+        }
+      } catch {
+        // fall through to reconnect
+      }
+    }
+
+    const state = await this.ensureState();
+    if (state.e2bSandboxId) {
+      try {
+        const sandbox = await E2BSandbox.connect(state.e2bSandboxId, e2bOpts);
+        try {
+          await sandbox.setTimeout(timeoutMs);
+        } catch (err) {
+          console.warn('[Sandbox][E2B] Failed to extend timeout', err);
+        }
+        this.e2bSandbox = sandbox;
+        return sandbox;
+      } catch {
+        state.e2bSandboxId = undefined;
+        await this.ctx.storage.put('state', state);
+        // fall through to create
+      }
+    }
+
+    const templateId = (this.env.E2B_TEMPLATE_ID || '').trim();
+    const sandbox = templateId
+      ? await E2BSandbox.create(templateId, { ...e2bOpts, timeoutMs })
+      : await E2BSandbox.create({ ...e2bOpts, timeoutMs });
+    try {
+      await sandbox.setTimeout(timeoutMs);
+    } catch (err) {
+      console.warn('[Sandbox][E2B] Failed to set timeout', err);
+    }
+    state.e2bSandboxId = sandbox.sandboxId;
+    await this.ctx.storage.put('state', state);
+    this.e2bSandbox = sandbox;
+    return sandbox;
+  }
+
+  private async getSandboxRunner(): Promise<SandboxRunner> {
+    if (this.getSandboxProvider() === 'e2b') {
+      const sandbox = await this.getE2BSandbox();
+      return {
+        exec: async (command, opts) => {
+          try {
+            const result = await sandbox.commands.run(command, {
+              cwd: opts?.cwd,
+              envs: opts?.env,
+            });
+            if (result.exitCode !== 0) {
+              console.error('[Sandbox][E2B] Command failed', {
+                command,
+                exitCode: result.exitCode,
+                stdout: (result.stdout || '').slice(0, 2000),
+                stderr: (result.stderr || '').slice(0, 2000),
+              });
+            }
+            return {
+              success: result.exitCode === 0,
+              stdout: result.stdout || '',
+              stderr: result.stderr || '',
+              exitCode: result.exitCode,
+            };
+          } catch (err) {
+            const exitCode = (err && typeof err === 'object' && 'exitCode' in err)
+              ? (err as { exitCode?: number }).exitCode
+              : undefined;
+            const stdout = (err && typeof err === 'object' && 'stdout' in err)
+              ? String((err as { stdout?: string }).stdout || '')
+              : '';
+            const stderr = (err && typeof err === 'object' && 'stderr' in err)
+              ? String((err as { stderr?: string }).stderr || '')
+              : '';
+            console.error('[Sandbox][E2B] Command exception', {
+              command,
+              error: err instanceof Error ? err.message : String(err),
+              exitCode,
+              stdout: stdout.slice(0, 2000),
+              stderr: stderr.slice(0, 2000),
+            });
+            throw err;
+          }
+        },
+        runBackground: async (command, opts) => {
+          try {
+            await sandbox.commands.run(command, {
+              cwd: opts?.cwd,
+              envs: opts?.env,
+              background: true,
+            });
+          } catch (err) {
+            console.error('[Sandbox][E2B] Background command exception', {
+              command,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throw err;
+          }
+        },
+        getHost: (port) => sandbox.getHost(port),
+        type: 'e2b',
+      };
+    }
+
+    const sandbox = await this.getCloudflareSandbox();
+    return {
+      exec: (command, opts) => sandbox.exec(command, opts),
+      execStream: (command, opts) => sandbox.execStream(command, opts),
+      type: 'cloudflare',
+    };
   }
 
   /**
@@ -415,7 +586,7 @@ export class ConversationSession extends DurableObject<Env> {
           }
           state.openCodeMessages[id].info = info;
           const role = info?.role as string | undefined;
-          if (role === 'assistant') {
+          if (role && role !== 'user') {
             state.openCodeMessageIdMap[id] = assistantMessage.id;
           }
           return;
@@ -428,6 +599,9 @@ export class ConversationSession extends DurableObject<Env> {
           if (!messageId) return;
           if (!state.openCodeMessages[messageId]) {
             state.openCodeMessages[messageId] = { parts: {}, partsOrder: [] };
+          }
+          if (!state.openCodeMessageIdMap[messageId]) {
+            state.openCodeMessageIdMap[messageId] = assistantMessage.id;
           }
           const record = state.openCodeMessages[messageId];
           const partId = (part.id as string | undefined) || `${part.type || 'part'}-${messageId}`;
@@ -502,6 +676,12 @@ export class ConversationSession extends DurableObject<Env> {
       assistantMessage.error = error instanceof Error ? error.message : String(error);
       assistantMessage.completedAt = new Date().toISOString();
 
+      console.error('[Conversation] Assistant message failed', {
+        conversationId: state.conversationId,
+        messageId: assistantMessage.id,
+        error: assistantMessage.error,
+      });
+
       await this.ctx.storage.put('state', state);
 
       this.broadcast({ type: 'error', error: assistantMessage.error });
@@ -523,80 +703,103 @@ export class ConversationSession extends DurableObject<Env> {
     onOpenCodeEvent: (payload: { type?: string; properties?: Record<string, unknown> }) => void
   ): Promise<{ output: string; fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
     const state = await this.ensureState();
-    const sandbox = await this.getSandbox();
+    const sandbox = await this.getSandboxRunner();
 
-    const workDir = '/workspace';
+    const workDir = this.getSandboxWorkDir(sandbox);
 
-    // Check if we need to restore files
-    if (state.lastManifestHash) {
-      try {
-        await this.restoreFiles(sandbox, apiUrl, apiToken, state.lastManifestHash, workDir);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.includes('Failed to download manifest')) {
-          // Manifest missing (e.g. R2 reset) - reset workspace state and continue
-          state.lastManifestHash = undefined;
-          await this.ctx.storage.put('state', state);
-          await sandbox.exec(`mkdir -p ${workDir}`);
+    try {
+      // Check if we need to restore files
+      if (state.lastManifestHash) {
+        try {
+          await this.restoreFiles(sandbox, apiUrl, apiToken, state.lastManifestHash, workDir);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.includes('Failed to download manifest')) {
+            // Manifest missing (e.g. R2 reset) - reset workspace state and continue
+            state.lastManifestHash = undefined;
+            await this.ctx.storage.put('state', state);
+            await sandbox.exec(`mkdir -p ${workDir}`);
+          } else {
+            throw err;
+          }
+        }
+      } else if (state.messages.length === 2) {
+        // First message - check for workspace base snapshot
+        await this.initializeWorkspace(sandbox, apiUrl, apiToken, workDir);
+      }
+
+      let openCodeUrl = '';
+      const openCodeDirectory = this.getOpenCodeDirectory(workDir);
+
+      if (sandbox.type === 'e2b') {
+        const port = await this.ensureOpenCodeServeE2B(sandbox, openCodeDirectory);
+        const host = sandbox.getHost ? sandbox.getHost(port) : '';
+        if (!host) {
+          throw new Error('Failed to resolve OpenCode host for E2B sandbox');
+        }
+        openCodeUrl = host.startsWith('http') ? host : `https://${host}`;
+        openCodeUrl = openCodeUrl.replace(/\/+$/, '');
+      } else {
+        // Use external OpenCode server if configured
+        let configuredUrl = (this.env.OPENCODE_URL || '').trim();
+        if (configuredUrl) {
+          openCodeUrl = configuredUrl.replace(/\/+$/, '');
         } else {
-          throw err;
+          // Ensure OpenCode serve is running and get the port
+          const port = await this.ensureOpenCodeServe(sandbox, workDir, apiUrl, apiToken);
+          openCodeUrl = `http://localhost:${port}`;
         }
       }
-    } else if (state.messages.length === 2) {
-      // First message - check for workspace base snapshot
-      await this.initializeWorkspace(sandbox, apiUrl, apiToken, workDir);
+
+      // Get or create OpenCode session
+      const sessionId = await this.getOrCreateOpenCodeSession(openCodeUrl, openCodeDirectory);
+
+      // Stream response via SSE
+      const fullOutput = await this.streamFromOpenCode(
+        sandbox,
+        openCodeUrl,
+        sessionId,
+        prompt,
+        assistantMessageId,
+        onDelta,
+        onOpenCodeEvent,
+        openCodeDirectory,
+        apiUrl,
+        apiToken
+      );
+
+      // Collect files and create snapshot
+      const { fileChanges, manifestHash, previousManifestHash } = await this.collectAndUploadFiles(
+        sandbox, apiUrl, apiToken, workDir
+      );
+
+      return {
+        output: fullOutput,
+        fileChanges,
+        manifestHash,
+        previousManifestHash,
+      };
+    } catch (err) {
+      console.error('[OpenCode] runInSandboxWithStreaming failed', {
+        conversationId: state.conversationId,
+        sandboxType: sandbox.type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
-
-    // Use external OpenCode server if configured (useful when sandbox CLI is unavailable)
-    let openCodeUrl = (this.env.OPENCODE_URL || '').trim();
-    if (openCodeUrl) {
-      openCodeUrl = openCodeUrl.replace(/\/+$/, '');
-    } else {
-      // Ensure OpenCode serve is running and get the port
-      const port = await this.ensureOpenCodeServe(sandbox, workDir, apiUrl, apiToken);
-      openCodeUrl = `http://localhost:${port}`;
-    }
-
-    // Get or create OpenCode session
-    const sessionId = await this.getOrCreateOpenCodeSession(openCodeUrl);
-
-    // Stream response via SSE
-    const fullOutput = await this.streamFromOpenCode(
-      sandbox,
-      openCodeUrl,
-      sessionId,
-      prompt,
-      assistantMessageId,
-      onDelta,
-      onOpenCodeEvent,
-      apiUrl,
-      apiToken
-    );
-
-    // Collect files and create snapshot
-    const { fileChanges, manifestHash, previousManifestHash } = await this.collectAndUploadFiles(
-      sandbox, apiUrl, apiToken, workDir
-    );
-
-    return {
-      output: fullOutput,
-      fileChanges,
-      manifestHash,
-      previousManifestHash,
-    };
   }
 
   /**
    * Get or create an OpenCode session for this conversation
    */
-  private async getOrCreateOpenCodeSession(openCodeUrl: string): Promise<string> {
+  private async getOrCreateOpenCodeSession(openCodeUrl: string, workDir?: string): Promise<string> {
     const state = await this.ensureState();
 
     // Reuse existing session if available
     if (state.openCodeSessionId) {
       try {
         // Verify session still exists
-        const response = await fetch(`${openCodeUrl}/session/${state.openCodeSessionId}`);
+        const response = await fetch(`${openCodeUrl}/session/${state.openCodeSessionId}${this.getOpenCodeDirQuery(workDir)}`);
         if (response.ok) {
           return state.openCodeSessionId;
         }
@@ -606,7 +809,7 @@ export class ConversationSession extends DurableObject<Env> {
     }
 
     // Create new session
-    const response = await fetch(`${openCodeUrl}/session`, {
+    const response = await fetch(`${openCodeUrl}/session${this.getOpenCodeDirQuery(workDir)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: `conversation-${state.conversationId}` }),
@@ -620,15 +823,90 @@ export class ConversationSession extends DurableObject<Env> {
     state.openCodeSessionId = session.id;
     await this.ctx.storage.put('state', state);
 
-    await this.replayOpenCodeContext(openCodeUrl, session.id, state);
+    await this.replayOpenCodeContext(openCodeUrl, session.id, state, workDir);
 
     return session.id;
+  }
+
+  private async getOpenCodeUrl(apiUrl: string, apiToken: string, workDir?: string): Promise<string> {
+    const sandbox = await this.getSandboxRunner();
+    const effectiveWorkDir = workDir || this.getSandboxWorkDir(sandbox);
+    const openCodeDirectory = this.getOpenCodeDirectory(effectiveWorkDir);
+
+    if (sandbox.type === 'e2b') {
+      const port = await this.ensureOpenCodeServeE2B(sandbox, openCodeDirectory);
+      const host = sandbox.getHost ? sandbox.getHost(port) : '';
+      if (!host) {
+        throw new Error('Failed to resolve OpenCode host for E2B sandbox');
+      }
+      const url = host.startsWith('http') ? host : `https://${host}`;
+      return url.replace(/\/+$/, '');
+    }
+
+    let openCodeUrl = (this.env.OPENCODE_URL || '').trim();
+    if (openCodeUrl) {
+      return openCodeUrl.replace(/\/+$/, '');
+    }
+
+    const port = await this.ensureOpenCodeServe(sandbox, effectiveWorkDir, apiUrl, apiToken);
+    return `http://localhost:${port}`;
+  }
+
+  private getOpenCodeDirectory(workDir: string): string {
+    const base = (this.env.OPENCODE_WORKDIR || '').trim();
+    if (base) {
+      return `${base.replace(/\/+$/, '')}/conversation-${this.ctx.id.toString()}`;
+    }
+    return workDir;
+  }
+
+  private getSandboxWorkDir(sandbox: SandboxRunner): string {
+    return sandbox.type === 'e2b' ? '/home/user/workspace' : '/workspace';
+  }
+
+
+  private async replyOpenCodeQuestion(
+    requestId: string,
+    answers: string[][],
+    apiUrl: string,
+    apiToken: string
+  ): Promise<void> {
+    const sandbox = await this.getSandboxRunner();
+    const workDir = this.getSandboxWorkDir(sandbox);
+    const openCodeUrl = await this.getOpenCodeUrl(apiUrl, apiToken, workDir);
+    const openCodeDirectory = this.getOpenCodeDirectory(workDir);
+    const response = await fetch(`${openCodeUrl}/question/${requestId}/reply${this.getOpenCodeDirQuery(openCodeDirectory)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed to reply to OpenCode question: ${response.status} ${text}`);
+    }
+  }
+
+  private async rejectOpenCodeQuestion(
+    requestId: string,
+    apiUrl: string,
+    apiToken: string
+  ): Promise<void> {
+    const sandbox = await this.getSandboxRunner();
+    const workDir = this.getSandboxWorkDir(sandbox);
+    const openCodeUrl = await this.getOpenCodeUrl(apiUrl, apiToken, workDir);
+    const openCodeDirectory = this.getOpenCodeDirectory(workDir);
+    const response = await fetch(`${openCodeUrl}/question/${requestId}/reject${this.getOpenCodeDirQuery(openCodeDirectory)}`, { method: 'POST' });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed to reject OpenCode question: ${response.status} ${text}`);
+    }
   }
 
   private async replayOpenCodeContext(
     openCodeUrl: string,
     sessionId: string,
-    state: ConversationState
+    state: ConversationState,
+    workDir?: string
   ): Promise<void> {
     if (!state.openCodeMessages || Object.keys(state.openCodeMessages).length === 0) {
       return;
@@ -640,7 +918,7 @@ export class ConversationSession extends DurableObject<Env> {
     const provider = this.env.PROVIDER || 'anthropic';
     const model = this.getDefaultModel(provider);
 
-    await fetch(`${openCodeUrl}/session/${sessionId}/message`, {
+    await fetch(`${openCodeUrl}/session/${sessionId}/message${this.getOpenCodeDirQuery(workDir)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -650,6 +928,11 @@ export class ConversationSession extends DurableObject<Env> {
         system: 'Conversation history (restored).',
       }),
     });
+  }
+
+  private getOpenCodeDirQuery(workDir?: string): string {
+    if (!workDir) return '';
+    return `?directory=${encodeURIComponent(workDir)}`;
   }
 
   private buildOpenCodeTranscript(
@@ -707,13 +990,14 @@ export class ConversationSession extends DurableObject<Env> {
    * Stream response from OpenCode using fetch with SSE
    */
   private async streamFromOpenCode(
-    _sandbox: Sandbox,
+    _sandbox: SandboxRunner,
     openCodeUrl: string,
     sessionId: string,
     prompt: string,
     assistantMessageId: string,
     onDelta: (delta: string) => void,
     onOpenCodeEvent: (payload: { type?: string; properties?: Record<string, unknown> }) => void,
+    openCodeDirectory: string,
     apiUrl: string,
     apiToken: string
   ): Promise<string> {
@@ -742,12 +1026,22 @@ export class ConversationSession extends DurableObject<Env> {
     let fullOutput = '';
     let messageComplete = false;
     const lastTextByPartId = new Map<string, string>();
+    const assistantMessageIds = new Set<string>();
 
     // Subscribe to SSE events (use /global/event for wrapped payload format)
     console.log(`[OpenCode] Subscribing to event stream...`);
-    const eventResponse = await fetch(`${openCodeUrl}/global/event`, {
-      headers: { Accept: 'text/event-stream' },
-    });
+    let eventResponse: Response;
+    try {
+      eventResponse = await fetch(`${openCodeUrl}/global/event${this.getOpenCodeDirQuery(openCodeDirectory)}`, {
+        headers: { Accept: 'text/event-stream' },
+      });
+    } catch (err) {
+      console.error('[OpenCode] Event stream fetch failed', {
+        url: `${openCodeUrl}/global/event${this.getOpenCodeDirQuery(openCodeDirectory)}`,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
 
     console.log(`[OpenCode] Event stream response: ${eventResponse.status}`);
     if (!eventResponse.ok || !eventResponse.body) {
@@ -756,14 +1050,23 @@ export class ConversationSession extends DurableObject<Env> {
 
     // Send prompt asynchronously (returns 204 immediately)
     console.log(`[OpenCode] Sending prompt async...`);
-    const promptResponse = await fetch(`${openCodeUrl}/session/${sessionId}/prompt_async`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parts: [{ type: 'text', text: prompt }],
-        model: { providerID: provider, modelID: model },
-      }),
-    });
+    let promptResponse: Response;
+    try {
+      promptResponse = await fetch(`${openCodeUrl}/session/${sessionId}/prompt_async${this.getOpenCodeDirQuery(openCodeDirectory)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parts: [{ type: 'text', text: prompt }],
+          model: { providerID: provider, modelID: model },
+        }),
+      });
+    } catch (err) {
+      console.error('[OpenCode] Prompt fetch failed', {
+        url: `${openCodeUrl}/session/${sessionId}/prompt_async${this.getOpenCodeDirQuery(openCodeDirectory)}`,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
 
     console.log(`[OpenCode] Prompt response: ${promptResponse.status}`);
     if (!promptResponse.ok && promptResponse.status !== 204) {
@@ -809,7 +1112,7 @@ export class ConversationSession extends DurableObject<Env> {
                   console.log(`[OpenCode] Event #${eventCount}: ${payload.type}`);
                 }
 
-                if (payload?.type?.startsWith('message.')) {
+                if (payload?.type?.startsWith('message.') || payload?.type?.startsWith('question.')) {
                   this.broadcast({ type: 'opencode_event', messageId: assistantMessageId, event: data });
                   onOpenCodeEvent(payload);
                 }
@@ -840,7 +1143,24 @@ export class ConversationSession extends DurableObject<Env> {
                       }
                     }
 
-                    if (delta) {
+                    const partMessageId = part?.messageID as string | undefined;
+                    const isAssistantPart = partMessageId ? assistantMessageIds.has(partMessageId) : false;
+
+                    if (part?.type === 'tool') {
+                      const state = part?.state as { status?: string; output?: string; raw?: string } | undefined;
+                      if (state?.status === 'completed' || state?.status === 'error') {
+                        const output = (state?.output || state?.raw || '').toString();
+                        if (output.includes('exit status') || state?.status === 'error') {
+                          console.error('[OpenCode] Tool part error', {
+                            tool: part?.tool,
+                            status: state?.status,
+                            output: output.slice(0, 2000),
+                          });
+                        }
+                      }
+                    }
+
+                    if (delta && isAssistantPart) {
                       console.log(`[OpenCode] Broadcasting delta: ${delta.substring(0, 50)}...`);
                       fullOutput += delta;
                       onDelta(delta);
@@ -850,11 +1170,21 @@ export class ConversationSession extends DurableObject<Env> {
                   case 'message.updated':
                     // Check for completion signals: finish status or time.completed present
                     const info = payload.properties?.info;
+                    if (info?.role === 'assistant' && info?.id) {
+                      assistantMessageIds.add(info.id);
+                    }
                     const isComplete = info?.finish === 'stop' ||
                                        info?.finish === 'end_turn' ||
                                        (info?.time?.completed !== undefined);
                     console.log(`[OpenCode] Message updated, finish: ${info?.finish}, completed: ${info?.time?.completed}, isComplete: ${isComplete}`);
                     if (isComplete) {
+                      messageComplete = true;
+                    }
+                    break;
+
+                  case 'session.status':
+                    if (payload.properties?.status?.type === 'idle') {
+                      console.log(`[OpenCode] Session status idle - marking complete`);
                       messageComplete = true;
                     }
                     break;
@@ -878,6 +1208,12 @@ export class ConversationSession extends DurableObject<Env> {
           }
         }
       }
+    } catch (err) {
+      console.error('[OpenCode] Stream error', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     } finally {
       console.log(`[OpenCode] Finished. Total events: ${eventCount}, Output length: ${fullOutput.length}`);
       reader.cancel();
@@ -971,7 +1307,7 @@ export class ConversationSession extends DurableObject<Env> {
    * Ensure OpenCode serve is running, start if needed
    */
   private async ensureOpenCodeServe(
-    sandbox: Sandbox,
+    sandbox: SandboxRunner,
     workDir: string,
     apiUrl: string,
     apiToken: string
@@ -1065,16 +1401,88 @@ export class ConversationSession extends DurableObject<Env> {
     );
   }
 
+  private async ensureOpenCodeServeE2B(
+    sandbox: SandboxRunner,
+    workDir: string
+  ): Promise<number> {
+    const port = 4096;
+
+    try {
+      const check = await sandbox.exec(`curl -s http://127.0.0.1:${port}/doc`);
+      if (check.success && check.stdout.includes('"openapi"')) {
+        return port;
+      }
+    } catch (err) {
+      console.error('[OpenCode] Preflight check failed in E2B', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const which = await sandbox.exec('which opencode');
+    if (!which.success) {
+      const templateId = (this.env.E2B_TEMPLATE_ID || '').trim();
+      if (templateId) {
+        throw new Error('OpenCode not found in E2B template. Rebuild template with opencode installed.');
+      }
+      const install = await sandbox.exec('npm install -g opencode-ai');
+      if (!install.success) {
+        throw new Error(`OpenCode install failed in E2B sandbox: ${install.stderr || install.stdout}`);
+      }
+    }
+
+    if (!sandbox.runBackground) {
+      throw new Error('E2B sandbox runner does not support background commands');
+    }
+
+    await sandbox.exec(`mkdir -p "${workDir}"`);
+    await sandbox.runBackground(
+      `nohup opencode serve --port ${port} --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &`,
+      { cwd: workDir }
+    );
+
+    // Wait for server to become ready
+    for (let i = 0; i < 30; i++) {
+      try {
+        const ready = await sandbox.exec(`curl -s http://127.0.0.1:${port}/doc`);
+        if (ready.success && ready.stdout.includes('"openapi"')) {
+          return port;
+        }
+      } catch (err) {
+        console.error('[OpenCode] Readiness check failed in E2B', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    try {
+      const psCheck = await sandbox.exec(`ps aux | grep -i opencode | grep -v grep || true`);
+      const logResult = await sandbox.exec(`tail -200 /tmp/opencode.log 2>/dev/null || true`);
+      const logText = (logResult.stdout || logResult.stderr || '').trim();
+      const psText = (psCheck.stdout || psCheck.stderr || '').trim();
+      throw new Error(
+        `OpenCode failed to start in E2B sandbox${logText ? `\n\nLogs:\n${logText}` : ''}${psText ? `\n\nProcesses:\n${psText}` : ''}`
+      );
+    } catch (err) {
+      throw new Error('OpenCode failed to start in E2B sandbox');
+    }
+  }
+
   /**
    * Restore files from a manifest hash
    */
   private async restoreFiles(
-    sandbox: Sandbox,
+    sandbox: SandboxRunner,
     apiUrl: string,
     apiToken: string,
     manifestHash: string,
     workDir: string
   ): Promise<void> {
+    if (sandbox.type === 'e2b') {
+      await this.restoreFilesE2B(apiUrl, apiToken, manifestHash, workDir);
+      return;
+    }
+
     const sandboxApiUrl = this.getSandboxApiUrl(apiUrl);
     // Download manifest
     const manifestResponse = await fetch(`${apiUrl}/v1/blobs/manifests/${manifestHash}`, {
@@ -1119,7 +1527,7 @@ export class ConversationSession extends DurableObject<Env> {
    * Initialize workspace from base snapshot if available
    */
   private async initializeWorkspace(
-    sandbox: Sandbox,
+    sandbox: SandboxRunner,
     apiUrl: string,
     apiToken: string,
     workDir: string
@@ -1160,11 +1568,15 @@ export class ConversationSession extends DurableObject<Env> {
    * Returns file changes with proper diff against previous manifest
    */
   private async collectAndUploadFiles(
-    sandbox: Sandbox,
+    sandbox: SandboxRunner,
     apiUrl: string,
     apiToken: string,
     workDir: string
   ): Promise<{ fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
+    if (sandbox.type === 'e2b') {
+      return this.collectAndUploadFilesE2B(apiUrl, apiToken, workDir);
+    }
+
     const sandboxApiUrl = this.getSandboxApiUrl(apiUrl);
     const state = await this.ensureState();
     const previousManifestHash = state.lastManifestHash;
@@ -1297,6 +1709,199 @@ export class ConversationSession extends DurableObject<Env> {
     return { fileChanges, manifestHash, previousManifestHash };
   }
 
+  private resolveApiUrl(apiUrl: string, pathOrUrl: string): string {
+    if (pathOrUrl.startsWith('http')) return pathOrUrl;
+    const base = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+    const suffix = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+    return `${base}${suffix}`;
+  }
+
+  private async restoreFilesE2B(
+    apiUrl: string,
+    apiToken: string,
+    manifestHash: string,
+    workDir: string
+  ): Promise<void> {
+    const sandbox = await this.getE2BSandbox();
+    const manifestResponse = await fetch(`${apiUrl}/v1/blobs/manifests/${manifestHash}`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    });
+
+    if (!manifestResponse.ok) {
+      throw new Error('Failed to download manifest');
+    }
+
+    const manifest = await manifestResponse.json() as { files: Array<{ path: string; hash: string }> };
+    await sandbox.files.makeDir(workDir);
+
+    for (const file of manifest.files) {
+      const filePath = `${workDir}/${file.path}`;
+      const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+      await sandbox.files.makeDir(dirPath);
+
+      const presignResponse = await fetch(`${apiUrl}/v1/blobs/presign-download`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ hashes: [file.hash] }),
+      });
+
+      const { urls } = await presignResponse.json() as { urls: Record<string, string> };
+      const url = this.resolveApiUrl(apiUrl, urls[file.hash]);
+      const blobResponse = await fetch(url, {
+        headers: { Authorization: `Bearer ${apiToken}` },
+      });
+      if (!blobResponse.ok) {
+        throw new Error(`Failed to download blob ${file.hash}`);
+      }
+      const bytes = new Uint8Array(await blobResponse.arrayBuffer());
+      await sandbox.files.write(filePath, bytes);
+    }
+  }
+
+  private async collectAndUploadFilesE2B(
+    apiUrl: string,
+    apiToken: string,
+    workDir: string
+  ): Promise<{ fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
+    const sandbox = await this.getE2BSandbox();
+    const state = await this.ensureState();
+    const previousManifestHash = state.lastManifestHash;
+
+    let previousFiles: Map<string, string> = new Map();
+    if (previousManifestHash) {
+      try {
+        const manifestResponse = await fetch(`${apiUrl}/v1/blobs/manifests/${previousManifestHash}`, {
+          headers: { Authorization: `Bearer ${apiToken}` },
+        });
+        if (manifestResponse.ok) {
+          const prevManifest = await manifestResponse.json() as { files: Array<{ path: string; hash: string }> };
+          for (const f of prevManifest.files) {
+            previousFiles.set(f.path, f.hash);
+          }
+        }
+      } catch {
+        // Ignore - treat as no previous state
+      }
+    }
+
+    const entries = await this.listE2BFiles(sandbox, workDir);
+    const files: Array<{ path: string; hash: string; size: number }> = [];
+    const currentFiles: Map<string, string> = new Map();
+
+    for (const entry of entries) {
+      const relPath = entry.path.replace(`${workDir}/`, '');
+      const bytes = await sandbox.files.read(entry.path, { format: 'bytes' });
+      const hash = await this.computeSHA256Bytes(bytes);
+      const size = typeof entry.size === 'number' ? entry.size : bytes.length;
+      files.push({ path: relPath, hash, size });
+      currentFiles.set(relPath, hash);
+    }
+
+    const fileChanges: FileChange[] = [];
+    for (const [path, hash] of currentFiles) {
+      const prevHash = previousFiles.get(path);
+      if (!prevHash) {
+        fileChanges.push({ path, change: 'added' });
+      } else if (prevHash !== hash) {
+        fileChanges.push({ path, change: 'modified' });
+      }
+    }
+    for (const [path] of previousFiles) {
+      if (!currentFiles.has(path)) {
+        fileChanges.push({ path, change: 'deleted' });
+      }
+    }
+
+    const manifest = {
+      version: '1',
+      files: files.map(f => ({
+        path: f.path,
+        hash: f.hash,
+        size: f.size,
+        mode: 420,
+      })).sort((a, b) => a.path.localeCompare(b.path)),
+    };
+
+    const manifestJson = JSON.stringify(manifest, null, '  ');
+    const manifestHash = await this.computeSHA256(manifestJson);
+
+    const allHashes = [...new Set(files.map(f => f.hash))];
+    const existsResponse = await fetch(`${apiUrl}/v1/blobs/exists`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ hashes: allHashes }),
+    });
+
+    const { missing } = await existsResponse.json() as { missing: string[] };
+
+    for (const file of files) {
+      if (missing.includes(file.hash)) {
+        const fullPath = `${workDir}/${file.path}`;
+        const presignResponse = await fetch(`${apiUrl}/v1/blobs/presign-upload`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ hashes: [file.hash] }),
+        });
+
+        const { urls } = await presignResponse.json() as { urls: Record<string, string> };
+        const url = this.resolveApiUrl(apiUrl, urls[file.hash]);
+        const bytes = await sandbox.files.read(fullPath, { format: 'bytes' });
+        await fetch(url, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${apiToken}` },
+          body: bytes,
+        });
+      }
+    }
+
+    await fetch(`${apiUrl}/v1/blobs/manifests/${manifestHash}`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: manifestJson,
+    });
+
+    return { fileChanges, manifestHash, previousManifestHash };
+  }
+
+  private async listE2BFiles(sandbox: E2BSandbox, root: string): Promise<Array<{ path: string; size: number }>> {
+    const files: Array<{ path: string; size: number }> = [];
+    const queue: string[] = [root];
+
+    while (queue.length > 0) {
+      const dir = queue.shift();
+      if (!dir) break;
+      const entries = await sandbox.files.list(dir, { depth: 1 });
+      for (const entry of entries) {
+        if (!entry.path || entry.path === dir) continue;
+        if (entry.type === 'dir') {
+          queue.push(entry.path);
+        } else if (entry.type === 'file') {
+          files.push({ path: entry.path, size: entry.size });
+        }
+      }
+    }
+
+    return files;
+  }
+
+  private async computeSHA256Bytes(data: Uint8Array): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   private async computeSHA256(text: string): Promise<string> {
     const encoder = new TextEncoder();
     const data = encoder.encode(text);
@@ -1308,7 +1913,11 @@ export class ConversationSession extends DurableObject<Env> {
   private getSandboxApiUrl(apiUrl: string): string {
     try {
       const url = new URL(apiUrl);
-      if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+      if (this.getSandboxProvider() === 'e2b' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')) {
+        console.warn('[Sandbox] E2B provider cannot reach localhost API URL. Use a public URL or tunnel.');
+        return url.toString().replace(/\/$/, '');
+      }
+      if (this.getSandboxProvider() === 'cloudflare' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')) {
         url.hostname = 'host.docker.internal';
         return url.toString().replace(/\/$/, '');
       }
@@ -1317,6 +1926,7 @@ export class ConversationSession extends DurableObject<Env> {
     }
     return apiUrl.replace(/\/$/, '');
   }
+
 
   /**
    * Clear conversation (visual reset)
@@ -1438,7 +2048,7 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
    */
   private async detectProjectType(apiUrl: string, apiToken: string): Promise<ProjectInfo> {
     const state = await this.ensureState();
-    const sandbox = await this.getSandbox();
+    const sandbox = await this.getSandboxRunner();
     const workDir = '/workspace';
 
     // Restore files if needed
@@ -1494,7 +2104,7 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
    */
   private async deploy(deploymentId: string, apiUrl: string, apiToken: string): Promise<void> {
     const state = await this.ensureState();
-    const sandbox = await this.getSandbox();
+    const sandbox = await this.getSandboxRunner();
     const workDir = '/workspace';
 
     // Initialize deployment log
@@ -1628,34 +2238,67 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
    * Run a command with streaming logs
    */
   private async runCommandWithLogs(
-    sandbox: Sandbox,
+    sandbox: SandboxRunner,
     command: string,
     step: DeploymentLogEntry['step'],
     appendLog: (step: DeploymentLogEntry['step'], stream: 'stdout' | 'stderr', content: string) => Promise<void>,
     options?: { env?: Record<string, string>; timeout?: number }
   ): Promise<string> {
-    const stream = await sandbox.execStream(command, options);
-    let fullOutput = '';
+    const summarize = (value?: string) => {
+      if (!value) return '';
+      const trimmed = value.trim();
+      return trimmed.length > 2000 ? `${trimmed.slice(0, 2000)}…` : trimmed;
+    };
+    if (sandbox.execStream) {
+      const stream = await sandbox.execStream(command, options);
+      let fullOutput = '';
 
-    for await (const event of parseSSEStream(stream) as AsyncIterable<ExecEvent>) {
-      switch (event.type) {
-        case 'stdout':
-          fullOutput += event.data;
-          await appendLog(step, 'stdout', event.data);
-          break;
-        case 'stderr':
-          await appendLog(step, 'stderr', event.data);
-          break;
-        case 'complete':
-          if (event.exitCode !== 0) {
-            throw new Error(`Command failed with exit code ${event.exitCode}`);
-          }
-          return fullOutput;
-        case 'error':
-          throw new Error(event.error);
+      for await (const event of parseSSEStream(stream) as AsyncIterable<ExecEvent>) {
+        switch (event.type) {
+          case 'stdout':
+            fullOutput += event.data;
+            await appendLog(step, 'stdout', event.data);
+            break;
+          case 'stderr':
+            await appendLog(step, 'stderr', event.data);
+            break;
+          case 'complete':
+            if (event.exitCode !== 0) {
+              console.error('[Sandbox] Command failed (stream)', {
+                step,
+                command,
+                exitCode: event.exitCode,
+                output: summarize(fullOutput),
+              });
+              throw new Error(`Command failed with exit code ${event.exitCode}`);
+            }
+            return fullOutput;
+          case 'error':
+            console.error('[Sandbox] Command stream error', { step, command, error: event.error });
+            throw new Error(event.error);
+        }
       }
+      return fullOutput;
     }
-    return fullOutput;
+
+    const result = await sandbox.exec(command, { env: options?.env });
+    if (result.stdout) {
+      await appendLog(step, 'stdout', result.stdout);
+    }
+    if (result.stderr) {
+      await appendLog(step, 'stderr', result.stderr);
+    }
+    if (!result.success) {
+      console.error('[Sandbox] Command failed', {
+        step,
+        command,
+        exitCode: result.exitCode,
+        stdout: summarize(result.stdout),
+        stderr: summarize(result.stderr),
+      });
+      throw new Error(`Command failed${result.exitCode !== undefined ? ` with exit code ${result.exitCode}` : ''}`);
+    }
+    return result.stdout || '';
   }
 
   /**

@@ -34,6 +34,14 @@ export interface Env {
   PROVIDER?: string;
   // External OpenCode server URL override (used if sandbox CLI is unavailable)
   OPENCODE_URL?: string;
+  // Optional directory to isolate OpenCode tool effects (host OpenCode)
+  OPENCODE_WORKDIR?: string;
+  // Sandbox provider (cloudflare | e2b)
+  SANDBOX_PROVIDER?: string;
+  // E2B template id (optional)
+  E2B_TEMPLATE_ID?: string;
+  // E2B API key
+  E2B_API_KEY?: string;
   // Google OAuth
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;

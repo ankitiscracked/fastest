@@ -256,6 +256,21 @@ class ApiClient {
     );
   }
 
+  async replyOpenCodeQuestion(conversationId: string, requestId: string, answers: string[][]) {
+    return this.request<{ success: boolean }>(
+      'POST',
+      `/conversations/${conversationId}/opencode-questions/${requestId}/reply`,
+      { answers }
+    );
+  }
+
+  async rejectOpenCodeQuestion(conversationId: string, requestId: string) {
+    return this.request<{ success: boolean }>(
+      'POST',
+      `/conversations/${conversationId}/opencode-questions/${requestId}/reject`
+    );
+  }
+
   async sendMessage(conversationId: string, prompt: string) {
     return this.request<{ message: Message }>(
       'POST',

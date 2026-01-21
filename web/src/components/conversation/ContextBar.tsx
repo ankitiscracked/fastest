@@ -17,7 +17,7 @@ interface ContextBarProps {
   isCreatingProject?: boolean;
   isCreatingWorkspace?: boolean;
   driftCount?: number;
-  runningJobsCount?: number;
+  runningMessagesCount?: number;
 }
 
 export function ContextBar({
@@ -33,7 +33,7 @@ export function ContextBar({
   isCreatingProject = false,
   isCreatingWorkspace = false,
   driftCount = 0,
-  runningJobsCount = 0,
+  runningMessagesCount = 0,
 }: ContextBarProps) {
   const hasSelection = currentProject !== null || currentWorkspace !== null;
 
@@ -101,7 +101,7 @@ export function ContextBar({
       )}
 
       {/* Status Badges */}
-      {runningJobsCount > 0 && (
+      {runningMessagesCount > 0 && (
         <span className="flex items-center gap-1 text-xs text-blue-600 ml-2">
           <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
           running

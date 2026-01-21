@@ -166,8 +166,8 @@ function SuggestionIcon({ icon }: { icon: NonNullable<Suggestion['icon']> }) {
 
 // Helper to generate suggestions based on state
 export function generateSuggestions(options: {
-  lastJobStatus?: 'completed' | 'failed' | 'cancelled' | null;
-  lastJobPrompt?: string;
+  lastMessageStatus?: 'completed' | 'failed' | 'cancelled' | null;
+  lastUserPrompt?: string;
   hasDrift?: boolean;
   driftCount?: number;
   hasUncommittedChanges?: boolean;
@@ -176,14 +176,14 @@ export function generateSuggestions(options: {
 }): Suggestion[] {
   const suggestions: Suggestion[] = [];
 
-  // Failed job - offer retry
-  if (options.lastJobStatus === 'failed' && options.lastJobPrompt) {
+  // Failed message - offer retry
+  if (options.lastMessageStatus === 'failed' && options.lastUserPrompt) {
     suggestions.push({
       id: 'retry',
       label: 'Retry',
       icon: 'retry',
       variant: 'warning',
-      onClick: () => options.onAction('retry', { prompt: options.lastJobPrompt }),
+      onClick: () => options.onAction('retry', { prompt: options.lastUserPrompt }),
     });
   }
 

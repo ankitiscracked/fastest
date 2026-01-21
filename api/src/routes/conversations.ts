@@ -366,6 +366,103 @@ conversationRoutes.post('/:conversationId/messages', async (c) => {
 });
 
 /**
+ * Reply to an OpenCode question request
+ * POST /v1/conversations/:conversationId/opencode-questions/:requestId/reply
+ */
+conversationRoutes.post('/:conversationId/opencode-questions/:requestId/reply', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId, requestId } = c.req.param();
+  const { answers } = await c.req.json<{ answers: string[][] }>();
+
+  const db = createDb(c.env.DB);
+  const result = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .innerJoin(workspaces, eq(conversations.workspaceId, workspaces.id))
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(
+      eq(conversations.id, conversationId),
+      eq(projects.ownerUserId, user.id)
+    ))
+    .limit(1);
+
+  if (result.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  const apiUrl = new URL(c.req.url).origin;
+  const apiToken = c.req.header('Authorization')?.replace('Bearer ', '') || '';
+
+  const response = await stub.fetch(new Request('http://do/opencode-question/reply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requestId, answers, apiUrl, apiToken }),
+  }));
+
+  const data = await response.json();
+  if (!response.ok) {
+    return c.json(data, response.status as 400);
+  }
+
+  return c.json({ success: true });
+});
+
+/**
+ * Reject an OpenCode question request
+ * POST /v1/conversations/:conversationId/opencode-questions/:requestId/reject
+ */
+conversationRoutes.post('/:conversationId/opencode-questions/:requestId/reject', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId, requestId } = c.req.param();
+
+  const db = createDb(c.env.DB);
+  const result = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .innerJoin(workspaces, eq(conversations.workspaceId, workspaces.id))
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(
+      eq(conversations.id, conversationId),
+      eq(projects.ownerUserId, user.id)
+    ))
+    .limit(1);
+
+  if (result.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  const apiUrl = new URL(c.req.url).origin;
+  const apiToken = c.req.header('Authorization')?.replace('Bearer ', '') || '';
+
+  const response = await stub.fetch(new Request('http://do/opencode-question/reject', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requestId, apiUrl, apiToken }),
+  }));
+
+  const data = await response.json();
+  if (!response.ok) {
+    return c.json(data, response.status as 400);
+  }
+
+  return c.json({ success: true });
+});
+
+/**
  * Clear conversation messages
  * POST /v1/conversations/:conversationId/clear
  */

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import type { Project, Workspace, ConversationWithContext, TimelineItem } from '@fastest/shared';
 import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo, type DeploymentLogEntry } from '../api/client';
-import type { OpenCodeEvent, OpenCodeGlobalEvent, OpenCodePart } from '../api/opencode';
+import type { OpenCodeEvent, OpenCodeGlobalEvent, OpenCodePart, OpenCodeQuestionRequest } from '../api/opencode';
 import {
   ConversationMessage,
   PromptInput,
@@ -153,6 +153,7 @@ export function ConversationView() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [showTimeline, setShowTimeline] = useState(true);
   const [opencodePartsByMessageId, setOpencodePartsByMessageId] = useState<Record<string, OpenCodePart[]>>({});
+  const [opencodeQuestionsByMessageId, setOpencodeQuestionsByMessageId] = useState<Record<string, OpenCodeQuestionRequest[]>>({});
 
   // Deployment state
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
@@ -233,6 +234,31 @@ export function ConversationView() {
     if (!payload || typeof payload.type !== 'string') return;
     if (payload.type === 'message.part.updated') {
       upsertOpenCodePart(messageId, payload);
+    }
+    if (payload.type === 'question.asked') {
+      const request = payload.properties as OpenCodeQuestionRequest;
+      const questionMessageId = request?.tool?.messageID || messageId;
+      if (questionMessageId) {
+        setOpencodeQuestionsByMessageId(prev => {
+          const existing = prev[questionMessageId] || [];
+          if (existing.some((q) => q.id === request.id)) return prev;
+          return { ...prev, [questionMessageId]: [...existing, request] };
+        });
+      }
+    }
+    if (payload.type === 'question.replied' || payload.type === 'question.rejected') {
+      const requestId = (payload.properties as { requestID?: string } | undefined)?.requestID;
+      if (!requestId) return;
+      setOpencodeQuestionsByMessageId(prev => {
+        const next = { ...prev };
+        for (const [id, list] of Object.entries(next)) {
+          const filtered = list.filter((q) => q.id !== requestId);
+          if (filtered.length !== list.length) {
+            next[id] = filtered;
+          }
+        }
+        return next;
+      });
     }
   };
 
@@ -406,6 +432,7 @@ export function ConversationView() {
           })
         )
       );
+      setOpencodeQuestionsByMessageId({});
 
       // Check if any message is running
       const running = messagesRes.messages.find((m) => m.status === 'running');
@@ -642,8 +669,31 @@ export function ConversationView() {
     }
   };
 
-  // Convert Message to Job-like structure for existing components
-  const messagesAsJobs = messages.map(m => ({
+  const handleQuestionSubmit = async (requestId: string, answers: string[][]) => {
+    if (!conversationId) return;
+    try {
+      await api.replyOpenCodeQuestion(conversationId, requestId, answers);
+    } catch (err) {
+      console.error('Failed to reply to question:', err);
+      setError(err instanceof Error ? err.message : 'Failed to reply to question');
+    }
+  };
+
+  const handleQuestionReject = async (requestId: string) => {
+    if (!conversationId) return;
+    try {
+      await api.rejectOpenCodeQuestion(conversationId, requestId);
+    } catch (err) {
+      console.error('Failed to reject question:', err);
+      setError(err instanceof Error ? err.message : 'Failed to reject question');
+    }
+  };
+
+  const sortedMessages = [...messages].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+
+  const conversationMessages = sortedMessages.map((m) => ({
     id: m.id,
     workspace_id: conversation?.workspace_id || '',
     project_id: conversation?.project_id || '',
@@ -658,8 +708,8 @@ export function ConversationView() {
   // Generate suggestions based on current state
   const lastMessage = messages.filter(m => m.role === 'assistant').slice(-1)[0];
   const suggestions = generateSuggestions({
-    lastJobStatus: lastMessage?.status === 'failed' ? 'failed' : null,
-    lastJobPrompt: messages.filter(m => m.role === 'user').slice(-1)[0]?.content,
+    lastMessageStatus: lastMessage?.status === 'failed' ? 'failed' : null,
+    lastUserPrompt: sortedMessages.filter(m => m.role === 'user').slice(-1)[0]?.content,
     hasDrift: false,
     driftCount: 0,
     hasUncommittedChanges: messages.some((m) => m.status === 'completed' && m.filesChanged?.length),
@@ -836,15 +886,18 @@ export function ConversationView() {
             {messages.length === 0 ? (
               <EmptyState />
             ) : (
-              messagesAsJobs
+              conversationMessages
                 .filter(j => j.prompt || j.output || j.status === 'running')
-                .map((job) => (
+                .map((message) => (
                   <ConversationMessage
-                    key={job.id}
-                    job={job as any}
-                    isStreaming={job.id === runningMessageId}
-                    streamingContent={job.id === runningMessageId ? streamingContent : undefined}
-                    parts={opencodePartsByMessageId[job.id]}
+                    key={message.id}
+                    message={message as any}
+                    isStreaming={message.id === runningMessageId}
+                    streamingContent={message.id === runningMessageId ? streamingContent : undefined}
+                    parts={opencodePartsByMessageId[message.id]}
+                    questions={opencodeQuestionsByMessageId[message.id]}
+                    onQuestionSubmit={handleQuestionSubmit}
+                    onQuestionReject={handleQuestionReject}
                   />
                 ))
             )}
@@ -882,7 +935,7 @@ export function ConversationView() {
             onCreateWorkspace={handleCreateWorkspace}
             isCreatingProject={isCreatingProject}
             isCreatingWorkspace={isCreatingWorkspace}
-            runningJobsCount={runningMessageId ? 1 : 0}
+            runningMessagesCount={runningMessageId ? 1 : 0}
           />
 
           <div className="flex items-center justify-between">

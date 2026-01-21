@@ -23,6 +23,28 @@ export type OpenCodePart =
   | OpenCodeReasoningPart
   | OpenCodeGenericPart;
 
+export type OpenCodeQuestionRequest = {
+  id: string;
+  sessionID: string;
+  questions: OpenCodeQuestionInfo[];
+  tool?: {
+    messageID: string;
+    callID: string;
+  };
+};
+
+export type OpenCodeQuestionInfo = {
+  question: string;
+  header: string;
+  options: OpenCodeQuestionOption[];
+  multiple?: boolean;
+};
+
+export type OpenCodeQuestionOption = {
+  label: string;
+  description: string;
+};
+
 export type OpenCodeBasePart = {
   id?: string;
   sessionID?: string;
