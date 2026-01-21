@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import type { Project, Workspace, ConversationWithContext, TimelineItem } from '@fastest/shared';
 import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo, type DeploymentLogEntry } from '../api/client';
+import type { OpenCodeEvent, OpenCodeGlobalEvent, OpenCodePart } from '../api/opencode';
 import {
   ConversationMessage,
   PromptInput,
@@ -151,6 +152,7 @@ export function ConversationView() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [showTimeline, setShowTimeline] = useState(true);
+  const [opencodePartsByMessageId, setOpencodePartsByMessageId] = useState<Record<string, OpenCodePart[]>>({});
 
   // Deployment state
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
@@ -180,6 +182,7 @@ export function ConversationView() {
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const pendingPromptSent = useRef(false);
+  const handleStreamEventRef = useRef<(event: StreamEvent) => void>(() => {});
 
   // Load conversation when conversationId changes
   useEffect(() => {
@@ -193,9 +196,49 @@ export function ConversationView() {
     conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent]);
 
+  const upsertOpenCodePart = (messageId: string, event: OpenCodeEvent) => {
+    const part = event.properties?.part;
+    if (!part) return;
+    const delta = typeof event.properties?.delta === 'string' ? event.properties?.delta : undefined;
+    const partId = (part as OpenCodePart).id || `${part.type}-${messageId}`;
+
+    setOpencodePartsByMessageId(prev => {
+      const existing = prev[messageId] || [];
+      const idx = existing.findIndex(p => (p.id || `${p.type}-${messageId}`) === partId);
+      const prevPart = idx >= 0 ? existing[idx] : undefined;
+      let nextPart: OpenCodePart = { ...(prevPart || {}), ...(part as OpenCodePart) };
+
+      if (nextPart.type === 'text') {
+        const prevText = (prevPart as OpenCodePart | undefined)?.type === 'text' ? (prevPart as any).text : '';
+        const incomingText = (part as any).text;
+        if (typeof incomingText === 'string') {
+          (nextPart as any).text = incomingText;
+        } else if (delta) {
+          (nextPart as any).text = `${prevText || ''}${delta}`;
+        }
+      }
+
+      if (idx >= 0) {
+        const updated = [...existing];
+        updated[idx] = nextPart;
+        return { ...prev, [messageId]: updated };
+      }
+
+      return { ...prev, [messageId]: [...existing, nextPart] };
+    });
+  };
+
+  const handleOpenCodeEvent = (messageId: string, globalEvent: OpenCodeGlobalEvent) => {
+    const payload = globalEvent.payload;
+    if (!payload || typeof payload.type !== 'string') return;
+    if (payload.type === 'message.part.updated') {
+      upsertOpenCodePart(messageId, payload);
+    }
+  };
+
 
   // Handle WebSocket stream events
-  const handleStreamEvent = useCallback((event: StreamEvent) => {
+  const handleStreamEvent = (event: StreamEvent) => {
     switch (event.type) {
       case 'message_start':
         // Update the placeholder message ID to match the server's ID
@@ -239,6 +282,10 @@ export function ConversationView() {
         });
         setRunningMessageId(null);
         setStreamingContent('');
+        break;
+
+      case 'opencode_event':
+        handleOpenCodeEvent(event.messageId, event.event);
         break;
 
       case 'timeline_item':
@@ -291,7 +338,9 @@ export function ConversationView() {
         setStreamingContent('');
         break;
     }
-  }, []);
+  };
+
+  handleStreamEventRef.current = handleStreamEvent;
 
   // Connect WebSocket when conversation changes
   useEffect(() => {
@@ -303,7 +352,7 @@ export function ConversationView() {
     }
 
     // Connect to stream
-    const ws = api.connectStream(conversationId, handleStreamEvent);
+    const ws = api.connectStream(conversationId, (event) => handleStreamEventRef.current(event));
     wsRef.current = ws;
 
     return () => {
@@ -313,8 +362,6 @@ export function ConversationView() {
         ws.close();
       }
     };
-    // handleStreamEvent is stable (empty deps) so we exclude it to prevent reconnections
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
   // Handle pending prompt from home page
@@ -340,16 +387,25 @@ export function ConversationView() {
       setConversation(conv);
 
       // Load messages, timeline, and deployments in parallel
-      const [messagesRes, timelineRes, deploymentsRes] = await Promise.all([
+      const [messagesRes, timelineRes, deploymentsRes, openCodeRes] = await Promise.all([
         api.getMessages(convId),
         api.getTimeline(convId).catch(() => ({ timeline: [] })),
         api.getDeployments(convId).catch(() => ({ deployments: [], projectInfo: null })),
+        api.getOpenCodeMessages(convId).catch(() => ({ messages: {} })),
       ]);
 
       setMessages(messagesRes.messages);
       setTimeline(timelineRes.timeline);
       setDeployments(deploymentsRes.deployments);
       setProjectInfo(deploymentsRes.projectInfo);
+      setOpencodePartsByMessageId(
+        Object.fromEntries(
+          Object.entries(openCodeRes.messages || {}).map(([id, value]) => {
+            const record = value as { parts?: OpenCodePart[] };
+            return [id, record.parts || []];
+          })
+        )
+      );
 
       // Check if any message is running
       const running = messagesRes.messages.find((m) => m.status === 'running');
@@ -788,6 +844,7 @@ export function ConversationView() {
                     job={job as any}
                     isStreaming={job.id === runningMessageId}
                     streamingContent={job.id === runningMessageId ? streamingContent : undefined}
+                    parts={opencodePartsByMessageId[job.id]}
                   />
                 ))
             )}

@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+@source "../node_modules/streamdown/dist/index.js";
+
 body {
   @apply bg-gray-50 text-gray-900 antialiased;
 }

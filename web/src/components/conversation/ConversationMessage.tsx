@@ -1,3 +1,6 @@
+import { MarkdownContent } from './MarkdownContent';
+import { OpenCodeParts } from './OpenCodeParts';
+
 type MessageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 // Message display data
@@ -15,9 +18,11 @@ interface ConversationMessageProps {
   job: MessageData;
   isStreaming?: boolean;
   streamingContent?: string;
+  parts?: import('../../api/opencode').OpenCodePart[];
 }
 
-export function ConversationMessage({ job, isStreaming, streamingContent }: ConversationMessageProps) {
+export function ConversationMessage({ job, isStreaming, streamingContent, parts }: ConversationMessageProps) {
+  const hasParts = !!parts && parts.length > 0;
   return (
     <div className="space-y-3">
       {/* User message - only render if there's a prompt */}
@@ -45,8 +50,10 @@ export function ConversationMessage({ job, isStreaming, streamingContent }: Conv
 
             {job.status === 'running' && (
               <div className="space-y-2">
-                {isStreaming && streamingContent ? (
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{streamingContent}</p>
+                {hasParts ? (
+                  <OpenCodeParts parts={parts} />
+                ) : isStreaming && streamingContent ? (
+                  <MarkdownContent content={streamingContent} mode="streaming" />
                 ) : (
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
@@ -59,7 +66,9 @@ export function ConversationMessage({ job, isStreaming, streamingContent }: Conv
             {job.status === 'completed' && (
               <div className="space-y-3">
                 {job.output ? (
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{job.output}</p>
+                  <MarkdownContent content={job.output} mode="static" />
+                ) : hasParts ? (
+                  <OpenCodeParts parts={parts} />
                 ) : (
                   <p className="text-sm text-gray-700">Task completed successfully.</p>
                 )}

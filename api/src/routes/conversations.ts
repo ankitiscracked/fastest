@@ -261,6 +261,43 @@ conversationRoutes.get('/:conversationId/messages', async (c) => {
   return c.json(data);
 });
 
+// Get persisted OpenCode message parts (mapped to conversation message IDs)
+conversationRoutes.get('/:conversationId/opencode-messages', async (c) => {
+  const { conversationId } = c.req.param();
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const db = createDb(c.env.DB);
+  const result = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .innerJoin(workspaces, eq(conversations.workspaceId, workspaces.id))
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(
+      eq(conversations.id, conversationId),
+      eq(projects.ownerUserId, user.id)
+    ))
+    .limit(1);
+
+  if (result.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  const response = await stub.fetch(new Request('http://do/opencode-messages'));
+  const data = await response.json();
+
+  if (!response.ok) {
+    return c.json(data, response.status as 404);
+  }
+
+  return c.json(data);
+});
+
 /**
  * Send a message to the conversation
  * POST /v1/conversations/:conversationId/messages

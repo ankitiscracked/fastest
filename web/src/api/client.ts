@@ -39,6 +39,7 @@ export type {
   DeploymentLog,
 } from '@fastest/shared';
 import type { TimelineItem, DeploymentLogEntry } from '@fastest/shared';
+import type { OpenCodeGlobalEvent } from './opencode';
 
 // Deployment types
 export interface ProjectInfo {
@@ -62,6 +63,7 @@ export type StreamEvent =
   | { type: 'status'; status: Message['status'] }
   | { type: 'files_changed'; files: string[] }
   | { type: 'message_complete'; message: Message }
+  | { type: 'opencode_event'; messageId: string; event: OpenCodeGlobalEvent }
   | { type: 'timeline_item'; item: TimelineItem }
   | { type: 'timeline_summary'; itemId: string; summary: string }
   | { type: 'project_info'; info: ProjectInfo }
@@ -244,6 +246,13 @@ class ApiClient {
     return this.request<{ messages: Message[] }>(
       'GET',
       `/conversations/${conversationId}/messages${query}`
+    );
+  }
+
+  async getOpenCodeMessages(conversationId: string) {
+    return this.request<{ messages: Record<string, { info?: Record<string, unknown>; parts: import('./opencode').OpenCodePart[] }> }>(
+      'GET',
+      `/conversations/${conversationId}/opencode-messages`
     );
   }
 

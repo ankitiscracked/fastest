@@ -56,6 +56,12 @@ interface ConversationState {
   workspaceId: string;
   projectId: string;
   messages: Message[];
+  openCodeMessages?: Record<string, {
+    info?: Record<string, unknown>;
+    parts: Record<string, Record<string, unknown>>;
+    partsOrder: string[];
+  }>;
+  openCodeMessageIdMap?: Record<string, string>;
 
   // Timeline of file changes
   timeline: TimelineItem[];
@@ -86,6 +92,7 @@ type StreamEvent =
   | { type: 'status'; status: Message['status'] }
   | { type: 'files_changed'; files: string[] }
   | { type: 'message_complete'; message: Message }
+  | { type: 'opencode_event'; messageId: string; event: unknown }
   | { type: 'timeline_item'; item: TimelineItem }
   | { type: 'timeline_summary'; itemId: string; summary: string }
   | { type: 'project_info'; info: ProjectInfo }
@@ -136,6 +143,8 @@ export class ConversationSession extends DurableObject<Env> {
       workspaceId,
       projectId,
       messages: [],
+      openCodeMessages: {},
+      openCodeMessageIdMap: {},
       timeline: [],
       deployments: [],
       autoCommitOnClear: false,
@@ -173,6 +182,24 @@ export class ConversationSession extends DurableObject<Env> {
     }
 
     return messages;
+  }
+
+  async getOpenCodeMessagesByConversationMessageId(): Promise<Record<string, { info?: Record<string, unknown>; parts: Record<string, unknown>[] }>> {
+    const state = await this.ensureState();
+    const openCodeMessages = state.openCodeMessages || {};
+    const idMap = state.openCodeMessageIdMap || {};
+    const mapped: Record<string, { info?: Record<string, unknown>; parts: Record<string, unknown>[] }> = {};
+
+    for (const [openCodeMessageId, record] of Object.entries(openCodeMessages)) {
+      const conversationMessageId = idMap[openCodeMessageId];
+      if (!conversationMessageId) continue;
+      const parts = record.partsOrder.length > 0
+        ? record.partsOrder.map(id => record.parts[id]).filter(Boolean)
+        : Object.values(record.parts);
+      mapped[conversationMessageId] = { info: record.info, parts };
+    }
+
+    return mapped;
   }
 
   /**
@@ -226,6 +253,11 @@ export class ConversationSession extends DurableObject<Env> {
         limit ? parseInt(limit) : undefined,
         before || undefined
       );
+      return Response.json({ messages });
+    }
+
+    if (url.pathname === '/opencode-messages' && request.method === 'GET') {
+      const messages = await this.getOpenCodeMessagesByConversationMessageId();
       return Response.json({ messages });
     }
 
@@ -365,15 +397,66 @@ export class ConversationSession extends DurableObject<Env> {
     this.broadcast({ type: 'status', status: 'running' });
 
     try {
+      const handleOpenCodeEvent = (payload: { type?: string; properties?: Record<string, unknown> }) => {
+        if (!payload?.type) return;
+        if (!state.openCodeMessages) {
+          state.openCodeMessages = {};
+        }
+        if (!state.openCodeMessageIdMap) {
+          state.openCodeMessageIdMap = {};
+        }
+
+        if (payload.type === 'message.updated') {
+          const info = (payload.properties as { info?: Record<string, unknown> } | undefined)?.info;
+          const id = info?.id as string | undefined;
+          if (!id) return;
+          if (!state.openCodeMessages[id]) {
+            state.openCodeMessages[id] = { parts: {}, partsOrder: [] };
+          }
+          state.openCodeMessages[id].info = info;
+          const role = info?.role as string | undefined;
+          if (role === 'assistant') {
+            state.openCodeMessageIdMap[id] = assistantMessage.id;
+          }
+          return;
+        }
+
+        if (payload.type === 'message.part.updated') {
+          const part = (payload.properties as { part?: Record<string, unknown>; delta?: string } | undefined)?.part;
+          if (!part) return;
+          const messageId = part.messageID as string | undefined;
+          if (!messageId) return;
+          if (!state.openCodeMessages[messageId]) {
+            state.openCodeMessages[messageId] = { parts: {}, partsOrder: [] };
+          }
+          const record = state.openCodeMessages[messageId];
+          const partId = (part.id as string | undefined) || `${part.type || 'part'}-${messageId}`;
+          const prevPart = record.parts[partId] || {};
+          const nextPart = { ...prevPart, ...part } as Record<string, unknown>;
+          if (part.type === 'text') {
+            const delta = (payload.properties as { delta?: string } | undefined)?.delta;
+            if (delta && typeof nextPart.text !== 'string') {
+              nextPart.text = `${(prevPart.text as string | undefined) || ''}${delta}`;
+            }
+          }
+          record.parts[partId] = nextPart;
+          if (!record.partsOrder.includes(partId)) {
+            record.partsOrder.push(partId);
+          }
+        }
+      };
+
       // Run in sandbox with streaming
       const result = await this.runInSandboxWithStreaming(
         prompt,
         apiUrl,
         apiToken,
+        assistantMessage.id,
         (delta) => {
           // Broadcast each delta as it arrives
           this.broadcast({ type: 'content_delta', content: delta });
-        }
+        },
+        handleOpenCodeEvent
       );
 
       // Update assistant message with full content
@@ -435,7 +518,9 @@ export class ConversationSession extends DurableObject<Env> {
     prompt: string,
     apiUrl: string,
     apiToken: string,
-    onDelta: (delta: string) => void
+    assistantMessageId: string,
+    onDelta: (delta: string) => void,
+    onOpenCodeEvent: (payload: { type?: string; properties?: Record<string, unknown> }) => void
   ): Promise<{ output: string; fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
     const state = await this.ensureState();
     const sandbox = await this.getSandbox();
@@ -481,7 +566,9 @@ export class ConversationSession extends DurableObject<Env> {
       openCodeUrl,
       sessionId,
       prompt,
+      assistantMessageId,
       onDelta,
+      onOpenCodeEvent,
       apiUrl,
       apiToken
     );
@@ -533,7 +620,87 @@ export class ConversationSession extends DurableObject<Env> {
     state.openCodeSessionId = session.id;
     await this.ctx.storage.put('state', state);
 
+    await this.replayOpenCodeContext(openCodeUrl, session.id, state);
+
     return session.id;
+  }
+
+  private async replayOpenCodeContext(
+    openCodeUrl: string,
+    sessionId: string,
+    state: ConversationState
+  ): Promise<void> {
+    if (!state.openCodeMessages || Object.keys(state.openCodeMessages).length === 0) {
+      return;
+    }
+
+    const transcript = this.buildOpenCodeTranscript(state.openCodeMessages);
+    if (!transcript) return;
+
+    const provider = this.env.PROVIDER || 'anthropic';
+    const model = this.getDefaultModel(provider);
+
+    await fetch(`${openCodeUrl}/session/${sessionId}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parts: [{ type: 'text', text: transcript }],
+        model: { providerID: provider, modelID: model },
+        noReply: true,
+        system: 'Conversation history (restored).',
+      }),
+    });
+  }
+
+  private buildOpenCodeTranscript(
+    messages: Record<string, { info?: Record<string, unknown>; parts: Record<string, Record<string, unknown>>; partsOrder: string[] }>
+  ): string {
+    const entries = Object.entries(messages)
+      .map(([id, record]) => {
+        const info = record.info || {};
+        const time = (info as { time?: { created?: number } }).time?.created ?? 0;
+        return { id, record, time };
+      })
+      .sort((a, b) => a.time - b.time);
+
+    const lines: string[] = [];
+
+    for (const entry of entries) {
+      const info = entry.record.info || {};
+      const role = (info as { role?: string }).role || 'user';
+      const parts = entry.record.partsOrder.length > 0
+        ? entry.record.partsOrder.map(id => entry.record.parts[id]).filter(Boolean)
+        : Object.values(entry.record.parts);
+
+      const partTexts = parts.map((part) => {
+        const type = part.type as string | undefined;
+        switch (type) {
+          case 'text':
+          case 'reasoning':
+            return typeof part.text === 'string' ? part.text : '';
+          case 'file':
+            return `[file] ${(part.filename as string | undefined) || (part.url as string | undefined) || 'unknown'}`;
+          case 'tool':
+            return `[tool] ${(part.tool as string | undefined) || 'unknown'}`;
+          case 'patch': {
+            const files = Array.isArray(part.files) ? part.files.join(', ') : 'unknown';
+            return `[patch] ${files}`;
+          }
+          case 'snapshot':
+            return `[snapshot] ${(part.snapshot as string | undefined) || 'unknown'}`;
+          default:
+            return `[part] ${type || 'unknown'}`;
+        }
+      }).filter(Boolean);
+
+      const content = partTexts.join('\n');
+      if (content) {
+        lines.push(`${role.toUpperCase()}: ${content}`);
+      }
+    }
+
+    if (lines.length === 0) return '';
+    return `Conversation history:\n${lines.join('\n\n')}`;
   }
 
   /**
@@ -544,7 +711,9 @@ export class ConversationSession extends DurableObject<Env> {
     openCodeUrl: string,
     sessionId: string,
     prompt: string,
+    assistantMessageId: string,
     onDelta: (delta: string) => void,
+    onOpenCodeEvent: (payload: { type?: string; properties?: Record<string, unknown> }) => void,
     apiUrl: string,
     apiToken: string
   ): Promise<string> {
@@ -638,6 +807,11 @@ export class ConversationSession extends DurableObject<Env> {
 
                 if (eventCount <= 5 || payload.type?.includes('message')) {
                   console.log(`[OpenCode] Event #${eventCount}: ${payload.type}`);
+                }
+
+                if (payload?.type?.startsWith('message.')) {
+                  this.broadcast({ type: 'opencode_event', messageId: assistantMessageId, event: data });
+                  onOpenCodeEvent(payload);
                 }
 
                 switch (payload.type) {
@@ -1155,6 +1329,8 @@ export class ConversationSession extends DurableObject<Env> {
 
     // Clear messages but keep session state
     state.messages = [];
+    state.openCodeMessages = {};
+    state.openCodeMessageIdMap = {};
     state.updatedAt = new Date().toISOString();
 
     await this.ctx.storage.put('state', state);
