@@ -11,6 +11,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { getSandbox, parseSSEStream, type Sandbox as CloudflareSandbox } from '@cloudflare/sandbox';
+import ignore from 'ignore';
 import { Sandbox as E2BSandbox } from 'e2b';
 import type { Env } from './index';
 import type { TimelineItem, FileChange, DeploymentLogEntry, DeploymentLog } from '@fastest/shared';
@@ -72,6 +73,7 @@ interface ConversationState {
   workspaceId: string;
   projectId: string;
   messages: Message[];
+  activeAssistantMessageId?: string;
   openCodeMessages?: Record<string, {
     info?: Record<string, unknown>;
     parts: Record<string, Record<string, unknown>>;
@@ -538,6 +540,7 @@ export class ConversationSession extends DurableObject<Env> {
    */
   async sendMessage(prompt: string, apiUrl: string, apiToken: string): Promise<Message> {
     const state = await this.ensureState();
+    state.activeAssistantMessageId = undefined;
 
     // Create user message
     const userMessage: Message = {
@@ -561,6 +564,7 @@ export class ConversationSession extends DurableObject<Env> {
     // Add messages to state
     state.messages.push(userMessage, assistantMessage);
     state.updatedAt = new Date().toISOString();
+    state.activeAssistantMessageId = assistantMessage.id;
     await this.ctx.storage.put('state', state);
 
     // Notify clients
@@ -577,6 +581,8 @@ export class ConversationSession extends DurableObject<Env> {
           state.openCodeMessageIdMap = {};
         }
 
+        const activeAssistantId = state.activeAssistantMessageId || assistantMessage.id;
+
         if (payload.type === 'message.updated') {
           const info = (payload.properties as { info?: Record<string, unknown> } | undefined)?.info;
           const id = info?.id as string | undefined;
@@ -587,7 +593,7 @@ export class ConversationSession extends DurableObject<Env> {
           state.openCodeMessages[id].info = info;
           const role = info?.role as string | undefined;
           if (role && role !== 'user') {
-            state.openCodeMessageIdMap[id] = assistantMessage.id;
+            state.openCodeMessageIdMap[id] = activeAssistantId;
           }
           return;
         }
@@ -601,7 +607,7 @@ export class ConversationSession extends DurableObject<Env> {
             state.openCodeMessages[messageId] = { parts: {}, partsOrder: [] };
           }
           if (!state.openCodeMessageIdMap[messageId]) {
-            state.openCodeMessageIdMap[messageId] = assistantMessage.id;
+            state.openCodeMessageIdMap[messageId] = activeAssistantId;
           }
           const record = state.openCodeMessages[messageId];
           const partId = (part.id as string | undefined) || `${part.type || 'part'}-${messageId}`;
@@ -637,37 +643,45 @@ export class ConversationSession extends DurableObject<Env> {
       assistantMessage.content = result.output;
       assistantMessage.status = 'completed';
       assistantMessage.completedAt = new Date().toISOString();
-      assistantMessage.filesChanged = result.fileChanges.map(f => f.path);
+      await this.ctx.storage.put('state', state);
+      this.broadcast({ type: 'message_complete', message: assistantMessage });
 
-      if (result.manifestHash) {
-        state.lastManifestHash = result.manifestHash;
+      if (state.activeAssistantMessageId === assistantMessage.id) {
+        state.activeAssistantMessageId = undefined;
       }
 
-      // Create timeline item if files changed
-      if (result.fileChanges.length > 0) {
+      const { fileChanges, manifestHash, previousManifestHash } = await this.collectAndUploadFiles(
+        result.sandbox,
+        apiUrl,
+        apiToken,
+        result.workDir
+      );
+
+      assistantMessage.filesChanged = fileChanges.map(f => f.path);
+      if (manifestHash) {
+        state.lastManifestHash = manifestHash;
+      }
+
+      if (fileChanges.length > 0) {
         const timelineItem: TimelineItem = {
           id: crypto.randomUUID(),
           messageId: assistantMessage.id,
           timestamp: new Date().toISOString(),
           summary: null,
           summaryStatus: 'pending',
-          files: result.fileChanges,
-          manifestHash: result.manifestHash,
-          previousManifestHash: result.previousManifestHash,
+          files: fileChanges,
+          manifestHash,
+          previousManifestHash,
         };
         state.timeline.push(timelineItem);
-
-        // Broadcast timeline item
         this.broadcast({ type: 'timeline_item', item: timelineItem });
-
-        // Trigger async summary generation (fire and forget)
         this.generateTimelineSummary(timelineItem.id).catch(console.error);
       }
 
       await this.ctx.storage.put('state', state);
 
-      if (result.fileChanges.length > 0) {
-        this.broadcast({ type: 'files_changed', files: result.fileChanges.map(f => f.path) });
+      if (fileChanges.length > 0) {
+        this.broadcast({ type: 'files_changed', files: fileChanges.map(f => f.path) });
       }
       this.broadcast({ type: 'message_complete', message: assistantMessage });
 
@@ -682,6 +696,9 @@ export class ConversationSession extends DurableObject<Env> {
         error: assistantMessage.error,
       });
 
+      if (state.activeAssistantMessageId === assistantMessage.id) {
+        state.activeAssistantMessageId = undefined;
+      }
       await this.ctx.storage.put('state', state);
 
       this.broadcast({ type: 'error', error: assistantMessage.error });
@@ -701,7 +718,7 @@ export class ConversationSession extends DurableObject<Env> {
     assistantMessageId: string,
     onDelta: (delta: string) => void,
     onOpenCodeEvent: (payload: { type?: string; properties?: Record<string, unknown> }) => void
-  ): Promise<{ output: string; fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
+  ): Promise<{ output: string; sandbox: SandboxRunner; workDir: string }> {
     const state = await this.ensureState();
     const sandbox = await this.getSandboxRunner();
 
@@ -768,16 +785,10 @@ export class ConversationSession extends DurableObject<Env> {
         apiToken
       );
 
-      // Collect files and create snapshot
-      const { fileChanges, manifestHash, previousManifestHash } = await this.collectAndUploadFiles(
-        sandbox, apiUrl, apiToken, workDir
-      );
-
       return {
         output: fullOutput,
-        fileChanges,
-        manifestHash,
-        previousManifestHash,
+        sandbox,
+        workDir,
       };
     } catch (err) {
       console.error('[OpenCode] runInSandboxWithStreaming failed', {
@@ -1577,6 +1588,7 @@ export class ConversationSession extends DurableObject<Env> {
       return this.collectAndUploadFilesE2B(apiUrl, apiToken, workDir);
     }
 
+    const ignoreMatcher = await this.getIgnoreMatcher({ sandbox, workDir, type: 'cloudflare' });
     const sandboxApiUrl = this.getSandboxApiUrl(apiUrl);
     const state = await this.ensureState();
     const previousManifestHash = state.lastManifestHash;
@@ -1605,7 +1617,14 @@ export class ConversationSession extends DurableObject<Env> {
       return { fileChanges: [], manifestHash: '', previousManifestHash };
     }
 
-    const filePaths = listResult.stdout.trim().split('\n').filter(Boolean);
+    const filePaths = listResult.stdout
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .filter((fullPath) => {
+        const relPath = fullPath.replace(`${workDir}/`, '');
+        return ignoreMatcher.shouldInclude(relPath, false);
+      });
     const files: Array<{ path: string; hash: string; size: number }> = [];
     const currentFiles: Map<string, string> = new Map(); // path -> hash
 
@@ -1769,6 +1788,7 @@ export class ConversationSession extends DurableObject<Env> {
     const sandbox = await this.getE2BSandbox();
     const state = await this.ensureState();
     const previousManifestHash = state.lastManifestHash;
+    const ignoreMatcher = await this.getIgnoreMatcher({ sandbox, workDir, type: 'e2b' });
 
     let previousFiles: Map<string, string> = new Map();
     if (previousManifestHash) {
@@ -1787,7 +1807,7 @@ export class ConversationSession extends DurableObject<Env> {
       }
     }
 
-    const entries = await this.listE2BFiles(sandbox, workDir);
+    const entries = await this.listE2BFiles(sandbox, workDir, ignoreMatcher);
     const files: Array<{ path: string; hash: string; size: number }> = [];
     const currentFiles: Map<string, string> = new Map();
 
@@ -1875,7 +1895,11 @@ export class ConversationSession extends DurableObject<Env> {
     return { fileChanges, manifestHash, previousManifestHash };
   }
 
-  private async listE2BFiles(sandbox: E2BSandbox, root: string): Promise<Array<{ path: string; size: number }>> {
+  private async listE2BFiles(
+    sandbox: E2BSandbox,
+    root: string,
+    ignoreMatcher: { shouldInclude: (path: string, isDir: boolean) => boolean }
+  ): Promise<Array<{ path: string; size: number }>> {
     const files: Array<{ path: string; size: number }> = [];
     const queue: string[] = [root];
 
@@ -1885,6 +1909,10 @@ export class ConversationSession extends DurableObject<Env> {
       const entries = await sandbox.files.list(dir, { depth: 1 });
       for (const entry of entries) {
         if (!entry.path || entry.path === dir) continue;
+        const relPath = entry.path.replace(`${root}/`, '');
+        if (!ignoreMatcher.shouldInclude(relPath, entry.type === 'dir')) {
+          continue;
+        }
         if (entry.type === 'dir') {
           queue.push(entry.path);
         } else if (entry.type === 'file') {
@@ -1894,6 +1922,61 @@ export class ConversationSession extends DurableObject<Env> {
     }
 
     return files;
+  }
+
+  private async getIgnoreMatcher(args: {
+    sandbox: SandboxRunner | E2BSandbox;
+    workDir: string;
+    type: 'cloudflare' | 'e2b';
+  }): Promise<{ shouldInclude: (path: string, isDir: boolean) => boolean }> {
+    const defaults = [
+      '.git',
+      '.git/**',
+      'node_modules',
+      'node_modules/**',
+      '.DS_Store',
+      'dist',
+      'dist/**',
+      'build',
+      'build/**',
+      '.next',
+      '.next/**',
+      '.turbo',
+      '.turbo/**',
+      '.cache',
+      '.cache/**',
+    ];
+
+    const ig = ignore().add(defaults);
+    const workDir = args.workDir.replace(/\/+$/, '');
+
+    const addIgnoreFile = async (path: string) => {
+      try {
+        if (args.type === 'e2b') {
+          const sandbox = args.sandbox as E2BSandbox;
+          const content = await sandbox.files.read(path, { format: 'text' });
+          if (content) ig.add(content);
+        } else {
+          const sandbox = args.sandbox as SandboxRunner;
+          const result = await sandbox.exec(`cat "${path}" 2>/dev/null || true`);
+          if (result.stdout) ig.add(result.stdout);
+        }
+      } catch {
+        // Ignore missing files
+      }
+    };
+
+    await addIgnoreFile(`${workDir}/.gitignore`);
+    await addIgnoreFile(`${workDir}/.git/info/exclude`);
+
+    return {
+      shouldInclude: (relPath: string, isDir: boolean) => {
+        if (!relPath) return false;
+        const normalized = relPath.replace(/^\/+/, '');
+        const checkPath = isDir && !normalized.endsWith('/') ? `${normalized}/` : normalized;
+        return !ig.ignores(checkPath);
+      },
+    };
   }
 
   private async computeSHA256Bytes(data: Uint8Array): Promise<string> {
