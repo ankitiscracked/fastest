@@ -18,75 +18,76 @@ interface ConversationMessageProps {
 }
 
 export function ConversationMessage({ job, isStreaming, streamingContent }: ConversationMessageProps) {
-  // Don't render if there's no prompt (user message)
-  if (!job.prompt) return null;
-
   return (
     <div className="space-y-3">
-      {/* User message */}
-      <div className="flex justify-end">
-        <div className="max-w-[85%] bg-primary-600 text-white rounded-2xl rounded-tr-sm px-4 py-3">
-          <p className="text-sm whitespace-pre-wrap">{job.prompt}</p>
-        </div>
-      </div>
-
-      {/* Agent message */}
-      <div className="flex justify-start">
-        <div className="max-w-[85%] bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-gray-500">Agent</span>
-            <StatusBadge status={job.status} />
+      {/* User message - only render if there's a prompt */}
+      {job.prompt && (
+        <div className="flex justify-end">
+          <div className="max-w-[85%] bg-primary-600 text-white rounded-2xl rounded-tr-sm px-4 py-3">
+            <p className="text-sm whitespace-pre-wrap">{job.prompt}</p>
           </div>
+        </div>
+      )}
 
-          {/* Content based on status */}
-          {job.status === 'pending' && (
-            <p className="text-sm text-gray-500 italic">Waiting to run...</p>
-          )}
-
-          {job.status === 'running' && (
-            <div className="space-y-2">
-              {isStreaming && streamingContent ? (
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">{streamingContent}</p>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                  <p className="text-sm text-gray-500">Working on it...</p>
-                </div>
-              )}
+      {/* Agent message - only show for assistant messages (no prompt but has output/streaming/running status) */}
+      {(!job.prompt || job.output || isStreaming) && (
+        <div className="flex justify-start">
+          <div className="max-w-[85%] bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-gray-500">Agent</span>
+              <StatusBadge status={job.status} />
             </div>
-          )}
 
-          {job.status === 'completed' && (
-            <div className="space-y-3">
-              {job.output ? (
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">{job.output}</p>
-              ) : (
-                <p className="text-sm text-gray-700">Task completed successfully.</p>
-              )}
-            </div>
-          )}
-
-          {job.status === 'failed' && (
-            <div className="space-y-2">
-              <p className="text-sm text-red-600">{job.error || 'An error occurred'}</p>
-            </div>
-          )}
-
-          {job.status === 'cancelled' && (
-            <p className="text-sm text-gray-500 italic">Cancelled</p>
-          )}
-
-          {/* Timestamp */}
-          <div className="mt-2 text-xs text-gray-400">
-            {formatTimestamp(job.created_at)}
-            {job.completed_at && (
-              <span className="ml-2">
-                ({formatDuration(new Date(job.created_at), new Date(job.completed_at))})
-              </span>
+            {/* Content based on status */}
+            {job.status === 'pending' && (
+              <p className="text-sm text-gray-500 italic">Waiting to run...</p>
             )}
+
+            {job.status === 'running' && (
+              <div className="space-y-2">
+                {isStreaming && streamingContent ? (
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{streamingContent}</p>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                    <p className="text-sm text-gray-500">Working on it...</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {job.status === 'completed' && (
+              <div className="space-y-3">
+                {job.output ? (
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{job.output}</p>
+                ) : (
+                  <p className="text-sm text-gray-700">Task completed successfully.</p>
+                )}
+              </div>
+            )}
+
+            {job.status === 'failed' && (
+              <div className="space-y-2">
+                <p className="text-sm text-red-600">{job.error || 'An error occurred'}</p>
+              </div>
+            )}
+
+            {job.status === 'cancelled' && (
+              <p className="text-sm text-gray-500 italic">Cancelled</p>
+            )}
+
+            {/* Timestamp */}
+            <div className="mt-2 text-xs text-gray-400">
+              {formatTimestamp(job.created_at)}
+              {job.completed_at && (
+                <span className="ml-2">
+                  ({formatDuration(new Date(job.created_at), new Date(job.completed_at))})
+                </span>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

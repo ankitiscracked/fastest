@@ -11,16 +11,22 @@ interface AuthUser {
 
 /**
  * Get the authenticated user from the request
+ * Checks Authorization header first, then falls back to token query param (for WebSocket)
  * Returns null if not authenticated
  */
 export async function getAuthUser(c: Context<{ Bindings: Env }>): Promise<AuthUser | null> {
+  // First try Authorization header
   const authHeader = c.req.header('Authorization');
+  let token: string | null = null;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7); // Remove "Bearer " prefix
   }
 
-  const token = authHeader.slice(7); // Remove "Bearer " prefix
+  // Fall back to query param (for WebSocket connections)
+  if (!token) {
+    token = c.req.query('token') || null;
+  }
 
   if (!token) {
     return null;

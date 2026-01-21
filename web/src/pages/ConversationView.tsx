@@ -193,19 +193,23 @@ export function ConversationView() {
     conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent]);
 
-  // Cleanup WebSocket on unmount
-  useEffect(() => {
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
-  }, []);
 
   // Handle WebSocket stream events
   const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
       case 'message_start':
+        // Update the placeholder message ID to match the server's ID
+        // This ensures streaming content is displayed correctly
+        setMessages(prev => {
+          // Find the running placeholder (status 'running' with empty content)
+          const runningIdx = prev.findIndex(m => m.status === 'running' && !m.content);
+          if (runningIdx >= 0) {
+            const updated = [...prev];
+            updated[runningIdx] = { ...updated[runningIdx], id: event.messageId };
+            return updated;
+          }
+          return prev;
+        });
         setRunningMessageId(event.messageId);
         setStreamingContent('');
         break;
@@ -238,7 +242,10 @@ export function ConversationView() {
         break;
 
       case 'timeline_item':
-        setTimeline(prev => [...prev, event.item]);
+        setTimeline(prev => {
+          if (prev.some(item => item.id === event.item.id)) return prev;
+          return [...prev, event.item];
+        });
         break;
 
       case 'timeline_summary':
@@ -290,21 +297,25 @@ export function ConversationView() {
   useEffect(() => {
     if (!conversationId) return;
 
-    // Close existing connection
-    if (wsRef.current) {
+    // Close existing connection if open
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.close();
     }
 
     // Connect to stream
-    wsRef.current = api.connectStream(conversationId, handleStreamEvent);
+    const ws = api.connectStream(conversationId, handleStreamEvent);
+    wsRef.current = ws;
 
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+      // Only close if the WebSocket is fully open
+      // Closing during CONNECTING state causes "closed before connection established" errors
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
       }
     };
-  }, [conversationId, handleStreamEvent]);
+    // handleStreamEvent is stable (empty deps) so we exclude it to prevent reconnections
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   // Handle pending prompt from home page
   useEffect(() => {
@@ -770,7 +781,7 @@ export function ConversationView() {
               <EmptyState />
             ) : (
               messagesAsJobs
-                .filter(j => j.prompt || j.output)
+                .filter(j => j.prompt || j.output || j.status === 'running')
                 .map((job) => (
                   <ConversationMessage
                     key={job.id}

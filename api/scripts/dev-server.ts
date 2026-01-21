@@ -1,5 +1,4 @@
-const COLIMA_CPU = 4;
-const COLIMA_MEMORY = 8;
+import type { Subprocess } from 'bun';
 
 const colors = {
   green: (s: string) => `\x1b[32m${s}\x1b[0m`,
@@ -25,10 +24,6 @@ function runQuiet(cmd: string[]): boolean {
   return Bun.spawnSync(cmd, { stdio: ['ignore', 'ignore', 'ignore'] }).exitCode === 0;
 }
 
-function runInherit(cmd: string[]): void {
-  Bun.spawnSync(cmd, { stdio: ['inherit', 'inherit', 'inherit'] });
-}
-
 function isDockerRunning(): boolean {
   return runQuiet(['docker', 'info']);
 }
@@ -44,15 +39,6 @@ function getDockerResources(): { cpus: number; memory: number } {
   const cpus = parseInt(cpuResult.stdout, 10);
   const memory = Math.floor(parseInt(memResult.stdout, 10) / 1024 / 1024 / 1024);
   return { cpus, memory };
-}
-
-function startColima(): void {
-  log.info(`Starting Colima with ${COLIMA_CPU} CPUs and ${COLIMA_MEMORY}GB RAM...`);
-  runInherit(['colima', 'start', '--cpu', String(COLIMA_CPU), '--memory', String(COLIMA_MEMORY)]);
-}
-
-function stopColima(): void {
-  runQuiet(['colima', 'stop']);
 }
 
 function cleanupContainers(): void {
@@ -78,71 +64,107 @@ function cleanupStaleContainers(): void {
   }
 }
 
-function isAppleSilicon(): boolean {
-  const result = run(['uname', '-m']);
-  return result.success && result.stdout === 'arm64';
+function isOpenCodeInstalled(): boolean {
+  return runQuiet(['which', 'opencode']);
 }
 
-function canRunAmd64Containers(): boolean {
-  // Test if we can run a simple amd64 container
-  const result = Bun.spawnSync(
-    ['docker', 'run', '--rm', '--platform', 'linux/amd64', 'alpine:latest', 'echo', 'ok'],
-    { stdio: ['ignore', 'pipe', 'pipe'] }
-  );
-  return result.exitCode === 0 && result.stdout?.toString().trim() === 'ok';
+function isOpenCodeRunning(port: number): boolean {
+  // Check if OpenCode server is responding
+  const result = run(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', `http://127.0.0.1:${port}/doc`]);
+  return result.success && result.stdout === '200';
 }
 
-function setupQemuEmulation(): void {
-  log.info('Setting up QEMU emulation for amd64 containers...');
-  // Register QEMU binfmt handlers for cross-platform execution
-  runInherit([
-    'docker', 'run', '--rm', '--privileged',
-    'tonistiigi/binfmt:latest',
-    '--install', 'amd64'
-  ]);
+function loadDevVars(): Record<string, string> {
+  // Read .dev.vars file and parse key=value pairs
+  const devVarsPath = `${process.cwd()}/.dev.vars`;
+  try {
+    const content = require('fs').readFileSync(devVarsPath, 'utf-8');
+    const vars: Record<string, string> = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex > 0) {
+        const key = trimmed.slice(0, eqIndex);
+        const value = trimmed.slice(eqIndex + 1);
+        vars[key] = value;
+      }
+    }
+    return vars;
+  } catch {
+    return {};
+  }
 }
 
-async function main() {
-  // Setup Docker/Colima
-  if (!isDockerRunning()) {
-    startColima();
-  } else {
-    log.info('Docker is already running');
+async function startOpenCode(port: number): Promise<Subprocess | null> {
+  if (!isOpenCodeInstalled()) {
+    log.warn('OpenCode not installed. Install with: npm install -g opencode-ai');
+    log.warn('Sandbox will not be able to run agent tasks without OpenCode.');
+    return null;
+  }
 
-    const { cpus, memory } = getDockerResources();
-    if (cpus < COLIMA_CPU || memory < COLIMA_MEMORY) {
-      log.warn(`Current resources (${cpus} CPUs, ${memory}GB) below recommended (${COLIMA_CPU} CPUs, ${COLIMA_MEMORY}GB)`);
-      log.info('Restarting Colima with more resources...');
-      stopColima();
-      startColima();
+  // Check if already running
+  if (isOpenCodeRunning(port)) {
+    log.info(`OpenCode already running on port ${port}`);
+    return null;
+  }
+
+  // Load API keys from .dev.vars
+  const devVars = loadDevVars();
+  const env: Record<string, string> = { ...process.env as Record<string, string> };
+
+  // Pass through LLM provider API keys
+  const apiKeyVars = [
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+    'GOOGLE_GENERATIVE_AI_API_KEY',
+  ];
+
+  for (const key of apiKeyVars) {
+    if (devVars[key]) {
+      env[key] = devVars[key];
+      log.info(`Passing ${key} to OpenCode`);
     }
   }
 
-  // Clean stale containers
-  cleanupStaleContainers();
+  log.info('Starting OpenCode server...');
+  const opencode = Bun.spawn(['opencode', 'serve', '--hostname', '0.0.0.0', '--port', port.toString()], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+    env,
+  });
 
-  // Verify Docker is ready
+  // Wait for it to be ready (up to 30 seconds)
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (isOpenCodeRunning(port)) {
+      log.info(`OpenCode ready on port ${port}`);
+      return opencode;
+    }
+  }
+
+  log.error('OpenCode failed to start within 30 seconds');
+  opencode.kill();
+  return null;
+}
+
+const OPENCODE_PORT = 4096;
+
+async function main() {
+  // Check Docker is running (Docker Desktop)
   if (!isDockerRunning()) {
-    log.error('Docker failed to start');
+    log.error('Docker is not running. Please start Docker Desktop.');
     process.exit(1);
   }
 
   const { cpus, memory } = getDockerResources();
   log.info(`Docker ready with ${cpus} CPUs and ${memory}GB RAM`);
 
-  // On Apple Silicon, ensure we can run amd64 containers (sandbox image is amd64-only)
-  if (isAppleSilicon()) {
-    log.info('Apple Silicon detected, checking amd64 container support...');
-    if (!canRunAmd64Containers()) {
-      log.warn('Cannot run amd64 containers, setting up QEMU emulation...');
-      setupQemuEmulation();
-      if (!canRunAmd64Containers()) {
-        log.error('Failed to set up amd64 container support. The sandbox requires amd64 containers.');
-        process.exit(1);
-      }
-    }
-    log.info('amd64 container support verified');
-  }
+  // Clean stale containers
+  cleanupStaleContainers();
+
+  // Start OpenCode server (for Apple Silicon local dev)
+  const opencode = await startOpenCode(OPENCODE_PORT);
 
   // Spawn wrangler dev with full stdio passthrough
   log.info('Starting wrangler dev...');
@@ -155,9 +177,11 @@ async function main() {
   const cleanup = () => {
     log.info('\nShutting down...');
     wrangler.kill();
+    if (opencode) {
+      log.info('Stopping OpenCode server...');
+      opencode.kill();
+    }
     cleanupContainers();
-    log.info('Stopping Colima...');
-    stopColima();
     log.info('Cleanup complete');
     process.exit(0);
   };
@@ -169,9 +193,10 @@ async function main() {
   // Wait for wrangler to exit
   const exitCode = await wrangler.exited;
   log.info('\nWrangler exited');
+  if (opencode) {
+    opencode.kill();
+  }
   cleanupContainers();
-  log.info('Stopping Colima...');
-  stopColima();
   log.info('Cleanup complete');
   process.exit(exitCode);
 }

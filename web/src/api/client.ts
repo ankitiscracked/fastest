@@ -1,4 +1,19 @@
-const API_BASE = '/v1';
+const API_BASE = (import.meta.env.VITE_API_BASE || '/v1').replace(/\/+$/, '');
+
+function getApiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
+function getWsBase(): string {
+  if (API_BASE.startsWith('https://')) {
+    return `wss://${API_BASE.slice('https://'.length)}`;
+  }
+  if (API_BASE.startsWith('http://')) {
+    return `ws://${API_BASE.slice('http://'.length)}`;
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${API_BASE}`;
+}
 
 // Message types
 export interface Message {
@@ -88,7 +103,7 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(getApiUrl(path), {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -321,21 +336,29 @@ class ApiClient {
    */
   connectStream(conversationId: string, onEvent: (event: StreamEvent) => void): WebSocket {
     const token = this.getToken();
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
+    const wsBase = getWsBase();
 
     // Include token in URL since WebSocket doesn't support custom headers easily
-    const url = `${protocol}//${host}${API_BASE}/conversations/${conversationId}/stream?token=${token}`;
+    const url = `${wsBase}/conversations/${conversationId}/stream?token=${token}`;
 
     const ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      console.log('[WebSocket] Connected to stream');
+    };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as StreamEvent;
+        console.log('[WebSocket] Received event:', data.type, data);
         onEvent(data);
       } catch (e) {
         console.error('Failed to parse stream event:', e);
       }
+    };
+
+    ws.onclose = (event) => {
+      console.log('[WebSocket] Disconnected:', event.code, event.reason);
     };
 
     ws.onerror = (error) => {

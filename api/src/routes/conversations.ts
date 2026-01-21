@@ -6,8 +6,10 @@
  */
 
 import { Hono } from 'hono';
+import { eq, and } from 'drizzle-orm';
 import type { Env } from '../index';
 import { authMiddleware, getAuthUser } from '../middleware/auth';
+import { createDb, conversations, workspaces, projects } from '../db';
 import type { Conversation, ConversationWithContext } from '@fastest/shared';
 
 export const conversationRoutes = new Hono<{ Bindings: Env }>();
@@ -577,6 +579,7 @@ conversationRoutes.get('/:conversationId/deployments/:deploymentId/logs', async 
 /**
  * WebSocket endpoint for streaming
  * GET /v1/conversations/:conversationId/stream
+ * Auth is handled via token query param since WebSocket can't send custom headers
  */
 conversationRoutes.get('/:conversationId/stream', async (c) => {
   const { conversationId } = c.req.param();
@@ -586,8 +589,29 @@ conversationRoutes.get('/:conversationId/stream', async (c) => {
     return c.json({ error: { code: 'UPGRADE_REQUIRED', message: 'WebSocket upgrade required' } }, 426);
   }
 
-  // Note: WebSocket auth is handled via token query param
-  // The token is validated by the DO or we could validate here
+  // Auth is handled by the middleware (which now checks query param token)
+  // Verify user has access to this conversation
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  // Verify conversation exists and user has access
+  const db = createDb(c.env.DB);
+  const result = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .innerJoin(workspaces, eq(conversations.workspaceId, workspaces.id))
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(
+      eq(conversations.id, conversationId),
+      eq(projects.ownerUserId, user.id)
+    ))
+    .limit(1);
+
+  if (result.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
 
   const doId = getConversationDOId(c.env, conversationId);
   const stub = c.env.ConversationSession.get(doId);

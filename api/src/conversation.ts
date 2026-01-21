@@ -188,12 +188,15 @@ export class ConversationSession extends DurableObject<Env> {
 
       this.ctx.acceptWebSocket(server);
       this.clients.add(server);
+      console.log(`[WebSocket] Client connected. Total clients: ${this.clients.size}`);
 
       server.addEventListener('close', () => {
         this.clients.delete(server);
+        console.log(`[WebSocket] Client disconnected. Total clients: ${this.clients.size}`);
       });
 
-      server.addEventListener('error', () => {
+      server.addEventListener('error', (err) => {
+        console.log(`[WebSocket] Client error:`, err);
         this.clients.delete(server);
       });
 
@@ -294,10 +297,12 @@ export class ConversationSession extends DurableObject<Env> {
    */
   private broadcast(event: StreamEvent) {
     const data = JSON.stringify(event);
+    console.log(`[Broadcast] Sending ${event.type} to ${this.clients.size} clients`);
     for (const client of this.clients) {
       try {
         client.send(data);
-      } catch {
+      } catch (err) {
+        console.log(`[Broadcast] Error sending to client:`, err);
         this.clients.delete(client);
       }
     }
@@ -439,7 +444,19 @@ export class ConversationSession extends DurableObject<Env> {
 
     // Check if we need to restore files
     if (state.lastManifestHash) {
-      await this.restoreFiles(sandbox, apiUrl, apiToken, state.lastManifestHash, workDir);
+      try {
+        await this.restoreFiles(sandbox, apiUrl, apiToken, state.lastManifestHash, workDir);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes('Failed to download manifest')) {
+          // Manifest missing (e.g. R2 reset) - reset workspace state and continue
+          state.lastManifestHash = undefined;
+          await this.ctx.storage.put('state', state);
+          await sandbox.exec(`mkdir -p ${workDir}`);
+        } else {
+          throw err;
+        }
+      }
     } else if (state.messages.length === 2) {
       // First message - check for workspace base snapshot
       await this.initializeWorkspace(sandbox, apiUrl, apiToken, workDir);
@@ -456,7 +473,7 @@ export class ConversationSession extends DurableObject<Env> {
     }
 
     // Get or create OpenCode session
-    const sessionId = await this.getOrCreateOpenCodeSession(sandbox, openCodeUrl);
+    const sessionId = await this.getOrCreateOpenCodeSession(openCodeUrl);
 
     // Stream response via SSE
     const fullOutput = await this.streamFromOpenCode(
@@ -464,7 +481,9 @@ export class ConversationSession extends DurableObject<Env> {
       openCodeUrl,
       sessionId,
       prompt,
-      onDelta
+      onDelta,
+      apiUrl,
+      apiToken
     );
 
     // Collect files and create snapshot
@@ -483,30 +502,34 @@ export class ConversationSession extends DurableObject<Env> {
   /**
    * Get or create an OpenCode session for this conversation
    */
-  private async getOrCreateOpenCodeSession(sandbox: Sandbox, openCodeUrl: string): Promise<string> {
+  private async getOrCreateOpenCodeSession(openCodeUrl: string): Promise<string> {
     const state = await this.ensureState();
 
     // Reuse existing session if available
     if (state.openCodeSessionId) {
-      // Verify session still exists
-      const checkResult = await sandbox.exec(
-        `curl -s -o /dev/null -w "%{http_code}" "${openCodeUrl}/session/${state.openCodeSessionId}"`
-      );
-      if (checkResult.stdout.trim() === '200') {
-        return state.openCodeSessionId;
+      try {
+        // Verify session still exists
+        const response = await fetch(`${openCodeUrl}/session/${state.openCodeSessionId}`);
+        if (response.ok) {
+          return state.openCodeSessionId;
+        }
+      } catch {
+        // Session doesn't exist, create a new one
       }
     }
 
     // Create new session
-    const createResult = await sandbox.exec(
-      `curl -s -X POST "${openCodeUrl}/session" -H "Content-Type: application/json" -d '{"title":"conversation-${state.conversationId}"}'`
-    );
+    const response = await fetch(`${openCodeUrl}/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: `conversation-${state.conversationId}` }),
+    });
 
-    if (!createResult.success) {
+    if (!response.ok) {
       throw new Error('Failed to create OpenCode session');
     }
 
-    const session = JSON.parse(createResult.stdout) as { id: string };
+    const session = await response.json() as { id: string };
     state.openCodeSessionId = session.id;
     await this.ctx.storage.put('state', state);
 
@@ -514,96 +537,260 @@ export class ConversationSession extends DurableObject<Env> {
   }
 
   /**
-   * Stream response from OpenCode serve via SSE using execStream
+   * Stream response from OpenCode using fetch with SSE
    */
   private async streamFromOpenCode(
-    sandbox: Sandbox,
+    _sandbox: Sandbox,
     openCodeUrl: string,
     sessionId: string,
     prompt: string,
-    onDelta: (delta: string) => void
+    onDelta: (delta: string) => void,
+    apiUrl: string,
+    apiToken: string
   ): Promise<string> {
     const provider = this.env.PROVIDER || 'anthropic';
     const model = this.getDefaultModel(provider);
 
-    // Send prompt first (this returns the response synchronously via SSE)
-    const escapedPrompt = JSON.stringify(prompt);
+    console.log(`[OpenCode] Starting stream for session ${sessionId}`);
+    console.log(`[OpenCode] Provider: ${provider}, Model: ${model}`);
+    console.log(`[OpenCode] URL: ${openCodeUrl}`);
 
-    // Use execStream to get real-time output from curl SSE listener
-    const stream = await sandbox.execStream(
-      `curl -s -N "${openCodeUrl}/session/${sessionId}/message" \
-        -H "Content-Type: application/json" \
-        -d '{"parts":[{"type":"text","text":${escapedPrompt}}],"model":"${provider}/${model}"}' \
-        --no-buffer`
-    );
+    // Fetch user's API keys and set them in OpenCode
+    const credentialsSet = await this.setOpenCodeCredentials(openCodeUrl, apiUrl, apiToken, provider);
+    if (!credentialsSet) {
+      const providerNames: Record<string, string> = {
+        anthropic: 'Anthropic',
+        openai: 'OpenAI',
+        google: 'Google AI',
+      };
+      const providerName = providerNames[provider] || provider;
+      throw new Error(
+        `No API key configured for ${providerName}. Please add your ${providerName} API key in Settings → API Keys.`
+      );
+    }
+    console.log(`[OpenCode] Credentials set`);
 
     let fullOutput = '';
-    let sseBuffer = '';
+    let messageComplete = false;
+    const lastTextByPartId = new Map<string, string>();
 
-    // Process stream events in real-time
-    for await (const event of parseSSEStream(stream) as AsyncIterable<ExecEvent>) {
-      switch (event.type) {
-        case 'stdout':
-          // Accumulate SSE data and parse complete events
-          sseBuffer += event.data;
+    // Subscribe to SSE events (use /global/event for wrapped payload format)
+    console.log(`[OpenCode] Subscribing to event stream...`);
+    const eventResponse = await fetch(`${openCodeUrl}/global/event`, {
+      headers: { Accept: 'text/event-stream' },
+    });
 
-          // Process complete SSE events (separated by double newlines)
-          const events = sseBuffer.split('\n\n');
-          sseBuffer = events.pop() || ''; // Keep incomplete event in buffer
+    console.log(`[OpenCode] Event stream response: ${eventResponse.status}`);
+    if (!eventResponse.ok || !eventResponse.body) {
+      throw new Error('Failed to connect to OpenCode event stream');
+    }
 
-          for (const sseEvent of events) {
-            const lines = sseEvent.split('\n');
-            for (const line of lines) {
-              if (line.startsWith('data:')) {
-                try {
-                  const data = JSON.parse(line.slice(5).trim());
+    // Send prompt asynchronously (returns 204 immediately)
+    console.log(`[OpenCode] Sending prompt async...`);
+    const promptResponse = await fetch(`${openCodeUrl}/session/${sessionId}/prompt_async`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parts: [{ type: 'text', text: prompt }],
+        model: { providerID: provider, modelID: model },
+      }),
+    });
 
-                  // Handle different OpenCode event types
-                  if (data.type === 'part' && data.part?.type === 'text') {
-                    const text = data.part.text || '';
-                    if (text) {
-                      fullOutput += text;
-                      onDelta(text);
+    console.log(`[OpenCode] Prompt response: ${promptResponse.status}`);
+    if (!promptResponse.ok && promptResponse.status !== 204) {
+      const errorText = await promptResponse.text();
+      console.log(`[OpenCode] Prompt error: ${errorText}`);
+      throw new Error(`Failed to send prompt: ${promptResponse.status}`);
+    }
+
+    // Process SSE stream
+    console.log(`[OpenCode] Starting to read event stream...`);
+    const reader = eventResponse.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let eventCount = 0;
+
+    try {
+      while (!messageComplete) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log(`[OpenCode] Stream ended`);
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        // Process complete SSE events (separated by double newlines)
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+
+        for (const eventText of events) {
+          const lines = eventText.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              try {
+                const data = JSON.parse(line.slice(5).trim());
+                eventCount++;
+
+                // Events are wrapped in GlobalEvent with payload
+                const payload = data.payload || data;
+
+                if (eventCount <= 5 || payload.type?.includes('message')) {
+                  console.log(`[OpenCode] Event #${eventCount}: ${payload.type}`);
+                }
+
+                switch (payload.type) {
+                  case 'message.part.updated':
+                    // Debug: log the full properties to understand the structure
+                    console.log(`[OpenCode] message.part.updated properties:`, JSON.stringify(payload.properties));
+
+                    // Try to extract delta - it might be in different places
+                    let delta = payload.properties?.delta;
+
+                    // If no delta, try to compute it from accumulated text
+                    const part = payload.properties?.part;
+                    if (!delta && part?.type === 'text') {
+                      const nextText = typeof part.text === 'string'
+                        ? part.text
+                        : (typeof part.content === 'string' ? part.content : undefined);
+                      if (nextText !== undefined) {
+                        const partId = typeof part.id === 'string' ? part.id : 'default';
+                        const prevText = lastTextByPartId.get(partId) || '';
+                        if (nextText.startsWith(prevText)) {
+                          delta = nextText.slice(prevText.length);
+                        } else {
+                          delta = nextText;
+                        }
+                        lastTextByPartId.set(partId, nextText);
+                      }
                     }
-                  } else if (data.type === 'text.delta' || data.type === 'content.delta') {
-                    // Alternative event format
-                    const text = data.delta || data.text || '';
-                    if (text) {
-                      fullOutput += text;
-                      onDelta(text);
+
+                    if (delta) {
+                      console.log(`[OpenCode] Broadcasting delta: ${delta.substring(0, 50)}...`);
+                      fullOutput += delta;
+                      onDelta(delta);
                     }
-                  } else if (data.type === 'error') {
-                    throw new Error(data.error?.message || data.message || 'OpenCode error');
-                  }
-                  // message.complete will come through but we just continue processing
-                } catch (e) {
-                  // Skip malformed JSON, but rethrow OpenCode errors
-                  if (e instanceof Error && e.message.includes('OpenCode error')) {
-                    throw e;
-                  }
+                    break;
+
+                  case 'message.updated':
+                    // Check for completion signals: finish status or time.completed present
+                    const info = payload.properties?.info;
+                    const isComplete = info?.finish === 'stop' ||
+                                       info?.finish === 'end_turn' ||
+                                       (info?.time?.completed !== undefined);
+                    console.log(`[OpenCode] Message updated, finish: ${info?.finish}, completed: ${info?.time?.completed}, isComplete: ${isComplete}`);
+                    if (isComplete) {
+                      messageComplete = true;
+                    }
+                    break;
+
+                  case 'session.idle':
+                    console.log(`[OpenCode] Session idle - marking complete`);
+                    messageComplete = true;
+                    break;
+
+                  case 'session.error':
+                    console.log(`[OpenCode] Session error: ${JSON.stringify(payload.properties)}`);
+                    throw new Error(payload.properties?.error || 'OpenCode session error');
+                }
+              } catch (e) {
+                // Skip malformed JSON unless it's our own error
+                if (e instanceof Error && e.message.includes('session error')) {
+                  throw e;
                 }
               }
             }
           }
-          break;
-
-        case 'stderr':
-          // Log stderr but don't fail
-          console.warn('OpenCode stderr:', event.data);
-          break;
-
-        case 'complete':
-          if (event.exitCode !== 0) {
-            throw new Error(`OpenCode exited with code ${event.exitCode}`);
-          }
-          break;
-
-        case 'error':
-          throw new Error(`Stream error: ${event.error}`);
+        }
       }
+    } finally {
+      console.log(`[OpenCode] Finished. Total events: ${eventCount}, Output length: ${fullOutput.length}`);
+      reader.cancel();
     }
 
     return fullOutput;
+  }
+
+  /**
+   * Set OpenCode credentials from user's stored API keys
+   * Returns true if credentials were successfully set, false otherwise
+   */
+  private async setOpenCodeCredentials(
+    openCodeUrl: string,
+    apiUrl: string,
+    apiToken: string,
+    provider: string
+  ): Promise<boolean> {
+    // Map provider names to env var keys
+    const providerKeyMap: Record<string, string> = {
+      anthropic: 'ANTHROPIC_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+    };
+
+    const envVarKey = providerKeyMap[provider];
+    if (!envVarKey) {
+      console.error(`[OpenCode] Unknown provider: ${provider}`);
+      return false;
+    }
+
+    // Fetch user's API keys from database
+    try {
+      const response = await fetch(`${apiUrl}/v1/auth/api-keys/values`, {
+        headers: { Authorization: `Bearer ${apiToken}` },
+      });
+
+      if (!response.ok) {
+        // Fall back to environment variable
+        const envKey = this.env[envVarKey as keyof Env] as string | undefined;
+        if (envKey) {
+          await this.setOpenCodeProviderKey(openCodeUrl, provider, envKey);
+          return true;
+        }
+        return false;
+      }
+
+      const data = await response.json() as { env_vars: Record<string, string> };
+      const apiKey = data.env_vars?.[envVarKey];
+
+      if (apiKey) {
+        await this.setOpenCodeProviderKey(openCodeUrl, provider, apiKey);
+        return true;
+      } else {
+        // Fall back to environment variable
+        const envKey = this.env[envVarKey as keyof Env] as string | undefined;
+        if (envKey) {
+          await this.setOpenCodeProviderKey(openCodeUrl, provider, envKey);
+          return true;
+        }
+        return false;
+      }
+    } catch (err) {
+      console.error('Failed to fetch API keys:', err);
+      // Fall back to environment variable
+      const envKey = this.env[envVarKey as keyof Env] as string | undefined;
+      if (envKey) {
+        await this.setOpenCodeProviderKey(openCodeUrl, provider, envKey);
+        return true;
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Set a single provider's API key in OpenCode
+   */
+  private async setOpenCodeProviderKey(
+    openCodeUrl: string,
+    provider: string,
+    apiKey: string
+  ): Promise<void> {
+    await fetch(`${openCodeUrl}/auth/${provider}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'api', key: apiKey }),
+    });
   }
 
   /**
@@ -714,6 +901,7 @@ export class ConversationSession extends DurableObject<Env> {
     manifestHash: string,
     workDir: string
   ): Promise<void> {
+    const sandboxApiUrl = this.getSandboxApiUrl(apiUrl);
     // Download manifest
     const manifestResponse = await fetch(`${apiUrl}/v1/blobs/manifests/${manifestHash}`, {
       headers: { Authorization: `Bearer ${apiToken}` },
@@ -746,7 +934,7 @@ export class ConversationSession extends DurableObject<Env> {
       });
 
       const { urls } = await presignResponse.json() as { urls: Record<string, string> };
-      const url = urls[file.hash]?.startsWith('http') ? urls[file.hash] : `${apiUrl}${urls[file.hash]}`;
+      const url = urls[file.hash]?.startsWith('http') ? urls[file.hash] : `${sandboxApiUrl}${urls[file.hash]}`;
 
       // Download to sandbox
       await sandbox.exec(`curl -s -H "Authorization: Bearer ${apiToken}" -o "${filePath}" "${url}"`);
@@ -803,6 +991,7 @@ export class ConversationSession extends DurableObject<Env> {
     apiToken: string,
     workDir: string
   ): Promise<{ fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
+    const sandboxApiUrl = this.getSandboxApiUrl(apiUrl);
     const state = await this.ensureState();
     const previousManifestHash = state.lastManifestHash;
 
@@ -883,10 +1072,7 @@ export class ConversationSession extends DurableObject<Env> {
     };
 
     const manifestJson = JSON.stringify(manifest, null, '  ');
-
-    // Calculate manifest hash (simplified - in real impl would use crypto)
-    const manifestHashResult = await sandbox.exec(`echo '${manifestJson}' | sha256sum | cut -d' ' -f1`);
-    const manifestHash = manifestHashResult.stdout.trim();
+    const manifestHash = await this.computeSHA256(manifestJson);
 
     // Check which blobs need uploading
     const allHashes = [...new Set(files.map(f => f.hash))];
@@ -917,7 +1103,7 @@ export class ConversationSession extends DurableObject<Env> {
         });
 
         const { urls } = await presignResponse.json() as { urls: Record<string, string> };
-        const url = urls[file.hash]?.startsWith('http') ? urls[file.hash] : `${apiUrl}${urls[file.hash]}`;
+        const url = urls[file.hash]?.startsWith('http') ? urls[file.hash] : `${sandboxApiUrl}${urls[file.hash]}`;
 
         // Upload from sandbox
         await sandbox.exec(`curl -s -X PUT -H "Authorization: Bearer ${apiToken}" --data-binary @"${fullPath}" "${url}"`);
@@ -935,6 +1121,27 @@ export class ConversationSession extends DurableObject<Env> {
     });
 
     return { fileChanges, manifestHash, previousManifestHash };
+  }
+
+  private async computeSHA256(text: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  private getSandboxApiUrl(apiUrl: string): string {
+    try {
+      const url = new URL(apiUrl);
+      if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+        url.hostname = 'host.docker.internal';
+        return url.toString().replace(/\/$/, '');
+      }
+    } catch {
+      // Ignore and fall back to original
+    }
+    return apiUrl.replace(/\/$/, '');
   }
 
   /**
