@@ -26,7 +26,7 @@ export function SuggestionsBar({ suggestions, maxVisible = 5 }: SuggestionsBarPr
       ))}
 
       {hasMore && (
-        <button className="px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+        <button className="px-3 py-1.5 text-xs font-medium text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-lg transition-colors">
           +{suggestions.length - maxVisible} more
         </button>
       )}
@@ -36,10 +36,10 @@ export function SuggestionsBar({ suggestions, maxVisible = 5 }: SuggestionsBarPr
 
 function SuggestionButton({ suggestion }: { suggestion: Suggestion }) {
   const variantStyles: Record<NonNullable<Suggestion['variant']>, string> = {
-    default: 'bg-gray-100 text-gray-700 hover:bg-gray-200',
-    warning: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200',
-    primary: 'bg-primary-100 text-primary-700 hover:bg-primary-200',
-    success: 'bg-green-100 text-green-700 hover:bg-green-200',
+    default: 'bg-surface-100 text-surface-700 hover:bg-surface-200',
+    warning: 'bg-status-warning/10 text-status-warning hover:bg-status-warning/20',
+    primary: 'bg-accent-100 text-accent-700 hover:bg-accent-200',
+    success: 'bg-status-success/10 text-status-success hover:bg-status-success/20',
   };
 
   const variant = suggestion.variant || 'default';

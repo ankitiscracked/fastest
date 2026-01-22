@@ -54,7 +54,7 @@ export function PromptInput({
 
   return (
     <div className="relative">
-      <div className="flex items-end gap-2 bg-white border border-gray-300 rounded-xl shadow-sm focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 transition-all">
+      <div className="flex items-end gap-2 bg-white border border-surface-200 rounded-xl shadow-sm focus-within:border-accent-500 focus-within:ring-1 focus-within:ring-accent-500 transition-all">
         <textarea
           ref={textareaRef}
           value={value}
@@ -63,13 +63,13 @@ export function PromptInput({
           placeholder={getPlaceholder()}
           disabled={disabled}
           rows={1}
-          className="flex-1 px-4 py-3 bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-sm placeholder-gray-400 disabled:text-gray-400"
+          className="flex-1 px-4 py-3 bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-sm placeholder-surface-400 disabled:text-surface-400"
           style={{ maxHeight: '200px' }}
         />
         <button
           onClick={handleSubmit}
           disabled={disabled || !value.trim()}
-          className="m-2 p-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="m-2 p-2 bg-accent-500 text-white rounded-lg hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           title="Send (Enter)"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -85,8 +85,8 @@ export function PromptInput({
 
       {/* Running indicator */}
       {isRunning && (
-        <div className="absolute -top-6 left-0 flex items-center gap-2 text-xs text-gray-500">
-          <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+        <div className="absolute -top-6 left-0 flex items-center gap-2 text-xs text-surface-500">
+          <div className="w-2 h-2 bg-status-running rounded-full animate-pulse" />
           <span>Agent is working...</span>
         </div>
       )}

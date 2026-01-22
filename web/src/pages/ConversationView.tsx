@@ -46,21 +46,21 @@ function ConfirmDialog({
 
       {/* Dialog */}
       <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">{title}</h3>
-        <p className="text-sm text-gray-600 mb-6">{message}</p>
+        <h3 className="text-lg font-semibold text-surface-800 mb-2">{title}</h3>
+        <p className="text-sm text-surface-600 mb-6">{message}</p>
 
         <div className="flex justify-end gap-3">
           <button
             onClick={onCancel}
             disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 rounded-lg transition-colors disabled:opacity-50"
           >
             {cancelLabel}
           </button>
           <button
             onClick={onConfirm}
             disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 text-sm font-medium text-white bg-status-error hover:bg-red-600 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
           >
             {isLoading && (
               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -102,7 +102,7 @@ function ConversationActionsMenu({ onClearConversation, onNewConversation, disab
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled}
-        className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+        className="p-2 text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-lg transition-colors disabled:opacity-50"
         title="Conversation actions"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -111,13 +111,13 @@ function ConversationActionsMenu({ onClearConversation, onNewConversation, disab
       </button>
 
       {isOpen && (
-        <div className="absolute bottom-full right-0 mb-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
+        <div className="absolute bottom-full right-0 mb-1 w-48 bg-white border border-surface-200 rounded-lg shadow-lg z-50 py-1">
           <button
             onClick={() => {
               onNewConversation();
               setIsOpen(false);
             }}
-            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+            className="w-full text-left px-4 py-2 text-sm text-surface-700 hover:bg-surface-50 flex items-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -129,7 +129,7 @@ function ConversationActionsMenu({ onClearConversation, onNewConversation, disab
               onClearConversation();
               setIsOpen(false);
             }}
-            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+            className="w-full text-left px-4 py-2 text-sm text-status-error hover:bg-status-error/10 flex items-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -642,38 +642,38 @@ export function ConversationView() {
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-gray-500">Loading...</div>
+        <div className="text-surface-500">Loading...</div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div className="h-full flex flex-col bg-surface-50">
       {/* Error banner */}
       {error && (
-        <div className="bg-red-50 border-b border-red-200 px-4 py-3">
-          <p className="text-sm text-red-700">{error}</p>
+        <div className="bg-status-error/10 border-b border-status-error/20 px-4 py-3">
+          <p className="text-sm text-status-error">{error}</p>
         </div>
       )}
 
       {/* Conversation header */}
       {conversation && (
-        <div className="bg-white border-b border-gray-200 px-4 py-2">
+        <div className="bg-white border-b border-surface-200 px-4 py-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm">
               <button
                 onClick={() => navigate({ to: '/' })}
-                className="text-gray-500 hover:text-gray-700"
+                className="text-surface-500 hover:text-surface-700"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              <span className="font-medium text-gray-900 truncate max-w-md">
+              <span className="font-medium text-surface-800 truncate max-w-md">
                 {conversation.title || 'Untitled conversation'}
               </span>
-              <span className="text-gray-400">•</span>
-              <span className="text-gray-500">{conversation.workspace_name}</span>
+              <span className="text-surface-400">•</span>
+              <span className="text-surface-500">{conversation.workspace_name}</span>
             </div>
             <div className="flex items-center gap-2">
               {/* Latest deployment URL */}
@@ -682,7 +682,7 @@ export function ConversationView() {
                   href={deployments[deployments.length - 1].url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs text-primary-600 hover:text-primary-700 hover:underline truncate max-w-48"
+                  className="text-xs text-accent-600 hover:text-accent-700 hover:underline truncate max-w-48"
                   title={deployments[deployments.length - 1].url}
                 >
                   {deployments[deployments.length - 1].url}
@@ -696,8 +696,8 @@ export function ConversationView() {
                   disabled={isDeploying || !!runningMessageId}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
                     isDeploying
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50'
+                      ? 'bg-status-running/10 text-status-running'
+                      : 'bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50'
                   }`}
                   title={projectInfo?.type === 'wrangler' ? 'Deploy to Cloudflare Workers' : 'Deploy project'}
                 >
@@ -724,7 +724,7 @@ export function ConversationView() {
               <button
                 onClick={() => setShowTimeline(!showTimeline)}
                 className={`p-2 rounded-lg transition-colors ${
-                  showTimeline ? 'bg-primary-100 text-primary-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                  showTimeline ? 'bg-accent-100 text-accent-600' : 'text-surface-400 hover:text-surface-600 hover:bg-surface-100'
                 }`}
                 title={showTimeline ? 'Hide timeline' : 'Show timeline'}
               >
@@ -739,7 +739,7 @@ export function ConversationView() {
 
       {/* Preview URL Banner */}
       {previewBanner && (
-        <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white px-4 py-3 shadow-lg">
+        <div className="bg-gradient-to-r from-status-success to-emerald-600 text-white px-4 py-3 shadow-lg">
           <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="flex-shrink-0 w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
@@ -759,7 +759,7 @@ export function ConversationView() {
                 href={previewBanner.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-4 py-2 bg-white text-green-700 rounded-lg font-medium text-sm hover:bg-green-50 transition-colors flex items-center gap-2"
+                className="px-4 py-2 bg-white text-status-success rounded-lg font-medium text-sm hover:bg-status-success/10 transition-colors flex items-center gap-2"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -829,14 +829,14 @@ export function ConversationView() {
 
         {/* Timeline sidebar */}
         {showTimeline && (
-          <div className="w-72 border-l border-gray-200 bg-white flex-shrink-0">
+          <div className="w-72 border-l border-surface-200 bg-white flex-shrink-0">
             <Timeline items={timeline} />
           </div>
         )}
       </div>
 
       {/* Input area */}
-      <div className="border-t border-gray-200 bg-white px-4 py-4">
+      <div className="border-t border-surface-200 bg-white px-4 py-4">
         <div className="max-w-3xl mx-auto space-y-3">
           <PromptInput
             onSubmit={handleSubmitPrompt}
@@ -888,9 +888,9 @@ export function ConversationView() {
 function EmptyState() {
   return (
     <div className="text-center py-16">
-      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary-100 mb-4">
+      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-accent-100 mb-4">
         <svg
-          className="w-8 h-8 text-primary-600"
+          className="w-8 h-8 text-accent-600"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -903,8 +903,8 @@ function EmptyState() {
           />
         </svg>
       </div>
-      <h3 className="text-lg font-medium text-gray-900 mb-2">Start a conversation</h3>
-      <p className="text-gray-500 max-w-sm mx-auto">
+      <h3 className="text-lg font-medium text-surface-800 mb-2">Start a conversation</h3>
+      <p className="text-surface-500 max-w-sm mx-auto">
         Describe what you want to build and the agent will help you create it.
       </p>
     </div>

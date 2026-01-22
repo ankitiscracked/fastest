@@ -69,7 +69,7 @@ export function Settings() {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="text-gray-500">Loading settings...</div>
+        <div className="text-surface-500">Loading settings...</div>
       </div>
     );
   }
@@ -79,14 +79,14 @@ export function Settings() {
       {/* Header */}
       <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-surface-800">Settings</h1>
+          <p className="text-sm text-surface-500 mt-1">
             Manage your API keys and preferences
           </p>
         </div>
         <Link
           to="/"
-          className="text-sm text-gray-500 hover:text-gray-700"
+          className="text-sm text-surface-500 hover:text-surface-700"
         >
           Back to Home
         </Link>
@@ -100,16 +100,16 @@ export function Settings() {
       )}
 
       {/* API Keys Section */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-200">
-          <h3 className="text-sm font-medium text-gray-900">Model Provider API Keys</h3>
-          <p className="text-xs text-gray-500 mt-1">
+      <div className="bg-white rounded-lg border border-surface-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-surface-200">
+          <h3 className="text-sm font-medium text-surface-800">Model Provider API Keys</h3>
+          <p className="text-xs text-surface-500 mt-1">
             Your API keys are used to authenticate with AI model providers when running agents.
             Keys are stored securely and passed to OpenCode at runtime.
           </p>
         </div>
 
-        <div className="divide-y divide-gray-200">
+        <div className="divide-y divide-surface-200">
           {providers.map(([provider, config]) => {
             const existingKey = getKeyForProvider(provider);
             const isEditing = editingProvider === provider;
@@ -120,18 +120,18 @@ export function Settings() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900">{config.name}</span>
+                      <span className="font-medium text-surface-800">{config.name}</span>
                       {existingKey && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                        <span className="badge-success">
                           Configured
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-gray-500">{config.description}</p>
-                    <p className="text-xs text-gray-400 font-mono mt-1">{config.keyName}</p>
+                    <p className="text-sm text-surface-500">{config.description}</p>
+                    <p className="text-xs text-surface-400 font-mono mt-1">{config.keyName}</p>
 
                     {existingKey && !isEditing && (
-                      <div className="mt-2 text-sm text-gray-500 font-mono">
+                      <div className="mt-2 text-sm text-surface-500 font-mono">
                         {existingKey.key_value}
                       </div>
                     )}
@@ -143,13 +143,13 @@ export function Settings() {
                           value={newKeyValue}
                           onChange={(e) => setNewKeyValue(e.target.value)}
                           placeholder={`Enter your ${config.name} API key`}
-                          className="flex-1 text-sm border border-gray-300 rounded-md px-3 py-2 font-mono focus:ring-primary-500 focus:border-primary-500"
+                          className="input flex-1 font-mono"
                           autoFocus
                         />
                         <button
                           onClick={() => handleSaveKey(provider)}
                           disabled={isSaving || !newKeyValue.trim()}
-                          className="px-3 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="btn-primary"
                         >
                           {isSaving ? 'Saving...' : 'Save'}
                         </button>
@@ -158,7 +158,7 @@ export function Settings() {
                             setEditingProvider(null);
                             setNewKeyValue('');
                           }}
-                          className="px-3 py-2 text-gray-600 hover:text-gray-900 text-sm"
+                          className="btn-ghost"
                         >
                           Cancel
                         </button>
@@ -173,14 +173,14 @@ export function Settings() {
                           setEditingProvider(provider);
                           setNewKeyValue('');
                         }}
-                        className="px-3 py-1.5 text-sm text-primary-600 hover:text-primary-700 hover:bg-primary-50 rounded-md transition-colors"
+                        className="px-3 py-1.5 text-sm text-accent-600 hover:text-accent-700 hover:bg-accent-50 rounded-md transition-colors"
                       >
                         {existingKey ? 'Update' : 'Add Key'}
                       </button>
                       {existingKey && (
                         <button
                           onClick={() => handleDeleteKey(provider)}
-                          className="p-1.5 text-gray-400 hover:text-red-600 rounded-md transition-colors"
+                          className="p-1.5 text-surface-400 hover:text-status-error rounded-md transition-colors"
                           title="Delete key"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

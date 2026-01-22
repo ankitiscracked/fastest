@@ -178,20 +178,20 @@ export function Device() {
   // Show loading while checking auth state
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-500">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-surface-50">
+        <div className="text-surface-500">Loading...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-surface-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h1 className="text-center text-3xl font-bold text-gray-900">
+          <h1 className="text-center text-3xl font-bold text-surface-800">
             Fastest
           </h1>
-          <h2 className="mt-2 text-center text-xl text-gray-600">
+          <h2 className="mt-2 text-center text-xl text-surface-600">
             Authorize CLI
           </h2>
         </div>
@@ -205,7 +205,7 @@ export function Device() {
         {step === 'code' && (
           <form onSubmit={handleCodeSubmit} className="mt-8 space-y-6">
             <div>
-              <label htmlFor="code" className="block text-sm font-medium text-gray-700 text-center">
+              <label htmlFor="code" className="block text-sm font-medium text-surface-700 text-center">
                 Enter the code shown in your terminal
               </label>
               <input
@@ -213,7 +213,7 @@ export function Device() {
                 type="text"
                 value={userCode}
                 onChange={(e) => setUserCode(formatCode(e.target.value))}
-                className="mt-4 block w-full px-3 py-4 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary-500 focus:border-primary-500 text-center text-2xl tracking-widest font-mono"
+                className="mt-4 block w-full px-3 py-4 border border-surface-300 rounded-md shadow-sm placeholder-surface-400 focus:outline-none focus:ring-accent-500 focus:border-accent-500 text-center text-2xl tracking-widest font-mono"
                 placeholder="ABCD-1234"
                 maxLength={9}
                 autoFocus
@@ -224,7 +224,7 @@ export function Device() {
             <button
               type="submit"
               disabled={userCode.replace(/-/g, '').length < 8}
-              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-accent-500 hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Continue
             </button>
@@ -233,9 +233,9 @@ export function Device() {
 
         {step === 'authorize' && (
           <div className="mt-8 space-y-6">
-            <div className="bg-gray-100 rounded-lg p-4 text-center">
-              <p className="text-sm text-gray-600">Authorizing device with code</p>
-              <p className="text-xl font-mono font-bold text-gray-900">{userCode}</p>
+            <div className="bg-surface-100 rounded-lg p-4 text-center">
+              <p className="text-sm text-surface-600">Authorizing device with code</p>
+              <p className="text-xl font-mono font-bold text-surface-800">{userCode}</p>
             </div>
 
             {isAuthenticated && user ? (
@@ -250,7 +250,7 @@ export function Device() {
                 <button
                   onClick={handleAuthorizeWithSession}
                   disabled={loading}
-                  className="w-full py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                  className="w-full py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-accent-500 hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-500 disabled:opacity-50"
                 >
                   {loading ? 'Authorizing...' : 'Authorize this device'}
                 </button>
@@ -258,7 +258,7 @@ export function Device() {
             ) : (
               // User is not logged in - show Google Sign-In
               <div className="text-center">
-                <p className="text-sm text-gray-600 mb-4">
+                <p className="text-sm text-surface-600 mb-4">
                   Sign in with Google to authorize this device
                 </p>
 
@@ -267,14 +267,14 @@ export function Device() {
                     <div ref={googleButtonRef} />
                   </div>
                 ) : (
-                  <div className="text-sm text-gray-500">
+                  <div className="text-sm text-surface-500">
                     <p>Google Sign-In not configured.</p>
                     <p className="mt-1 text-xs">Set VITE_GOOGLE_CLIENT_ID in your environment.</p>
                   </div>
                 )}
 
                 {loading && (
-                  <p className="mt-4 text-sm text-gray-500">Authorizing...</p>
+                  <p className="mt-4 text-sm text-surface-500">Authorizing...</p>
                 )}
               </div>
             )}
@@ -286,7 +286,7 @@ export function Device() {
                   setStep('code');
                   setUserCode('');
                 }}
-                className="flex-1 py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                className="flex-1 py-2 px-4 border border-surface-300 rounded-md shadow-sm text-sm font-medium text-surface-700 bg-white hover:bg-surface-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-500"
               >
                 Back
               </button>
@@ -309,8 +309,8 @@ export function Device() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h3 className="text-lg font-medium text-gray-900">Device Authorized!</h3>
-            <p className="text-gray-500">
+            <h3 className="text-lg font-medium text-surface-800">Device Authorized!</h3>
+            <p className="text-surface-500">
               You can close this window and return to your terminal.
               <br />
               The CLI should now be logged in.
@@ -325,15 +325,15 @@ export function Device() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </div>
-            <h3 className="text-lg font-medium text-gray-900">Authorization Failed</h3>
-            <p className="text-gray-500">{error || 'Something went wrong.'}</p>
+            <h3 className="text-lg font-medium text-surface-800">Authorization Failed</h3>
+            <p className="text-surface-500">{error || 'Something went wrong.'}</p>
             <button
               onClick={() => {
                 setStep('code');
                 setUserCode('');
                 setError(null);
               }}
-              className="text-primary-600 hover:text-primary-700"
+              className="text-accent-600 hover:text-accent-700"
             >
               Try again
             </button>

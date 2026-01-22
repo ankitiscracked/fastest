@@ -27,7 +27,7 @@ export function TooltipPopup({
         <BaseTooltip.Popup
           className={`
             z-50 px-3 py-2 text-xs
-            bg-gray-900 text-white rounded-lg shadow-lg
+            bg-surface-800 text-white rounded-lg shadow-lg
             max-w-64 leading-relaxed
             animate-in fade-in-0 zoom-in-95
             data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95
@@ -36,7 +36,7 @@ export function TooltipPopup({
           {...props}
         >
           {children}
-          <TooltipArrow className="fill-gray-900" />
+          <TooltipArrow className="fill-surface-800" />
         </BaseTooltip.Popup>
       </TooltipPositioner>
     </TooltipPortal>
@@ -51,7 +51,7 @@ interface InfoTooltipProps {
 export function InfoTooltip({ children }: InfoTooltipProps) {
   return (
     <Tooltip>
-      <TooltipTrigger className="p-1 text-gray-400 hover:text-gray-600 transition-colors cursor-help">
+      <TooltipTrigger className="p-1 text-surface-400 hover:text-surface-600 transition-colors cursor-help">
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             strokeLinecap="round"

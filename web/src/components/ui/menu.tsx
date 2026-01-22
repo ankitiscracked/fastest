@@ -32,7 +32,7 @@ export function MenuPopup({
       <MenuPositioner side={side} align={align} sideOffset={sideOffset}>
         <BaseMenu.Popup
           className={`
-            z-50 min-w-[12rem] bg-white border border-gray-200 rounded-lg shadow-lg py-1
+            z-50 min-w-[12rem] bg-white border border-surface-200 rounded-lg shadow-lg py-1
             animate-in fade-in-0 zoom-in-95
             data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95
             ${className}
@@ -62,9 +62,9 @@ export function MenuItem({
       className={`
         w-full text-left px-4 py-2 text-sm outline-none cursor-pointer
         flex items-center justify-between
-        ${selected ? 'bg-primary-50 text-primary-700' : 'text-gray-700'}
-        hover:bg-gray-50 focus:bg-gray-50
-        data-[highlighted]:bg-gray-50
+        ${selected ? 'bg-accent-50 text-accent-700' : 'text-surface-700'}
+        hover:bg-surface-50 focus:bg-surface-50
+        data-[highlighted]:bg-surface-50
         ${className}
       `.trim()}
       {...props}
@@ -90,14 +90,14 @@ export function MenuRadioItem({
       className={`
         w-full text-left px-4 py-2 text-sm outline-none cursor-pointer
         flex items-center gap-2
-        ${selected ? 'bg-primary-50 text-primary-700' : 'text-gray-700'}
-        hover:bg-gray-50 focus:bg-gray-50
-        data-[highlighted]:bg-gray-50
+        ${selected ? 'bg-accent-50 text-accent-700' : 'text-surface-700'}
+        hover:bg-surface-50 focus:bg-surface-50
+        data-[highlighted]:bg-surface-50
         ${className}
       `.trim()}
       {...props}
     >
-      <span className={`w-2 h-2 rounded-full ${selected ? 'bg-primary-500' : 'bg-gray-300'}`} />
+      <span className={`w-2 h-2 rounded-full ${selected ? 'bg-accent-500' : 'bg-surface-300'}`} />
       {children}
     </BaseMenu.RadioItem>
   );

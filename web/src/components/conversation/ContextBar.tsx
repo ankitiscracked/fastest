@@ -55,7 +55,7 @@ export function ContextBar({
         }
       />
 
-      <span className="text-gray-300">/</span>
+      <span className="text-surface-300">/</span>
 
       {/* Workspace Selector */}
       <SelectorWithCreate
@@ -90,7 +90,7 @@ export function ContextBar({
       {hasSelection && onClearSelection && (
         <button
           onClick={onClearSelection}
-          className="flex items-center gap-1 px-2 py-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
           title="Clear selection (Ctrl+X)"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -102,14 +102,14 @@ export function ContextBar({
 
       {/* Status Badges */}
       {runningMessagesCount > 0 && (
-        <span className="flex items-center gap-1 text-xs text-blue-600 ml-2">
-          <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+        <span className="flex items-center gap-1 text-xs text-status-running ml-2">
+          <span className="w-1.5 h-1.5 bg-status-running rounded-full animate-pulse" />
           running
         </span>
       )}
 
       {driftCount > 0 && (
-        <button className="flex items-center gap-1 px-2 py-1 rounded-full bg-yellow-100 text-yellow-700 hover:bg-yellow-200 transition-colors ml-2">
+        <button className="flex items-center gap-1 px-2 py-1 rounded-full bg-status-warning/10 text-status-warning hover:bg-status-warning/20 transition-colors ml-2">
           <span className="text-xs">⚠️ {driftCount} changes</span>
         </button>
       )}
@@ -183,8 +183,8 @@ function SelectorWithCreate({
             disabled={disabled || isCreating}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               disabled
-                ? 'text-gray-400 cursor-not-allowed'
-                : 'text-primary-600 bg-primary-50 hover:bg-primary-100'
+                ? 'text-surface-400 cursor-not-allowed'
+                : 'text-accent-600 bg-accent-50 hover:bg-accent-100'
             }`}
           >
             {isCreating ? (
@@ -207,13 +207,13 @@ function SelectorWithCreate({
               onChange={(e) => setCreateName(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={`${label} name...`}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="input"
             />
             <div className="flex gap-2 mt-2">
               <button
                 onClick={handleCreate}
                 disabled={!createName.trim() || isCreating}
-                className="flex-1 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-primary flex-1"
               >
                 Create
               </button>
@@ -222,7 +222,7 @@ function SelectorWithCreate({
                   setCreateOpen(false);
                   setCreateName('');
                 }}
-                className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
+                className="btn-ghost"
               >
                 Cancel
               </button>
@@ -243,22 +243,22 @@ function SelectorWithCreate({
         <Menu>
           <MenuTrigger
             disabled={disabled}
-            className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-l-lg text-sm font-medium transition-colors border-r border-gray-200 ${
+            className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-l-lg text-sm font-medium transition-colors border-r border-surface-200 ${
               disabled
-                ? 'text-gray-400 cursor-not-allowed bg-gray-50'
-                : 'text-gray-700 hover:bg-gray-100'
+                ? 'text-surface-400 cursor-not-allowed bg-surface-50'
+                : 'text-surface-700 hover:bg-surface-100'
             }`}
           >
             <span>{currentItem?.name || `Select ${label.toLowerCase()}`}</span>
             {currentItem?.badge && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+              <span className="text-xs px-1.5 py-0.5 rounded bg-status-success/10 text-status-success">
                 {currentItem.badge}
               </span>
             )}
             <ChevronDownIcon />
           </MenuTrigger>
           <MenuPopup className="w-64">
-            <div className="px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
+            <div className="px-3 py-2 text-xs font-medium text-surface-500 uppercase tracking-wide">
               {label}s
             </div>
             {items.map((item) => {
@@ -271,12 +271,12 @@ function SelectorWithCreate({
                 >
                   <div className="flex items-center gap-2">
                     <span
-                      className={`w-2 h-2 rounded-full ${isSelected ? 'bg-primary-500' : 'bg-gray-300'}`}
+                      className={`w-2 h-2 rounded-full ${isSelected ? 'bg-accent-500' : 'bg-surface-300'}`}
                     />
                     <span className="font-medium">{item.name}</span>
                   </div>
                   {item.badge && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-status-success/10 text-status-success">
                       {item.badge}
                     </span>
                   )}
@@ -292,15 +292,15 @@ function SelectorWithCreate({
             disabled={disabled || isCreating}
             className={`flex items-center px-2 py-1.5 rounded-r-lg text-sm transition-colors ${
               disabled
-                ? 'text-gray-400 cursor-not-allowed bg-gray-50'
-                : 'text-gray-500 hover:bg-gray-100 hover:text-primary-600'
+                ? 'text-surface-400 cursor-not-allowed bg-surface-50'
+                : 'text-surface-500 hover:bg-surface-100 hover:text-accent-600'
             }`}
             title={`Create new ${label.toLowerCase()}`}
           >
             {isCreating ? <Spinner /> : <PlusIcon />}
           </PopoverTrigger>
           <PopoverPopup className="w-64 p-3">
-            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+            <div className="text-xs font-medium text-surface-500 uppercase tracking-wide mb-2">
               New {label}
             </div>
             <input
@@ -310,13 +310,13 @@ function SelectorWithCreate({
               onChange={(e) => setCreateName(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={`${label} name...`}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="input"
             />
             <div className="flex gap-2 mt-2">
               <button
                 onClick={handleCreate}
                 disabled={!createName.trim() || isCreating}
-                className="flex-1 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-primary flex-1"
               >
                 {isCreating ? 'Creating...' : 'Create'}
               </button>
@@ -325,7 +325,7 @@ function SelectorWithCreate({
                   setCreateOpen(false);
                   setCreateName('');
                 }}
-                className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
+                className="btn-ghost"
               >
                 Cancel
               </button>
@@ -350,7 +350,7 @@ function PlusIcon() {
 
 function ChevronDownIcon() {
   return (
-    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className="w-4 h-4 text-surface-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
     </svg>
   );

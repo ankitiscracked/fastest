@@ -33,7 +33,7 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
       {/* User message - only render if there's a prompt */}
       {message.prompt && (
         <div className="flex justify-end">
-          <div className="max-w-[85%] bg-primary-600 text-white rounded-2xl rounded-tr-sm px-4 py-3">
+          <div className="max-w-[85%] bg-accent-500 text-white rounded-2xl rounded-tr-sm px-4 py-3">
             <p className="text-sm whitespace-pre-wrap">{message.prompt}</p>
           </div>
         </div>
@@ -42,15 +42,15 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
       {/* Agent message - only show for assistant messages (no prompt but has output/streaming/running status) */}
       {(!message.prompt || message.output || isStreaming) && (
         <div className="flex justify-start">
-          <div className="max-w-[85%] bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
+          <div className="max-w-[85%] bg-white border border-surface-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-gray-500">Agent</span>
+              <span className="text-xs font-medium text-surface-500">Agent</span>
               <StatusBadge status={message.status} />
             </div>
 
             {/* Content based on status */}
             {message.status === 'pending' && (
-              <p className="text-sm text-gray-500 italic">Waiting to run...</p>
+              <p className="text-sm text-surface-500 italic">Waiting to run...</p>
             )}
 
             {message.status === 'running' && (
@@ -72,8 +72,8 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
                   <MarkdownContent content={streamingContent} mode="streaming" />
                 ) : (
                   <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                    <p className="text-sm text-gray-500">Working on it...</p>
+                    <div className="w-2 h-2 bg-status-running rounded-full animate-pulse" />
+                    <p className="text-sm text-surface-500">Working on it...</p>
                   </div>
                 )}
               </div>
@@ -97,23 +97,23 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
                 ) : hasParts ? (
                   <OpenCodeParts parts={parts} />
                 ) : (
-                  <p className="text-sm text-gray-700">Task completed successfully.</p>
+                  <p className="text-sm text-surface-700">Task completed successfully.</p>
                 )}
               </div>
             )}
 
             {message.status === 'failed' && (
               <div className="space-y-2">
-                <p className="text-sm text-red-600">{message.error || 'An error occurred'}</p>
+                <p className="text-sm text-status-error">{message.error || 'An error occurred'}</p>
               </div>
             )}
 
             {message.status === 'cancelled' && (
-              <p className="text-sm text-gray-500 italic">Cancelled</p>
+              <p className="text-sm text-surface-500 italic">Cancelled</p>
             )}
 
             {/* Timestamp */}
-            <div className="mt-2 text-xs text-gray-400">
+            <div className="mt-2 text-xs text-surface-400">
               {formatTimestamp(message.created_at)}
               {message.completed_at && (
                 <span className="ml-2">
@@ -130,11 +130,11 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
 
 function StatusBadge({ status }: { status: MessageStatus }) {
   const styles: Record<MessageStatus, string> = {
-    pending: 'bg-gray-100 text-gray-600',
-    running: 'bg-blue-100 text-blue-700',
-    completed: 'bg-green-100 text-green-700',
-    failed: 'bg-red-100 text-red-700',
-    cancelled: 'bg-yellow-100 text-yellow-700',
+    pending: 'badge-pending',
+    running: 'badge-running',
+    completed: 'badge-success',
+    failed: 'badge-error',
+    cancelled: 'badge-warning',
   };
 
   const labels: Record<MessageStatus, string> = {
@@ -146,9 +146,9 @@ function StatusBadge({ status }: { status: MessageStatus }) {
   };
 
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[status]}`}>
+    <span className={styles[status]}>
       {status === 'running' && (
-        <span className="inline-block w-1.5 h-1.5 bg-blue-500 rounded-full mr-1 animate-pulse" />
+        <span className="inline-block w-1.5 h-1.5 bg-status-running rounded-full mr-1 animate-pulse" />
       )}
       {labels[status]}
     </span>

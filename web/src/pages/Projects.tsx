@@ -43,7 +43,7 @@ export function Projects() {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="text-gray-500">Loading projects...</div>
+        <div className="text-surface-500">Loading projects...</div>
       </div>
     );
   }
@@ -51,10 +51,10 @@ export function Projects() {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
+        <h1 className="text-2xl font-bold text-surface-800">Projects</h1>
         <button
           onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm font-medium"
+          className="btn-primary"
         >
           New Project
         </button>
@@ -71,27 +71,27 @@ export function Projects() {
       {showCreate && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-lg font-semibold mb-4">Create New Project</h2>
+            <h2 className="text-lg font-semibold text-surface-800 mb-4">Create New Project</h2>
             <form onSubmit={handleCreateProject}>
               <input
                 type="text"
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
                 placeholder="Project name"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md mb-4"
+                className="input mb-4"
                 autoFocus
               />
               <div className="flex justify-end space-x-3">
                 <button
                   type="button"
                   onClick={() => setShowCreate(false)}
-                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md"
+                  className="btn-ghost"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+                  className="btn-primary"
                 >
                   Create
                 </button>
@@ -103,29 +103,29 @@ export function Projects() {
 
       {/* Projects list */}
       {projects.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No projects yet</h3>
-          <p className="text-gray-500 mb-4">Create your first project to get started</p>
-          <p className="text-sm text-gray-400">
-            Or run <code className="bg-gray-100 px-1 py-0.5 rounded">fst init my-project</code> from the CLI
+        <div className="text-center py-12 bg-white rounded-lg border border-surface-200">
+          <h3 className="text-lg font-medium text-surface-800 mb-2">No projects yet</h3>
+          <p className="text-surface-500 mb-4">Create your first project to get started</p>
+          <p className="text-sm text-surface-400">
+            Or run <code className="bg-surface-100 px-1 py-0.5 rounded">fst init my-project</code> from the CLI
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <ul className="divide-y divide-gray-200">
+        <div className="bg-white rounded-lg border border-surface-200 overflow-hidden">
+          <ul className="divide-y divide-surface-200">
             {projects.map((project) => (
               <li key={project.id}>
                 <Link
                   to="/projects/$projectId"
                   params={{ projectId: project.id }}
-                  className="block px-6 py-4 hover:bg-gray-50"
+                  className="block px-6 py-4 hover:bg-surface-50"
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-sm font-medium text-gray-900">{project.name}</h3>
-                      <p className="text-xs text-gray-500 font-mono">{project.id}</p>
+                      <h3 className="text-sm font-medium text-surface-800">{project.name}</h3>
+                      <p className="text-xs text-surface-500 font-mono">{project.id}</p>
                     </div>
-                    <div className="text-sm text-gray-500">
+                    <div className="text-sm text-surface-500">
                       Updated {new Date(project.updated_at).toLocaleDateString()}
                     </div>
                   </div>

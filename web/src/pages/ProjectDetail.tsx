@@ -108,7 +108,7 @@ export function ProjectDetail() {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="text-gray-500">Loading project...</div>
+        <div className="text-surface-500">Loading project...</div>
       </div>
     );
   }
@@ -116,7 +116,7 @@ export function ProjectDetail() {
   if (!project) {
     return (
       <div className="text-center py-12">
-        <h2 className="text-lg font-medium text-gray-900">Project not found</h2>
+        <h2 className="text-lg font-medium text-surface-800">Project not found</h2>
         {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
       </div>
     );
@@ -134,12 +134,12 @@ export function ProjectDetail() {
       {/* Header */}
       <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
-          <p className="text-sm text-gray-500 font-mono flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-surface-800">{project.name}</h1>
+          <p className="text-sm text-surface-500 font-mono flex items-center gap-2">
             {project.id}
             <button
               onClick={() => copyToClipboard(project.id)}
-              className="text-primary-600 hover:text-primary-700"
+              className="text-accent-600 hover:text-accent-700"
               title="Copy ID"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -151,7 +151,7 @@ export function ProjectDetail() {
         <Link
           to="/projects/$projectId/workspaces"
           params={{ projectId: projectId! }}
-          className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm font-medium"
+          className="px-4 py-2 bg-accent-500 text-white rounded-md hover:bg-accent-600 text-sm font-medium"
         >
           View Workspaces
         </Link>
@@ -159,13 +159,13 @@ export function ProjectDetail() {
 
       {/* CLI Quick Actions */}
       <div className="bg-gray-800 rounded-lg p-4 text-white">
-        <h3 className="text-sm font-medium text-gray-300 mb-3">CLI Quick Actions</h3>
+        <h3 className="text-sm font-medium text-surface-300 mb-3">CLI Quick Actions</h3>
         <div className="space-y-2 font-mono text-sm">
           <div className="flex items-center justify-between bg-gray-900 rounded px-3 py-2">
             <code>fst link {project.id}</code>
             <button
               onClick={() => copyToClipboard(`fst link ${project.id}`)}
-              className="text-gray-400 hover:text-white"
+              className="text-surface-400 hover:text-white"
             >
               Copy
             </button>
@@ -174,7 +174,7 @@ export function ProjectDetail() {
             <code>fst clone {project.id}</code>
             <button
               onClick={() => copyToClipboard(`fst clone ${project.id}`)}
-              className="text-gray-400 hover:text-white"
+              className="text-surface-400 hover:text-white"
             >
               Copy
             </button>
@@ -183,7 +183,7 @@ export function ProjectDetail() {
             <code>fst snapshot</code>
             <button
               onClick={() => copyToClipboard('fst snapshot')}
-              className="text-gray-400 hover:text-white"
+              className="text-surface-400 hover:text-white"
             >
               Copy
             </button>
@@ -192,18 +192,18 @@ export function ProjectDetail() {
       </div>
 
       {/* Status */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <h3 className="text-sm font-medium text-gray-900 mb-3">Status</h3>
+      <div className="bg-white rounded-lg border border-surface-200 p-4">
+        <h3 className="text-sm font-medium text-surface-800 mb-3">Status</h3>
         <dl className="grid grid-cols-2 gap-4 text-sm">
           <div>
-            <dt className="text-gray-500">Last Snapshot</dt>
-            <dd className="font-mono text-gray-900">
+            <dt className="text-surface-500">Last Snapshot</dt>
+            <dd className="font-mono text-surface-800">
               {project.last_snapshot_id || 'None'}
             </dd>
           </div>
           <div>
-            <dt className="text-gray-500">Last Updated</dt>
-            <dd className="text-gray-900">
+            <dt className="text-surface-500">Last Updated</dt>
+            <dd className="text-surface-800">
               {new Date(project.updated_at).toLocaleString()}
             </dd>
           </div>
@@ -211,10 +211,10 @@ export function ProjectDetail() {
       </div>
 
       {/* Environment Variables */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-200">
-          <h3 className="text-sm font-medium text-gray-900">Environment Variables</h3>
-          <p className="text-xs text-gray-500 mt-1">
+      <div className="bg-white rounded-lg border border-surface-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-surface-200">
+          <h3 className="text-sm font-medium text-surface-800">Environment Variables</h3>
+          <p className="text-xs text-surface-500 mt-1">
             These variables are passed to deployments via Wrangler --var flags
           </p>
         </div>
@@ -225,11 +225,11 @@ export function ProjectDetail() {
               {envVars.map((envVar) => (
                 <div
                   key={envVar.key}
-                  className="flex items-center gap-2 bg-gray-50 rounded-md p-2"
+                  className="flex items-center gap-2 bg-surface-50 rounded-md p-2"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm text-gray-900">{envVar.key}</span>
+                      <span className="font-mono text-sm text-surface-800">{envVar.key}</span>
                       {envVar.is_secret && (
                         <span className="text-xs bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded">
                           secret
@@ -242,13 +242,13 @@ export function ProjectDetail() {
                           type={envVar.is_secret ? 'password' : 'text'}
                           value={editEnvValue}
                           onChange={(e) => setEditEnvValue(e.target.value)}
-                          className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 font-mono"
+                          className="flex-1 text-sm border border-surface-300 rounded px-2 py-1 font-mono"
                           placeholder="New value"
                         />
                         <button
                           onClick={() => handleUpdateEnvVar(envVar.key)}
                           disabled={envSaving}
-                          className="text-xs px-2 py-1 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
+                          className="text-xs px-2 py-1 bg-accent-500 text-white rounded hover:bg-accent-600 disabled:opacity-50"
                         >
                           Save
                         </button>
@@ -257,13 +257,13 @@ export function ProjectDetail() {
                             setEditingEnvKey(null);
                             setEditEnvValue('');
                           }}
-                          className="text-xs px-2 py-1 text-gray-600 hover:text-gray-900"
+                          className="text-xs px-2 py-1 text-surface-600 hover:text-surface-800"
                         >
                           Cancel
                         </button>
                       </div>
                     ) : (
-                      <div className="text-xs text-gray-500 font-mono truncate">
+                      <div className="text-xs text-surface-500 font-mono truncate">
                         {envVar.value}
                       </div>
                     )}
@@ -275,7 +275,7 @@ export function ProjectDetail() {
                           setEditingEnvKey(envVar.key);
                           setEditEnvValue('');
                         }}
-                        className="p-1 text-gray-400 hover:text-gray-600"
+                        className="p-1 text-surface-400 hover:text-surface-600"
                         title="Edit value"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -284,7 +284,7 @@ export function ProjectDetail() {
                       </button>
                       <button
                         onClick={() => handleDeleteEnvVar(envVar.key)}
-                        className="p-1 text-gray-400 hover:text-red-600"
+                        className="p-1 text-surface-400 hover:text-red-600"
                         title="Delete"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -299,35 +299,35 @@ export function ProjectDetail() {
           )}
 
           {/* Add new env var form */}
-          <form onSubmit={handleAddEnvVar} className="border-t border-gray-200 pt-4">
+          <form onSubmit={handleAddEnvVar} className="border-t border-surface-200 pt-4">
             <div className="flex flex-wrap gap-2">
               <input
                 type="text"
                 value={newEnvKey}
                 onChange={(e) => setNewEnvKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
                 placeholder="KEY"
-                className="flex-1 min-w-[120px] text-sm border border-gray-300 rounded px-3 py-2 font-mono"
+                className="flex-1 min-w-[120px] text-sm border border-surface-300 rounded px-3 py-2 font-mono"
               />
               <input
                 type={newEnvIsSecret ? 'password' : 'text'}
                 value={newEnvValue}
                 onChange={(e) => setNewEnvValue(e.target.value)}
                 placeholder="value"
-                className="flex-1 min-w-[200px] text-sm border border-gray-300 rounded px-3 py-2 font-mono"
+                className="flex-1 min-w-[200px] text-sm border border-surface-300 rounded px-3 py-2 font-mono"
               />
-              <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
+              <label className="flex items-center gap-1.5 text-sm text-surface-600 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={newEnvIsSecret}
                   onChange={(e) => setNewEnvIsSecret(e.target.checked)}
-                  className="rounded border-gray-300"
+                  className="rounded border-surface-300"
                 />
                 Secret
               </label>
               <button
                 type="submit"
                 disabled={envSaving || !newEnvKey.trim()}
-                className="px-4 py-2 bg-primary-600 text-white rounded text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-accent-500 text-white rounded text-sm font-medium hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {envSaving ? 'Adding...' : 'Add Variable'}
               </button>
@@ -335,7 +335,7 @@ export function ProjectDetail() {
           </form>
 
           {envVars.length === 0 && (
-            <p className="text-sm text-gray-500 text-center py-2">
+            <p className="text-sm text-surface-500 text-center py-2">
               No environment variables configured
             </p>
           )}
@@ -343,27 +343,27 @@ export function ProjectDetail() {
       </div>
 
       {/* Active Workspaces */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-200">
-          <h3 className="text-sm font-medium text-gray-900">Active Workspaces</h3>
+      <div className="bg-white rounded-lg border border-surface-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-surface-200">
+          <h3 className="text-sm font-medium text-surface-800">Active Workspaces</h3>
         </div>
         {workspaces.length === 0 ? (
-          <div className="px-4 py-8 text-center text-gray-500 text-sm">
-            No active workspaces. Run <code className="bg-gray-100 px-1 py-0.5 rounded">fst workspace create</code> to create one.
+          <div className="px-4 py-8 text-center text-surface-500 text-sm">
+            No active workspaces. Run <code className="bg-surface-100 px-1 py-0.5 rounded">fst workspace create</code> to create one.
           </div>
         ) : (
-          <ul className="divide-y divide-gray-200">
+          <ul className="divide-y divide-surface-200">
             {workspaces.map((workspace) => (
               <li key={workspace.id} className="px-4 py-3">
                 <Link
                   to="/"
-                  className="flex items-center justify-between hover:bg-gray-50 -mx-4 px-4 py-2"
+                  className="flex items-center justify-between hover:bg-surface-50 -mx-4 px-4 py-2"
                 >
                   <div>
-                    <span className="font-medium text-gray-900">{workspace.name}</span>
-                    <span className="ml-2 text-xs text-gray-500">{workspace.local_path}</span>
+                    <span className="font-medium text-surface-800">{workspace.name}</span>
+                    <span className="ml-2 text-xs text-surface-500">{workspace.local_path}</span>
                   </div>
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-surface-400">
                     {workspace.last_seen_at
                       ? `Seen ${new Date(workspace.last_seen_at).toLocaleString()}`
                       : 'Never seen'}
@@ -376,24 +376,24 @@ export function ProjectDetail() {
       </div>
 
       {/* Recent Snapshots */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-200">
-          <h3 className="text-sm font-medium text-gray-900">Recent Snapshots</h3>
+      <div className="bg-white rounded-lg border border-surface-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-surface-200">
+          <h3 className="text-sm font-medium text-surface-800">Recent Snapshots</h3>
         </div>
         {snapshots.length === 0 ? (
-          <div className="px-4 py-8 text-center text-gray-500 text-sm">
-            No snapshots yet. Run <code className="bg-gray-100 px-1 py-0.5 rounded">fst snapshot</code> to create one.
+          <div className="px-4 py-8 text-center text-surface-500 text-sm">
+            No snapshots yet. Run <code className="bg-surface-100 px-1 py-0.5 rounded">fst snapshot</code> to create one.
           </div>
         ) : (
-          <ul className="divide-y divide-gray-200">
+          <ul className="divide-y divide-surface-200">
             {snapshots.slice(0, 10).map((snapshot) => (
               <li key={snapshot.id} className="px-4 py-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <span className="font-mono text-sm text-gray-900">{snapshot.id}</span>
-                    <span className="ml-2 text-xs text-gray-500">{snapshot.source}</span>
+                    <span className="font-mono text-sm text-surface-800">{snapshot.id}</span>
+                    <span className="ml-2 text-xs text-surface-500">{snapshot.source}</span>
                   </div>
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-surface-400">
                     {new Date(snapshot.created_at).toLocaleString()}
                   </span>
                 </div>

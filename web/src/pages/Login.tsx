@@ -85,13 +85,13 @@ export function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-surface-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h1 className="text-center text-3xl font-bold text-gray-900">
+          <h1 className="text-center text-3xl font-bold text-surface-800">
             Fastest
           </h1>
-          <h2 className="mt-2 text-center text-xl text-gray-600">
+          <h2 className="mt-2 text-center text-xl text-surface-600">
             Sign in to your account
           </h2>
         </div>
@@ -102,7 +102,7 @@ export function Login() {
             {GOOGLE_CLIENT_ID ? (
               <div ref={googleButtonRef} />
             ) : (
-              <div className="text-sm text-gray-500 text-center">
+              <div className="text-sm text-surface-500 text-center">
                 <p>Google Sign-In not configured.</p>
                 <p className="mt-1 text-xs">Set VITE_GOOGLE_CLIENT_ID in your environment.</p>
               </div>
@@ -111,16 +111,16 @@ export function Login() {
 
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-300" />
+              <div className="w-full border-t border-surface-300" />
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-gray-50 text-gray-500">or</span>
+              <span className="px-2 bg-surface-50 text-surface-500">or</span>
             </div>
           </div>
 
           <div className="text-center">
-            <p className="text-sm text-gray-500">
-              CLI users: run <code className="bg-gray-100 px-1 py-0.5 rounded">fst login</code> to authenticate
+            <p className="text-sm text-surface-500">
+              CLI users: run <code className="bg-surface-100 px-1 py-0.5 rounded">fst login</code> to authenticate
             </p>
           </div>
         </div>

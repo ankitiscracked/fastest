@@ -4,6 +4,256 @@
 
 @source "../node_modules/streamdown/dist/index.js";
 
-body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+@layer base {
+  :root {
+    /* Surface colors - warm stone neutrals */
+    --color-surface-50: 250 250 249;
+    --color-surface-100: 245 245 244;
+    --color-surface-200: 231 229 228;
+    --color-surface-300: 214 211 209;
+    --color-surface-400: 168 162 158;
+    --color-surface-500: 120 113 108;
+    --color-surface-600: 87 83 78;
+    --color-surface-700: 68 64 60;
+    --color-surface-800: 41 37 36;
+    --color-surface-900: 28 25 23;
+
+    /* Accent colors - teal */
+    --color-accent-50: 240 253 250;
+    --color-accent-100: 204 251 241;
+    --color-accent-200: 153 246 228;
+    --color-accent-300: 94 234 212;
+    --color-accent-400: 45 212 191;
+    --color-accent-500: 20 184 166;
+    --color-accent-600: 13 148 136;
+    --color-accent-700: 15 118 110;
+    --color-accent-800: 17 94 89;
+    --color-accent-900: 19 78 74;
+
+    /* Status colors */
+    --color-status-running: 59 130 246;
+    --color-status-success: 34 197 94;
+    --color-status-error: 239 68 68;
+    --color-status-warning: 245 158 11;
+    --color-status-pending: 168 162 158;
+  }
+
+  /* Dark mode support (future) */
+  .dark {
+    --color-surface-50: 28 25 23;
+    --color-surface-100: 41 37 36;
+    --color-surface-200: 68 64 60;
+    --color-surface-300: 87 83 78;
+    --color-surface-400: 120 113 108;
+    --color-surface-500: 168 162 158;
+    --color-surface-600: 214 211 209;
+    --color-surface-700: 231 229 228;
+    --color-surface-800: 245 245 244;
+    --color-surface-900: 250 250 249;
+  }
+
+  body {
+    @apply bg-surface-50 text-surface-700 antialiased;
+    font-size: 14px;
+  }
+}
+
+@layer components {
+  /* Button variants */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent-500 text-white hover:bg-accent-600 active:bg-accent-700;
+  }
+
+  .btn-secondary {
+    @apply btn bg-surface-100 text-surface-700 hover:bg-surface-200 active:bg-surface-300 border border-surface-200;
+  }
+
+  .btn-ghost {
+    @apply btn text-surface-600 hover:bg-surface-100 active:bg-surface-200;
+  }
+
+  .btn-danger {
+    @apply btn bg-status-error text-white hover:bg-red-600 active:bg-red-700;
+  }
+
+  /* Card component */
+  .card {
+    @apply bg-white rounded-lg border border-surface-200 shadow-sm;
+  }
+
+  /* Input styles */
+  .input {
+    @apply w-full px-3 py-2 text-sm bg-white border border-surface-200 rounded-lg placeholder:text-surface-400 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent transition-shadow;
+  }
+
+  /* Status badges */
+  .badge {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded-full;
+  }
+
+  .badge-running {
+    @apply badge bg-status-running/10 text-status-running;
+  }
+
+  .badge-success {
+    @apply badge bg-status-success/10 text-status-success;
+  }
+
+  .badge-error {
+    @apply badge bg-status-error/10 text-status-error;
+  }
+
+  .badge-warning {
+    @apply badge bg-status-warning/10 text-status-warning;
+  }
+
+  .badge-pending {
+    @apply badge bg-surface-100 text-surface-600;
+  }
+
+  /* Code block wrapper */
+  .code-block-wrapper {
+    @apply relative;
+  }
+
+  /* Code copy button */
+  .code-copy-btn {
+    @apply absolute top-2 right-2 flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-surface-400 bg-surface-100/90 border border-surface-200 rounded-md cursor-pointer opacity-0 transition-all backdrop-blur-sm;
+  }
+
+  .code-block-wrapper:hover .code-copy-btn {
+    @apply opacity-100;
+  }
+
+  .code-copy-btn:hover {
+    @apply text-surface-700 bg-surface-200 border-surface-300;
+  }
+
+  .code-copy-btn.copied {
+    @apply text-status-success border-status-success/30;
+  }
+
+  /* Reasoning block */
+  .reasoning-block {
+    @apply relative my-3 py-3 px-4 bg-gradient-to-br from-surface-50 to-accent-50/30 border border-surface-200 border-l-[3px] border-l-accent-400 rounded-lg;
+  }
+
+  .reasoning-block summary {
+    @apply flex items-center gap-2 cursor-pointer text-xs font-medium text-surface-500 select-none list-none;
+  }
+
+  .reasoning-block summary::-webkit-details-marker {
+    @apply hidden;
+  }
+
+  .reasoning-content {
+    @apply mt-3 pt-3 border-t border-surface-200 text-sm text-surface-600 leading-relaxed;
+  }
+
+  /* Patch visualization */
+  .patch-visualization {
+    @apply mt-2;
+  }
+
+  .patch-file-item {
+    @apply flex items-center gap-2 py-1.5 text-xs font-mono border-b border-surface-100 last:border-b-0;
+  }
+
+  .patch-file-badge {
+    @apply shrink-0 w-5 h-5 flex items-center justify-center text-[10px] font-semibold rounded text-white;
+  }
+
+  .patch-file-badge.added {
+    @apply bg-status-success;
+  }
+
+  .patch-file-badge.modified {
+    @apply bg-status-warning;
+  }
+
+  .patch-file-badge.deleted {
+    @apply bg-status-error;
+  }
+
+  /* Tool status badges */
+  .tool-status {
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide rounded;
+  }
+
+  .tool-status.pending {
+    @apply bg-surface-100 text-surface-500;
+  }
+
+  .tool-status.running {
+    @apply bg-status-running/10 text-status-running;
+  }
+
+  .tool-status.success {
+    @apply bg-status-success/10 text-status-success;
+  }
+
+  .tool-status.error {
+    @apply bg-status-error/10 text-status-error;
+  }
+
+  /* Terminal/log viewer (dark theme) */
+  .terminal {
+    @apply bg-surface-900 text-surface-100 rounded-lg overflow-hidden font-mono text-xs;
+  }
+
+  .terminal-header {
+    @apply flex items-center justify-between px-4 py-2 bg-surface-800 border-b border-surface-700;
+  }
+
+  .terminal-content {
+    @apply p-4 overflow-auto;
+  }
+
+  .terminal-line {
+    @apply flex gap-2 py-0.5 hover:bg-surface-800/50;
+  }
+
+  .terminal-timestamp {
+    @apply text-surface-500 select-none w-20 shrink-0;
+  }
+
+  .terminal-step {
+    @apply w-16 shrink-0;
+  }
+
+  .terminal-step-install {
+    @apply text-status-running;
+  }
+
+  .terminal-step-build {
+    @apply text-status-warning;
+  }
+
+  .terminal-step-deploy {
+    @apply text-status-success;
+  }
+
+  .terminal-output {
+    @apply text-surface-100 break-all whitespace-pre-wrap;
+  }
+
+  .terminal-error {
+    @apply text-status-error;
+  }
+}
+
+@layer utilities {
+  /* Focus ring utility */
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2;
+  }
+
+  /* Running state pulse */
+  .pulse-running {
+    @apply animate-pulse;
+  }
 }

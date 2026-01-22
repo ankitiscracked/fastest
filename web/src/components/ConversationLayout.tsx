@@ -3,7 +3,7 @@ import { Sidebar } from './Sidebar';
 
 export function ConversationLayout() {
   return (
-    <div className="h-screen flex bg-gray-50">
+    <div className="h-screen flex bg-surface-50">
       {/* Left sidebar */}
       <Sidebar />
 

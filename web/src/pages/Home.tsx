@@ -193,17 +193,17 @@ export function Home() {
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-gray-500">Loading...</div>
+        <div className="text-surface-500">Loading...</div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div className="h-full flex flex-col bg-surface-50">
       {/* Error banner */}
       {error && (
         <div className="bg-red-50 border-b border-red-200 px-4 py-3">
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-status-error">{error}</p>
         </div>
       )}
 
@@ -211,12 +211,12 @@ export function Home() {
         <div className="max-w-3xl mx-auto px-4 py-8">
           {/* Hero / Prompt Section */}
           <div className="text-center mb-8">
-            <h1 className="text-2xl font-semibold text-gray-900 mb-2">What do you want to build?</h1>
-            <p className="text-gray-500">Start a new conversation or continue where you left off</p>
+            <h1 className="text-2xl font-semibold text-surface-800 mb-2">What do you want to build?</h1>
+            <p className="text-surface-500">Start a new conversation or continue where you left off</p>
           </div>
 
           {/* Prompt Input */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-8">
+          <div className="bg-white rounded-xl shadow-sm border border-surface-200 p-4 mb-8">
             <PromptInput
               onSubmit={handleSubmitPrompt}
               isRunning={isCreating}
@@ -241,7 +241,7 @@ export function Home() {
 
           {/* Quick Next Steps */}
           <div className="mb-8">
-            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
+            <h2 className="text-sm font-medium text-surface-500 uppercase tracking-wide mb-3">
               Quick Actions
             </h2>
             <div className="grid grid-cols-3 gap-3">
@@ -301,46 +301,46 @@ export function Home() {
 
           {/* Recent Conversations */}
           <div>
-            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
+            <h2 className="text-sm font-medium text-surface-500 uppercase tracking-wide mb-3">
               Recent Conversations
             </h2>
             {conversations.length === 0 ? (
-              <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-                <p className="text-gray-500">No conversations yet. Start one above!</p>
+              <div className="bg-white rounded-xl border border-surface-200 p-8 text-center">
+                <p className="text-surface-500">No conversations yet. Start one above!</p>
               </div>
             ) : (
-              <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+              <div className="bg-white rounded-xl border border-surface-200 divide-y divide-surface-100">
                 {conversations.map((conversation) => (
                   <button
                     key={conversation.id}
                     onClick={() => handleConversationClick(conversation.id)}
-                    className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors first:rounded-t-xl last:rounded-b-xl"
+                    className="w-full text-left px-4 py-3 hover:bg-surface-50 transition-colors first:rounded-t-xl last:rounded-b-xl"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-gray-900 truncate">
+                          <span className="font-medium text-surface-800 truncate">
                             {conversation.title || 'Untitled conversation'}
                           </span>
-                          <span className="text-xs text-gray-400">•</span>
-                          <span className="text-xs text-gray-500 truncate">
+                          <span className="text-xs text-surface-400">•</span>
+                          <span className="text-xs text-surface-500 truncate">
                             {conversation.workspace_name}
                           </span>
-                          <span className="text-xs text-gray-400">•</span>
-                          <span className="text-xs text-gray-500">{conversation.project_name}</span>
+                          <span className="text-xs text-surface-400">•</span>
+                          <span className="text-xs text-surface-500">{conversation.project_name}</span>
                         </div>
                         {conversation.last_message_preview && (
-                          <p className="text-sm text-gray-500 truncate mt-0.5">
+                          <p className="text-sm text-surface-500 truncate mt-0.5">
                             {conversation.last_message_preview}
                           </p>
                         )}
                       </div>
                       <div className="flex items-center gap-3 ml-4">
-                        <span className="text-xs text-gray-400">
+                        <span className="text-xs text-surface-400">
                           {formatTimestamp(conversation.updated_at)}
                         </span>
                         <svg
-                          className="w-4 h-4 text-gray-400"
+                          className="w-4 h-4 text-surface-400"
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -377,13 +377,13 @@ function QuickActionCard({ icon, title, description, onClick }: QuickActionCardP
   return (
     <button
       onClick={onClick}
-      className="flex flex-col items-center p-4 bg-white rounded-xl border border-gray-200 hover:border-primary-300 hover:shadow-sm transition-all text-center group"
+      className="flex flex-col items-center p-4 bg-white rounded-xl border border-surface-200 hover:border-accent-300 hover:shadow-sm transition-all text-center group"
     >
-      <div className="w-10 h-10 rounded-full bg-gray-100 group-hover:bg-primary-100 flex items-center justify-center text-gray-500 group-hover:text-primary-600 transition-colors mb-2">
+      <div className="w-10 h-10 rounded-full bg-surface-100 group-hover:bg-accent-100 flex items-center justify-center text-surface-500 group-hover:text-accent-600 transition-colors mb-2">
         {icon}
       </div>
-      <span className="text-sm font-medium text-gray-900">{title}</span>
-      <span className="text-xs text-gray-500">{description}</span>
+      <span className="text-sm font-medium text-surface-800">{title}</span>
+      <span className="text-xs text-surface-500">{description}</span>
     </button>
   );
 }

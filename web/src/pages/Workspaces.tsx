@@ -34,7 +34,7 @@ export function Workspaces() {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="text-gray-500">Loading workspaces...</div>
+        <div className="text-surface-500">Loading workspaces...</div>
       </div>
     );
   }
@@ -43,10 +43,10 @@ export function Workspaces() {
     <div>
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Link to="/projects/$projectId" params={{ projectId: projectId! }} className="text-sm text-gray-500 hover:text-gray-700">
+          <Link to="/projects/$projectId" params={{ projectId: projectId! }} className="text-sm text-surface-500 hover:text-surface-700">
             &larr; Back to Project
           </Link>
-          <h1 className="text-2xl font-bold text-gray-900 mt-1">Workspaces</h1>
+          <h1 className="text-2xl font-bold text-surface-800 mt-1">Workspaces</h1>
         </div>
       </div>
 
@@ -57,12 +57,12 @@ export function Workspaces() {
       )}
 
       {workspaces.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No workspaces</h3>
-          <p className="text-gray-500 mb-4">
+        <div className="text-center py-12 bg-white rounded-lg border border-surface-200">
+          <h3 className="text-lg font-medium text-surface-800 mb-2">No workspaces</h3>
+          <p className="text-surface-500 mb-4">
             Create a workspace to start working on this project
           </p>
-          <div className="bg-gray-100 rounded-lg p-4 inline-block text-left">
+          <div className="bg-surface-100 rounded-lg p-4 inline-block text-left">
             <code className="text-sm">fst workspace create --name my-workspace</code>
           </div>
         </div>
@@ -72,14 +72,14 @@ export function Workspaces() {
             <Link
               key={workspace.id}
               to="/"
-              className="block bg-white rounded-lg border border-gray-200 p-4 hover:border-primary-300 hover:shadow-sm transition-all"
+              className="block bg-white rounded-lg border border-surface-200 p-4 hover:border-accent-300 hover:shadow-sm transition-all"
             >
               <div className="flex items-start justify-between">
                 <div>
-                  <h3 className="font-medium text-gray-900">{workspace.name}</h3>
-                  <p className="text-sm text-gray-500 font-mono">{workspace.local_path}</p>
+                  <h3 className="font-medium text-surface-800">{workspace.name}</h3>
+                  <p className="text-sm text-surface-500 font-mono">{workspace.local_path}</p>
                   {workspace.base_snapshot_id && (
-                    <p className="text-xs text-gray-400 mt-1">
+                    <p className="text-xs text-surface-400 mt-1">
                       Base: {workspace.base_snapshot_id.slice(0, 8)}...
                     </p>
                   )}
@@ -100,7 +100,7 @@ export function Workspaces() {
                       )}
                     </div>
                     {workspace.drift.summary && (
-                      <p className="text-xs text-gray-500 mt-1 max-w-xs text-right">
+                      <p className="text-xs text-surface-500 mt-1 max-w-xs text-right">
                         {workspace.drift.summary}
                       </p>
                     )}
@@ -109,13 +109,13 @@ export function Workspaces() {
               </div>
 
               {/* Last seen */}
-              <div className="mt-3 flex items-center text-xs text-gray-400">
+              <div className="mt-3 flex items-center text-xs text-surface-400">
                 <span
                   className={`w-2 h-2 rounded-full mr-2 ${
                     workspace.last_seen_at &&
                     new Date(workspace.last_seen_at) > new Date(Date.now() - 60000)
                       ? 'bg-green-400'
-                      : 'bg-gray-300'
+                      : 'bg-surface-300'
                   }`}
                 />
                 {workspace.last_seen_at

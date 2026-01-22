@@ -50,8 +50,8 @@ export function OpenCodeQuestion({ request, onSubmit, onReject }: OpenCodeQuesti
   const renderQuestion = (question: OpenCodeQuestionInfo, index: number) => {
     return (
       <div key={`${request.id}-${index}`} className="space-y-2">
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{question.header}</div>
-        <p className="text-sm text-gray-800">{question.question}</p>
+        <div className="text-xs font-semibold text-surface-500 uppercase tracking-wide">{question.header}</div>
+        <p className="text-sm text-surface-800">{question.question}</p>
         <div className="space-y-2">
           {question.options.map((option) => {
             const selectedForQuestion = selected[index]?.has(option.label) || false;
@@ -62,12 +62,12 @@ export function OpenCodeQuestion({ request, onSubmit, onReject }: OpenCodeQuesti
                 onClick={() => toggleOption(index, option.label, question.multiple)}
                 className={`w-full text-left rounded-lg border px-3 py-2 transition ${
                   selectedForQuestion
-                    ? 'border-primary-500 bg-primary-50 text-primary-700'
-                    : 'border-gray-200 bg-white hover:border-gray-300'
+                    ? 'border-accent-500 bg-accent-50 text-accent-700'
+                    : 'border-surface-200 bg-white hover:border-surface-300'
                 }`}
               >
                 <div className="text-sm font-medium">{option.label}</div>
-                <div className="text-xs text-gray-500">{option.description}</div>
+                <div className="text-xs text-surface-500">{option.description}</div>
               </button>
             );
           })}
@@ -77,15 +77,15 @@ export function OpenCodeQuestion({ request, onSubmit, onReject }: OpenCodeQuesti
   };
 
   return (
-    <div className="space-y-4 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
-      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Assistant Question</div>
+    <div className="space-y-4 rounded-xl border border-surface-200 bg-white px-4 py-3 shadow-sm">
+      <div className="text-xs font-semibold text-surface-500 uppercase tracking-wide">Assistant Question</div>
       {questions.map(renderQuestion)}
       <div className="flex items-center gap-2">
         <button
           type="button"
           onClick={submit}
           disabled={!canSubmit || submitting}
-          className="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+          className="btn-primary text-xs"
         >
           {submitting ? 'Submitting...' : 'Submit'}
         </button>
@@ -93,7 +93,7 @@ export function OpenCodeQuestion({ request, onSubmit, onReject }: OpenCodeQuesti
           type="button"
           onClick={onReject}
           disabled={submitting}
-          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          className="btn-secondary text-xs"
         >
           Skip
         </button>
