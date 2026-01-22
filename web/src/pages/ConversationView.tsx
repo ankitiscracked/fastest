@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import type { ConversationWithContext, TimelineItem } from '@fastest/shared';
-import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo, type DeploymentLogEntry } from '../api/client';
+import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo, type DeploymentLogEntry, type ReconnectingWebSocket } from '../api/client';
 import type { OpenCodeEvent, OpenCodeGlobalEvent, OpenCodePart, OpenCodeQuestionRequest } from '../api/opencode';
 import {
   ConversationMessage,
@@ -11,6 +11,22 @@ import {
   Timeline,
   DeploymentLogs,
 } from '../components/conversation';
+
+// Utility: debounce function for scroll optimization
+function useDebounce<T extends (...args: unknown[]) => void>(fn: T, delay: number): T {
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+
+  return useCallback((...args: Parameters<T>) => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    timeoutRef.current = setTimeout(() => {
+      fnRef.current(...args);
+    }, delay);
+  }, [delay]) as T;
+}
 
 // Confirmation Dialog Component
 interface ConfirmDialogProps {
@@ -175,9 +191,46 @@ export function ConversationView() {
 
   // Refs
   const conversationEndRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsRef = useRef<ReconnectingWebSocket | null>(null);
   const pendingPromptSent = useRef(false);
   const handleStreamEventRef = useRef<(event: StreamEvent) => void>(() => {});
+  const scrollRAFRef = useRef<number | null>(null);
+  const isUserScrolledUpRef = useRef(false);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  // Track placeholder message ID to prevent race conditions between API response and WebSocket
+  const placeholderIdRef = useRef<string | null>(null);
+  const realMessageIdRef = useRef<string | null>(null);
+  // Counter for generating unique part IDs when none provided
+  const partIdCounterRef = useRef(0);
+
+  // Debounced scroll to bottom - prevents scroll thrashing during streaming
+  const scrollToBottom = useDebounce(() => {
+    // Don't auto-scroll if user has scrolled up to read history
+    if (isUserScrolledUpRef.current) return;
+
+    // Use RAF for smooth scrolling without blocking
+    if (scrollRAFRef.current) {
+      cancelAnimationFrame(scrollRAFRef.current);
+    }
+    scrollRAFRef.current = requestAnimationFrame(() => {
+      conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    });
+  }, 100);
+
+  // Track if user has scrolled up (to disable auto-scroll)
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      // User is "scrolled up" if they're more than 100px from bottom
+      isUserScrolledUpRef.current = scrollHeight - scrollTop - clientHeight > 100;
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // Load conversation when conversationId changes
   useEffect(() => {
@@ -186,30 +239,65 @@ export function ConversationView() {
     }
   }, [conversationId]);
 
-  // Scroll to bottom when messages change
+  // Scroll to bottom when messages change (debounced)
   useEffect(() => {
-    conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+    scrollToBottom();
+  }, [messages, streamingContent, scrollToBottom]);
+
+  // Cleanup RAF on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollRAFRef.current) {
+        cancelAnimationFrame(scrollRAFRef.current);
+      }
+    };
+  }, []);
 
   const upsertOpenCodePart = (messageId: string, event: OpenCodeEvent) => {
     const part = event.properties?.part;
     if (!part) return;
     const delta = typeof event.properties?.delta === 'string' ? event.properties?.delta : undefined;
-    const partId = (part as OpenCodePart).id || `${part.type}-${messageId}`;
 
     setOpencodePartsByMessageId(prev => {
       const existing = prev[messageId] || [];
-      const idx = existing.findIndex(p => (p.id || `${p.type}-${messageId}`) === partId);
+
+      // Generate a unique ID for this part if not provided
+      // Use the part's own ID, or fall back to type + counter for uniqueness
+      let partId = (part as OpenCodePart).id;
+      if (!partId) {
+        // For parts without IDs, try to find an existing part of the same type
+        // that we're likely updating (e.g., text parts being streamed)
+        const existingOfType = existing.filter(p => p.type === part.type && !p.id);
+        if (existingOfType.length > 0) {
+          // Update the last part of this type (for streaming deltas)
+          partId = `${part.type}-${messageId}-${existingOfType.length - 1}`;
+        } else {
+          // Create new unique ID
+          partId = `${part.type}-${messageId}-${partIdCounterRef.current++}`;
+        }
+      }
+
+      // Find existing part by ID (check both the ID and generated IDs)
+      const idx = existing.findIndex(p => {
+        const existingId = p.id || `${p.type}-${messageId}-${existing.indexOf(p)}`;
+        return existingId === partId || p.id === partId;
+      });
+
       const prevPart = idx >= 0 ? existing[idx] : undefined;
-      let nextPart: OpenCodePart = { ...(prevPart || {}), ...(part as OpenCodePart) };
+      let nextPart: OpenCodePart = { ...(prevPart || {}), ...(part as OpenCodePart), id: partId };
 
       if (nextPart.type === 'text') {
         const prevText = (prevPart as OpenCodePart | undefined)?.type === 'text' ? (prevPart as any).text : '';
         const incomingText = (part as any).text;
-        if (typeof incomingText === 'string') {
+        if (typeof incomingText === 'string' && incomingText.length > 0) {
+          // Full text replacement - only if we have actual content
           (nextPart as any).text = incomingText;
         } else if (delta) {
+          // Delta appending
           (nextPart as any).text = `${prevText || ''}${delta}`;
+        } else if (prevText) {
+          // Keep previous text if no new content
+          (nextPart as any).text = prevText;
         }
       }
 
@@ -262,9 +350,20 @@ export function ConversationView() {
     switch (event.type) {
       case 'message_start':
         // Update the placeholder message ID to match the server's ID
-        // This ensures streaming content is displayed correctly
+        // Use refs to prevent race conditions with API response
+        realMessageIdRef.current = event.messageId;
         setMessages(prev => {
-          // Find the running placeholder (status 'running' with empty content)
+          // Find the placeholder by ID (more reliable than status check)
+          const placeholderId = placeholderIdRef.current;
+          if (placeholderId) {
+            const idx = prev.findIndex(m => m.id === placeholderId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], id: event.messageId };
+              return updated;
+            }
+          }
+          // Fallback: find by status
           const runningIdx = prev.findIndex(m => m.status === 'running' && !m.content);
           if (runningIdx >= 0) {
             const updated = [...prev];
@@ -380,25 +479,36 @@ export function ConversationView() {
 
   handleStreamEventRef.current = handleStreamEvent;
 
+  // WebSocket connection state for UI feedback
+  const [wsConnected, setWsConnected] = useState(true);
+
   // Connect WebSocket when conversation changes
   useEffect(() => {
     if (!conversationId) return;
 
-    // Close existing connection if open
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    // Close existing connection
+    if (wsRef.current) {
       wsRef.current.close();
     }
 
-    // Connect to stream
-    const ws = api.connectStream(conversationId, (event) => handleStreamEventRef.current(event));
+    // Connect to stream with automatic reconnection
+    const ws = api.connectStream(
+      conversationId,
+      (event) => handleStreamEventRef.current(event),
+      {
+        maxReconnectAttempts: 5,
+        onConnectionChange: (connected) => {
+          setWsConnected(connected);
+          if (!connected) {
+            console.log('[ConversationView] WebSocket disconnected, will attempt reconnection');
+          }
+        },
+      }
+    );
     wsRef.current = ws;
 
     return () => {
-      // Only close if the WebSocket is fully open
-      // Closing during CONNECTING state causes "closed before connection established" errors
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.close();
-      }
+      ws.close();
     };
   }, [conversationId]);
 
@@ -468,6 +578,10 @@ export function ConversationView() {
 
     setError(null);
 
+    // Reset refs for new message
+    placeholderIdRef.current = null;
+    realMessageIdRef.current = null;
+
     // Optimistically add user message
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -480,30 +594,39 @@ export function ConversationView() {
     setMessages(prev => [...prev, userMessage]);
 
     // Add placeholder for assistant response
+    const placeholderId = crypto.randomUUID();
+    placeholderIdRef.current = placeholderId;
     const assistantPlaceholder: Message = {
-      id: crypto.randomUUID(),
+      id: placeholderId,
       role: 'assistant',
       content: '',
       status: 'running',
       createdAt: new Date().toISOString(),
     };
     setMessages(prev => [...prev, assistantPlaceholder]);
-    setRunningMessageId(assistantPlaceholder.id);
+    setRunningMessageId(placeholderId);
 
     try {
       // Send message - the actual response will come via WebSocket
       const { messageId } = await api.sendMessage(conversationId, prompt);
-      if (messageId) {
+
+      // Only update if WebSocket hasn't already updated it
+      // Check if the placeholder still has the original ID (WebSocket event may have updated it)
+      if (messageId && !realMessageIdRef.current) {
+        realMessageIdRef.current = messageId;
         setMessages(prev => prev.map(m =>
-          m.id === assistantPlaceholder.id ? { ...m, id: messageId } : m
+          m.id === placeholderId ? { ...m, id: messageId } : m
         ));
         setRunningMessageId(messageId);
       }
     } catch (err) {
       setError(formatErrorMessage(err instanceof Error ? err.message : 'Failed to send message'));
       // Remove placeholder on error
-      setMessages(prev => prev.filter(m => m.id !== assistantPlaceholder.id));
+      const idToRemove = realMessageIdRef.current || placeholderId;
+      setMessages(prev => prev.filter(m => m.id !== idToRemove && m.id !== placeholderId));
       setRunningMessageId(null);
+      placeholderIdRef.current = null;
+      realMessageIdRef.current = null;
     }
   };
 
@@ -649,6 +772,24 @@ export function ConversationView() {
 
   return (
     <div className="h-full flex flex-col bg-surface-50">
+      {/* Connection status banner */}
+      {!wsConnected && (
+        <div className="bg-status-warning/10 border-b border-status-warning/20 px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 text-status-warning animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            <span className="text-sm text-status-warning">Connection lost. Reconnecting...</span>
+          </div>
+          <button
+            onClick={() => wsRef.current?.reconnect()}
+            className="text-xs text-status-warning hover:text-yellow-700 underline"
+          >
+            Retry now
+          </button>
+        </div>
+      )}
+
       {/* Error banner */}
       {error && (
         <div className="bg-status-error/10 border-b border-status-error/20 px-4 py-3">
@@ -803,7 +944,7 @@ export function ConversationView() {
       {/* Main content area with sidebar */}
       <div className="flex-1 flex overflow-hidden">
         {/* Conversation area */}
-        <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-6">
           <div className="max-w-3xl mx-auto space-y-6">
             {messages.length === 0 ? (
               <EmptyState />

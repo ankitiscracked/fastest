@@ -413,42 +413,194 @@ class ApiClient {
     );
   }
 
+  // Action Items (cross-workspace insights)
+
+  async getActionItems() {
+    return this.request<{ items: import('@fastest/shared').ActionItem[] }>(
+      'GET',
+      '/action-items'
+    );
+  }
+
+  async dismissActionItem(itemId: string) {
+    return this.request<{ success: boolean }>(
+      'POST',
+      `/action-items/${itemId}/dismiss`
+    );
+  }
+
   /**
-   * Connect to conversation WebSocket for streaming
+   * Connect to conversation WebSocket for streaming with automatic reconnection
    */
-  connectStream(conversationId: string, onEvent: (event: StreamEvent) => void): WebSocket {
+  connectStream(
+    conversationId: string,
+    onEvent: (event: StreamEvent) => void,
+    options?: {
+      maxReconnectAttempts?: number;
+      onConnectionChange?: (connected: boolean) => void;
+    }
+  ): ReconnectingWebSocket {
     const token = this.getToken();
     const wsBase = getWsBase();
-
-    // Include token in URL since WebSocket doesn't support custom headers easily
     const url = `${wsBase}/conversations/${conversationId}/stream?token=${token}`;
 
-    const ws = new WebSocket(url);
+    return new ReconnectingWebSocket(url, onEvent, {
+      maxReconnectAttempts: options?.maxReconnectAttempts ?? 5,
+      onConnectionChange: options?.onConnectionChange,
+    });
+  }
+}
 
-    ws.onopen = () => {
-      console.log('[WebSocket] Connected to stream');
-    };
+/**
+ * WebSocket wrapper with automatic reconnection and exponential backoff
+ */
+export class ReconnectingWebSocket {
+  private ws: WebSocket | null = null;
+  private url: string;
+  private onEvent: (event: StreamEvent) => void;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts: number;
+  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private intentionallyClosed = false;
+  private onConnectionChange?: (connected: boolean) => void;
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as StreamEvent;
-        console.log('[WebSocket] Received event:', data.type, data);
-        onEvent(data);
-      } catch (e) {
-        console.error('Failed to parse stream event:', e);
+  // Exponential backoff: 1s, 2s, 4s, 8s, 16s (capped)
+  private readonly baseDelay = 1000;
+  private readonly maxDelay = 16000;
+
+  constructor(
+    url: string,
+    onEvent: (event: StreamEvent) => void,
+    options: {
+      maxReconnectAttempts?: number;
+      onConnectionChange?: (connected: boolean) => void;
+    } = {}
+  ) {
+    this.url = url;
+    this.onEvent = onEvent;
+    this.maxReconnectAttempts = options.maxReconnectAttempts ?? 5;
+    this.onConnectionChange = options.onConnectionChange;
+    this.connect();
+  }
+
+  private connect() {
+    if (this.intentionallyClosed) return;
+
+    try {
+      this.ws = new WebSocket(this.url);
+
+      this.ws.onopen = () => {
+        console.log('[WebSocket] Connected to stream');
+        this.reconnectAttempts = 0; // Reset on successful connection
+        this.onConnectionChange?.(true);
+      };
+
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as StreamEvent;
+          console.log('[WebSocket] Received event:', data.type, data);
+          this.onEvent(data);
+        } catch (e) {
+          console.error('Failed to parse stream event:', e);
+        }
+      };
+
+      this.ws.onclose = (event) => {
+        console.log('[WebSocket] Disconnected:', event.code, event.reason);
+        this.onConnectionChange?.(false);
+
+        // Don't reconnect if intentionally closed or normal closure
+        if (this.intentionallyClosed || event.code === 1000) {
+          return;
+        }
+
+        this.scheduleReconnect();
+      };
+
+      this.ws.onerror = (error) => {
+        console.error('[WebSocket] Error:', error);
+        // onclose will be called after onerror, which handles reconnection
+      };
+    } catch (error) {
+      console.error('[WebSocket] Failed to create connection:', error);
+      this.scheduleReconnect();
+    }
+  }
+
+  private scheduleReconnect() {
+    if (this.intentionallyClosed) return;
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log('[WebSocket] Max reconnection attempts reached');
+      this.onEvent({ type: 'error', error: 'Connection lost. Please refresh the page.' });
+      return;
+    }
+
+    // Exponential backoff with jitter
+    const delay = Math.min(
+      this.baseDelay * Math.pow(2, this.reconnectAttempts) + Math.random() * 1000,
+      this.maxDelay
+    );
+
+    console.log(`[WebSocket] Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectAttempts++;
+      this.connect();
+    }, delay);
+  }
+
+  /**
+   * Get the current WebSocket ready state
+   */
+  get readyState(): number {
+    return this.ws?.readyState ?? WebSocket.CLOSED;
+  }
+
+  /**
+   * Send data through the WebSocket
+   */
+  send(data: string | ArrayBuffer | Blob) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(data);
+    } else {
+      console.warn('[WebSocket] Cannot send - not connected');
+    }
+  }
+
+  /**
+   * Close the WebSocket connection permanently (no reconnection)
+   */
+  close() {
+    this.intentionallyClosed = true;
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    if (this.ws) {
+      // Only close if not already closed/closing
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close(1000, 'Client closed');
       }
-    };
+      this.ws = null;
+    }
+  }
 
-    ws.onclose = (event) => {
-      console.log('[WebSocket] Disconnected:', event.code, event.reason);
-    };
+  /**
+   * Manually trigger a reconnection attempt
+   */
+  reconnect() {
+    this.intentionallyClosed = false;
+    this.reconnectAttempts = 0;
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      onEvent({ type: 'error', error: 'Connection error' });
-    };
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
 
-    return ws;
+    this.connect();
   }
 }
 

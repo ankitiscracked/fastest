@@ -406,11 +406,14 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   // Compare the manifests
   const comparison = compareDrift(workspaceManifest, mainManifest);
 
+  const driftId = generateULID();
+  const now = new Date().toISOString();
+
   const driftReport: DriftReport = {
-    id: generateULID(),
+    id: driftId,
     workspace_id: workspaceId,
     main_workspace_id: workspace.main_workspace_id,
-    compared_at: new Date().toISOString(),
+    compared_at: now,
     workspace_snapshot_id: workspaceSnapshotId,
     main_snapshot_id: mainSnapshotId,
     main_only: comparison.main_only,
@@ -426,6 +429,25 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
     bytes_changed: 0,
     summary: null,
   };
+
+  // Save drift report to database for cross-workspace queries
+  await db.insert(driftReports).values({
+    id: driftId,
+    workspaceId: workspaceId,
+    filesAdded: comparison.main_only.length,
+    filesModified: comparison.both_different.length,
+    filesDeleted: 0,
+    bytesChanged: 0,
+    summary: null,
+    reportedAt: now,
+  }).onConflictDoUpdate({
+    target: driftReports.id,
+    set: {
+      filesAdded: comparison.main_only.length,
+      filesModified: comparison.both_different.length,
+      reportedAt: now,
+    },
+  });
 
   return c.json({
     drift: driftReport,

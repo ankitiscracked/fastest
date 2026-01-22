@@ -8,6 +8,7 @@ import { snapshotRoutes } from './routes/snapshots';
 import { workspaceRoutes } from './routes/workspaces';
 import { blobRoutes } from './routes/blobs';
 import { conversationRoutes } from './routes/conversations';
+import { actionItemRoutes } from './routes/action-items';
 
 // Re-export Sandbox class for Durable Object binding (only when containers are enabled)
 export { Sandbox } from '@cloudflare/sandbox';
@@ -76,6 +77,7 @@ v1.route('/snapshots', snapshotRoutes);
 v1.route('/workspaces', workspaceRoutes);
 v1.route('/blobs', blobRoutes);
 v1.route('/conversations', conversationRoutes);
+v1.route('/action-items', actionItemRoutes);
 
 app.route('/v1', v1);
 

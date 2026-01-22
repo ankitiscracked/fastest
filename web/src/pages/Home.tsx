@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import type { Project, Workspace, ConversationWithContext } from '@fastest/shared';
 import { api } from '../api/client';
 import { PromptInput, ContextBar } from '../components/conversation';
+import { ActionItems } from '../components/conversation/ActionItems';
 
 export function Home() {
   const navigate = useNavigate();
@@ -237,6 +238,26 @@ export function Home() {
                 isCreatingWorkspace={isCreatingWorkspace}
               />
             </div>
+          </div>
+
+          {/* Action Items - cross-workspace insights */}
+          <div className="mb-8">
+            <ActionItems
+              onNavigateToWorkspace={(workspaceId, _projectId) => {
+                // Find a conversation for this workspace, or create one
+                const conv = conversations.find((c) => c.workspace_id === workspaceId);
+                if (conv) {
+                  navigate({ to: '/$conversationId', params: { conversationId: conv.id } });
+                } else {
+                  // Navigate to workspace detail or create conversation
+                  navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
+                }
+              }}
+              onSyncWorkspace={(workspaceId) => {
+                // Navigate to workspace and trigger sync
+                navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
+              }}
+            />
           </div>
 
           {/* Quick Next Steps */}

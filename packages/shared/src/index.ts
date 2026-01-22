@@ -485,3 +485,38 @@ export interface ExecuteSyncResponse {
   snapshot_before_id?: string;
   snapshot_after_id?: string;
 }
+
+// Action Items - cross-workspace insights from background agents
+
+export type ActionItemType = 'drift' | 'refactoring' | 'security' | 'test_coverage';
+export type ActionItemSeverity = 'info' | 'warning' | 'critical';
+
+export interface ActionItem {
+  id: string;
+  type: ActionItemType;
+  severity: ActionItemSeverity;
+
+  // Context
+  workspace_id: string;
+  workspace_name: string;
+  project_id: string;
+  project_name: string;
+
+  // Display
+  title: string;
+  description?: string;
+  icon?: string;
+
+  // Action
+  action_label: string;
+  action_type: 'navigate' | 'prompt' | 'sync';
+  action_data?: Record<string, unknown>;
+
+  // Metadata
+  created_at: string;
+  dismissed_at?: string;
+}
+
+export interface ListActionItemsResponse {
+  items: ActionItem[];
+}
