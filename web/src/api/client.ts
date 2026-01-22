@@ -60,9 +60,10 @@ export interface Deployment {
 export type StreamEvent =
   | { type: 'message_start'; messageId: string }
   | { type: 'content_delta'; content: string }
-  | { type: 'status'; status: Message['status'] }
+  | { type: 'message_status'; messageId: string; status: Message['status'] }
   | { type: 'files_changed'; files: string[] }
   | { type: 'message_complete'; message: Message }
+  | { type: 'message_update'; message: Message }
   | { type: 'opencode_event'; messageId: string; event: OpenCodeGlobalEvent }
   | { type: 'timeline_item'; item: TimelineItem }
   | { type: 'timeline_summary'; itemId: string; summary: string }
@@ -272,7 +273,7 @@ class ApiClient {
   }
 
   async sendMessage(conversationId: string, prompt: string) {
-    return this.request<{ message: Message }>(
+    return this.request<{ messageId: string }>(
       'POST',
       `/conversations/${conversationId}/messages`,
       { prompt }

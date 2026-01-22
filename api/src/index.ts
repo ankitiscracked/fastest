@@ -31,6 +31,7 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
   GOOGLE_GENERATIVE_AI_API_KEY?: string;
+  MAX_FILES_PER_MANIFEST?: string;
   PROVIDER?: string;
   // External OpenCode server URL override (used if sandbox CLI is unavailable)
   OPENCODE_URL?: string;
