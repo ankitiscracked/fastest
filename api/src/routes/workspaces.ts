@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { eq, and, desc } from 'drizzle-orm';
 import type { Env } from '../index';
-import type { Workspace, DriftReport, ReportDriftRequest } from '@fastest/shared';
+import type { Workspace, DriftReport, ReportDriftRequest, Manifest } from '@fastest/shared';
+import { compareDrift, fromJSON } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
-import { createDb, workspaces, projects, driftReports, activityEvents } from '../db';
+import { createDb, workspaces, projects, driftReports, activityEvents, snapshots } from '../db';
 
 export const workspaceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -172,15 +173,25 @@ workspaceRoutes.post('/:workspaceId/drift', async (c) => {
     });
   }
 
+  // Return a backward-compatible DriftReport (legacy CLI reporting)
   const driftReport: DriftReport = {
     id: driftId,
     workspace_id: workspaceId,
+    main_workspace_id: '', // Not available for legacy reports
+    compared_at: now,
+    workspace_snapshot_id: null,
+    main_snapshot_id: null,
+    main_only: [],
+    workspace_only: [],
+    both_same: [],
+    both_different: [],
+    total_drift_files: (body.files_added || 0) + (body.files_modified || 0),
+    has_overlaps: (body.files_modified || 0) > 0,
     files_added: body.files_added || 0,
     files_modified: body.files_modified || 0,
     files_deleted: body.files_deleted || 0,
     bytes_changed: body.bytes_changed || 0,
     summary: body.summary || null,
-    reported_at: now
   };
 
   return c.json({ drift_report: driftReport }, 201);
@@ -229,6 +240,216 @@ workspaceRoutes.get('/:workspaceId/drift', async (c) => {
     drift_reports: result,
     latest: result[0] || null
   });
+});
+
+// Compare workspace against main (for sync with main)
+workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  // Fetch workspace with project info
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      name: workspaces.name,
+      base_snapshot_id: workspaces.baseSnapshotId,
+      main_workspace_id: projects.mainWorkspaceId,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Check if this is the main workspace
+  if (workspace.id === workspace.main_workspace_id) {
+    return c.json({
+      drift: null,
+      is_main_workspace: true,
+      message: 'This is the main workspace'
+    });
+  }
+
+  // Check if main workspace is set
+  if (!workspace.main_workspace_id) {
+    return c.json({
+      drift: null,
+      is_main_workspace: false,
+      message: 'No main workspace configured for this project'
+    });
+  }
+
+  // Get main workspace's snapshot
+  const mainWorkspaceResult = await db
+    .select({
+      id: workspaces.id,
+      base_snapshot_id: workspaces.baseSnapshotId,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspace.main_workspace_id))
+    .limit(1);
+
+  const mainWorkspace = mainWorkspaceResult[0];
+
+  if (!mainWorkspace) {
+    return c.json({
+      drift: null,
+      is_main_workspace: false,
+      message: 'Main workspace not found'
+    });
+  }
+
+  // Get snapshot manifest hashes
+  const workspaceSnapshotId = workspace.base_snapshot_id;
+  const mainSnapshotId = mainWorkspace.base_snapshot_id;
+
+  if (!workspaceSnapshotId || !mainSnapshotId) {
+    return c.json({
+      drift: null,
+      is_main_workspace: false,
+      message: 'One or both workspaces have no snapshot'
+    });
+  }
+
+  // Get snapshot manifest hashes
+  const snapshotResults = await db
+    .select({
+      id: snapshots.id,
+      manifest_hash: snapshots.manifestHash,
+    })
+    .from(snapshots)
+    .where(eq(snapshots.id, workspaceSnapshotId));
+
+  const mainSnapshotResults = await db
+    .select({
+      id: snapshots.id,
+      manifest_hash: snapshots.manifestHash,
+    })
+    .from(snapshots)
+    .where(eq(snapshots.id, mainSnapshotId));
+
+  const workspaceSnapshot = snapshotResults[0];
+  const mainSnapshot = mainSnapshotResults[0];
+
+  if (!workspaceSnapshot || !mainSnapshot) {
+    return c.json({
+      drift: null,
+      is_main_workspace: false,
+      message: 'Snapshot data not found'
+    });
+  }
+
+  // Fetch manifests from R2
+  const workspaceManifestKey = `${user.id}/manifests/${workspaceSnapshot.manifest_hash}.json`;
+  const mainManifestKey = `${user.id}/manifests/${mainSnapshot.manifest_hash}.json`;
+
+  const [workspaceManifestObj, mainManifestObj] = await Promise.all([
+    c.env.BLOBS.get(workspaceManifestKey),
+    c.env.BLOBS.get(mainManifestKey),
+  ]);
+
+  if (!workspaceManifestObj || !mainManifestObj) {
+    return c.json({
+      drift: null,
+      is_main_workspace: false,
+      message: 'Manifest data not found in storage'
+    });
+  }
+
+  const workspaceManifestText = await workspaceManifestObj.text();
+  const mainManifestText = await mainManifestObj.text();
+
+  let workspaceManifest: Manifest;
+  let mainManifest: Manifest;
+
+  try {
+    workspaceManifest = fromJSON(workspaceManifestText);
+    mainManifest = fromJSON(mainManifestText);
+  } catch {
+    return c.json({
+      drift: null,
+      is_main_workspace: false,
+      message: 'Failed to parse manifest data'
+    });
+  }
+
+  // Compare the manifests
+  const comparison = compareDrift(workspaceManifest, mainManifest);
+
+  const driftReport: DriftReport = {
+    id: generateULID(),
+    workspace_id: workspaceId,
+    main_workspace_id: workspace.main_workspace_id,
+    compared_at: new Date().toISOString(),
+    workspace_snapshot_id: workspaceSnapshotId,
+    main_snapshot_id: mainSnapshotId,
+    main_only: comparison.main_only,
+    workspace_only: comparison.workspace_only,
+    both_same: comparison.both_same,
+    both_different: comparison.both_different,
+    total_drift_files: comparison.main_only.length + comparison.both_different.length,
+    has_overlaps: comparison.both_different.length > 0,
+    // Legacy fields
+    files_added: comparison.main_only.length,
+    files_modified: comparison.both_different.length,
+    files_deleted: 0, // Not applicable for sync comparison
+    bytes_changed: 0,
+    summary: null,
+  };
+
+  return c.json({
+    drift: driftReport,
+    is_main_workspace: false,
+  });
+});
+
+// Set main workspace for a project
+workspaceRoutes.post('/:workspaceId/set-as-main', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  // Fetch workspace with project info
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Update project to set this workspace as main
+  await db
+    .update(projects)
+    .set({ mainWorkspaceId: workspaceId })
+    .where(eq(projects.id, workspace.project_id));
+
+  return c.json({ success: true, main_workspace_id: workspaceId });
 });
 
 // Helper: Generate ULID

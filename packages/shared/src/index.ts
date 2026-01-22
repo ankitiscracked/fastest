@@ -13,6 +13,7 @@ export interface Project {
   created_at: string;
   updated_at: string;
   last_snapshot_id: string | null;
+  main_workspace_id: string | null;
 }
 
 export interface Snapshot {
@@ -38,12 +39,29 @@ export interface Workspace {
 export interface DriftReport {
   id: string;
   workspace_id: string;
+  main_workspace_id: string;
+
+  // Comparison metadata
+  compared_at: string;
+  workspace_snapshot_id: string | null;  // null = current files
+  main_snapshot_id: string | null;       // null = current files
+
+  // File categorization
+  main_only: string[];           // Files in main but not workspace
+  workspace_only: string[];      // Files in workspace but not main
+  both_same: string[];           // Same content in both
+  both_different: string[];      // Different content (potential conflicts)
+
+  // Computed
+  total_drift_files: number;     // main_only + both_different
+  has_overlaps: boolean;         // both_different.length > 0
+
+  // Legacy fields (backward compatibility)
   files_added: number;
   files_modified: number;
   files_deleted: number;
   bytes_changed: number;
   summary: string | null;
-  reported_at: string;
 }
 
 export interface Conversation {
@@ -116,6 +134,7 @@ export type {
   ManifestDiff,
   GenerateOptions,
   FileContent,
+  DriftComparison,
 } from './manifest';
 export {
   IgnoreMatcher,
@@ -126,6 +145,7 @@ export {
   fromJSON,
   hashManifest,
   diff,
+  compareDrift,
   totalSize,
   fileCount,
   getFile,
@@ -142,6 +162,17 @@ export interface DriftDetail {
   files_modified: string[];
   files_deleted: string[];
   total_bytes_changed: number;
+}
+
+// Drift comparison request/response (for sync with main)
+export interface GetDriftRequest {
+  workspace_id: string;
+  use_snapshots?: boolean;  // true = compare snapshots, false = compare current files (default)
+}
+
+export interface GetDriftResponse {
+  drift: DriftReport | null;  // null if no main workspace set or workspace is main
+  is_main_workspace: boolean;
 }
 
 // API request/response types

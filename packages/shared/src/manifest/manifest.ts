@@ -212,3 +212,61 @@ export function empty(): Manifest {
     files: [],
   };
 }
+
+/**
+ * Result of comparing workspace vs main for drift detection
+ */
+export interface DriftComparison {
+  main_only: string[];       // Files in main but not workspace
+  workspace_only: string[];  // Files in workspace but not main
+  both_same: string[];       // Same content in both
+  both_different: string[];  // Different content (potential conflicts)
+}
+
+/**
+ * Compare workspace manifest against main manifest for drift detection.
+ * This is different from diff() - it categorizes files into 4 buckets
+ * rather than tracking changes from a base.
+ */
+export function compareDrift(workspace: Manifest, main: Manifest): DriftComparison {
+  const workspaceMap = new Map<string, string>();  // path -> hash
+  for (const f of workspace.files) {
+    workspaceMap.set(f.path, f.hash);
+  }
+
+  const mainMap = new Map<string, string>();  // path -> hash
+  for (const f of main.files) {
+    mainMap.set(f.path, f.hash);
+  }
+
+  const main_only: string[] = [];
+  const workspace_only: string[] = [];
+  const both_same: string[] = [];
+  const both_different: string[] = [];
+
+  // Process all paths from both manifests
+  const allPaths = new Set([...workspaceMap.keys(), ...mainMap.keys()]);
+
+  for (const path of allPaths) {
+    const inWorkspace = workspaceMap.has(path);
+    const inMain = mainMap.has(path);
+
+    if (!inWorkspace && inMain) {
+      main_only.push(path);
+    } else if (inWorkspace && !inMain) {
+      workspace_only.push(path);
+    } else if (workspaceMap.get(path) === mainMap.get(path)) {
+      both_same.push(path);
+    } else {
+      both_different.push(path);
+    }
+  }
+
+  // Sort for consistent output
+  main_only.sort();
+  workspace_only.sort();
+  both_same.sort();
+  both_different.sort();
+
+  return { main_only, workspace_only, both_same, both_different };
+}

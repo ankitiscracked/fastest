@@ -6,14 +6,22 @@ import {
   Settings,
   LogOut,
   MessageSquare,
+  AlertTriangle,
+  Check,
 } from 'lucide-react';
 import type { Project, Workspace, ConversationWithContext } from '@fastest/shared';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { Popover, PopoverTrigger, PopoverPopup } from './ui/popover';
 
+interface WorkspaceWithDrift extends Workspace {
+  hasDrift?: boolean;
+  isMainWorkspace?: boolean;
+  driftLoading?: boolean;
+}
+
 interface ProjectWithWorkspaces extends Project {
-  workspaces?: Workspace[];
+  workspaces?: WorkspaceWithDrift[];
   isExpanded?: boolean;
   isLoadingWorkspaces?: boolean;
 }
@@ -96,16 +104,71 @@ export function Sidebar() {
 
     try {
       const { workspaces } = await api.listWorkspaces(projectId);
+
+      // Get project to find main workspace
+      const project = projects.find(p => p.id === projectId);
+      const mainWorkspaceId = project?.main_workspace_id;
+
+      // Mark workspaces and start loading drift
+      const workspacesWithDrift: WorkspaceWithDrift[] = workspaces.map(ws => ({
+        ...ws,
+        isMainWorkspace: ws.id === mainWorkspaceId,
+        hasDrift: false,
+        driftLoading: ws.id !== mainWorkspaceId && !!mainWorkspaceId, // Load drift for non-main workspaces
+      }));
+
       setProjects(prev => prev.map(p =>
         p.id === projectId
-          ? { ...p, workspaces, isLoadingWorkspaces: false }
+          ? { ...p, workspaces: workspacesWithDrift, isLoadingWorkspaces: false }
           : p
       ));
+
+      // Load drift for each non-main workspace (in background)
+      if (mainWorkspaceId) {
+        for (const ws of workspacesWithDrift) {
+          if (!ws.isMainWorkspace) {
+            loadDriftForWorkspace(projectId, ws.id);
+          }
+        }
+      }
     } catch (err) {
       console.error('Failed to load workspaces:', err);
       setProjects(prev => prev.map(p =>
         p.id === projectId ? { ...p, isLoadingWorkspaces: false } : p
       ));
+    }
+  };
+
+  const loadDriftForWorkspace = async (projectId: string, workspaceId: string) => {
+    try {
+      const { drift, is_main_workspace } = await api.getDriftComparison(workspaceId);
+
+      setProjects(prev => prev.map(p => {
+        if (p.id !== projectId) return p;
+        return {
+          ...p,
+          workspaces: p.workspaces?.map(ws => {
+            if (ws.id !== workspaceId) return ws;
+            return {
+              ...ws,
+              hasDrift: drift ? drift.total_drift_files > 0 : false,
+              isMainWorkspace: is_main_workspace,
+              driftLoading: false,
+            };
+          }),
+        };
+      }));
+    } catch (err) {
+      console.error('Failed to load drift for workspace:', err);
+      setProjects(prev => prev.map(p => {
+        if (p.id !== projectId) return p;
+        return {
+          ...p,
+          workspaces: p.workspaces?.map(ws =>
+            ws.id === workspaceId ? { ...ws, driftLoading: false } : ws
+          ),
+        };
+      }));
     }
   };
 
@@ -187,10 +250,10 @@ export function Sidebar() {
   };
 
   return (
-    <div className="w-60 h-full flex flex-col bg-gray-50 border-r border-gray-200">
+    <div className="w-60 h-full flex flex-col bg-surface-50 border-r border-surface-200">
       {/* Header */}
-      <div className="flex-shrink-0 h-12 px-4 flex items-center justify-between border-b border-gray-200 bg-white">
-        <Link to="/" className="text-lg font-bold text-primary-600">
+      <div className="flex-shrink-0 h-12 px-4 flex items-center justify-between border-b border-surface-200 bg-white">
+        <Link to="/" className="text-lg font-bold text-accent-600">
           Fastest
         </Link>
         <div className="flex items-center gap-2">
@@ -201,7 +264,7 @@ export function Sidebar() {
               className="w-6 h-6 rounded-full"
             />
           ) : (
-            <div className="w-6 h-6 rounded-full bg-primary-100 flex items-center justify-center text-xs font-medium text-primary-700">
+            <div className="w-6 h-6 rounded-full bg-accent-100 flex items-center justify-center text-xs font-medium text-accent-700">
               {(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
             </div>
           )}
@@ -213,15 +276,15 @@ export function Sidebar() {
         {/* Projects section */}
         <div className="px-3 py-3">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+            <span className="text-xs font-medium text-surface-500 uppercase tracking-wide">
               Projects
             </span>
           </div>
 
           {loading ? (
-            <div className="text-sm text-gray-400 px-2 py-4">Loading...</div>
+            <div className="text-sm text-surface-400 px-2 py-4">Loading...</div>
           ) : projects.length === 0 ? (
-            <div className="text-sm text-gray-400 px-2 py-4">No projects yet</div>
+            <div className="text-sm text-surface-400 px-2 py-4">No projects yet</div>
           ) : (
             <div className="space-y-1">
               {projects.map(project => (
@@ -242,7 +305,7 @@ export function Sidebar() {
 
           {/* New Project Button */}
           <Popover open={createProjectOpen} onOpenChange={setCreateProjectOpen}>
-            <PopoverTrigger className="w-full mt-2 flex items-center gap-2 px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-md transition-colors">
+            <PopoverTrigger className="w-full mt-2 flex items-center gap-2 px-2 py-1.5 text-sm text-surface-600 hover:bg-surface-100 rounded-md transition-colors">
               <Plus className="w-4 h-4" />
               <span>New Project</span>
             </PopoverTrigger>
@@ -259,14 +322,14 @@ export function Sidebar() {
                   }
                 }}
                 placeholder="Project name..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                className="input"
                 autoFocus
               />
               <div className="flex gap-2 mt-2">
                 <button
                   onClick={handleCreateProject}
                   disabled={!createProjectName.trim() || isCreatingProject}
-                  className="flex-1 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50"
+                  className="btn-primary flex-1"
                 >
                   {isCreatingProject ? 'Creating...' : 'Create'}
                 </button>
@@ -275,7 +338,7 @@ export function Sidebar() {
                     setCreateProjectOpen(false);
                     setCreateProjectName('');
                   }}
-                  className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
+                  className="btn-ghost"
                 >
                   Cancel
                 </button>
@@ -285,18 +348,18 @@ export function Sidebar() {
         </div>
 
         {/* Divider */}
-        <div className="mx-3 border-t border-gray-200" />
+        <div className="mx-3 border-t border-surface-200" />
 
         {/* Recent conversations section */}
         <div className="px-3 py-3">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+            <span className="text-xs font-medium text-surface-500 uppercase tracking-wide">
               Recent
             </span>
           </div>
 
           {recentConversations.length === 0 ? (
-            <div className="text-sm text-gray-400 px-2 py-4">No conversations yet</div>
+            <div className="text-sm text-surface-400 px-2 py-4">No conversations yet</div>
           ) : (
             <div className="space-y-1">
               {recentConversations.map(conv => (
@@ -306,8 +369,8 @@ export function Sidebar() {
                   params={{ conversationId: conv.id }}
                   className={`flex items-center gap-2 px-2 py-1.5 text-sm rounded-md transition-colors ${
                     conversationId === conv.id
-                      ? 'bg-primary-100 text-primary-700'
-                      : 'text-gray-700 hover:bg-gray-100'
+                      ? 'bg-accent-100 text-accent-700'
+                      : 'text-surface-700 hover:bg-surface-100'
                   }`}
                   title={conv.title || 'Untitled'}
                 >
@@ -321,17 +384,17 @@ export function Sidebar() {
       </div>
 
       {/* Footer */}
-      <div className="flex-shrink-0 border-t border-gray-200 bg-white">
+      <div className="flex-shrink-0 border-t border-surface-200 bg-white">
         <Link
           to="/settings"
-          className="flex items-center gap-2 px-4 py-3 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+          className="flex items-center gap-2 px-4 py-3 text-sm text-surface-600 hover:bg-surface-50 transition-colors"
         >
           <Settings className="w-4 h-4" />
           <span>Settings</span>
         </Link>
         <button
           onClick={logout}
-          className="w-full flex items-center gap-2 px-4 py-3 text-sm text-gray-600 hover:bg-gray-50 transition-colors border-t border-gray-100"
+          className="w-full flex items-center gap-2 px-4 py-3 text-sm text-surface-600 hover:bg-surface-50 transition-colors border-t border-surface-100"
         >
           <LogOut className="w-4 h-4" />
           <span>Logout</span>
@@ -349,7 +412,7 @@ export function Sidebar() {
             }}
           />
           <div className="relative bg-white rounded-lg shadow-xl w-80 p-4">
-            <div className="text-sm font-medium text-gray-900 mb-3">New Workspace</div>
+            <div className="text-sm font-medium text-surface-800 mb-3">New Workspace</div>
             <input
               type="text"
               value={createWorkspaceName}
@@ -362,14 +425,14 @@ export function Sidebar() {
                 }
               }}
               placeholder="Workspace name..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              className="input"
               autoFocus
             />
             <div className="flex gap-2 mt-3">
               <button
                 onClick={() => creatingWorkspaceFor && handleCreateWorkspace(creatingWorkspaceFor)}
                 disabled={!createWorkspaceName.trim()}
-                className="flex-1 px-3 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50"
+                className="btn-primary flex-1"
               >
                 Create
               </button>
@@ -378,7 +441,7 @@ export function Sidebar() {
                   setCreatingWorkspaceFor(null);
                   setCreateWorkspaceName('');
                 }}
-                className="px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
+                className="btn-ghost"
               >
                 Cancel
               </button>
@@ -414,7 +477,7 @@ function ProjectItem({
       {/* Project row */}
       <div
         className={`group flex items-center gap-1 px-2 py-1.5 rounded-md transition-colors ${
-          isActive ? 'bg-primary-50' : 'hover:bg-gray-100'
+          isActive ? 'bg-accent-50' : 'hover:bg-surface-100'
         }`}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
@@ -422,7 +485,7 @@ function ProjectItem({
         {/* Expand/collapse button */}
         <button
           onClick={onToggle}
-          className="flex-shrink-0 p-0.5 text-gray-400 hover:text-gray-600"
+          className="flex-shrink-0 p-0.5 text-surface-400 hover:text-surface-600"
         >
           <ChevronRight className={`w-3.5 h-3.5 transition-transform ${project.isExpanded ? 'rotate-90' : ''}`} />
         </button>
@@ -432,7 +495,7 @@ function ProjectItem({
           to="/projects/$projectId"
           params={{ projectId: project.id }}
           className={`flex-1 text-sm font-medium truncate ${
-            isActive ? 'text-primary-700' : 'text-gray-700'
+            isActive ? 'text-accent-700' : 'text-surface-700'
           }`}
         >
           {project.name}
@@ -445,7 +508,7 @@ function ProjectItem({
               e.stopPropagation();
               onCreateWorkspace();
             }}
-            className="flex-shrink-0 p-0.5 text-gray-400 hover:text-primary-600"
+            className="flex-shrink-0 p-0.5 text-surface-400 hover:text-accent-600"
             title="New workspace"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -457,9 +520,9 @@ function ProjectItem({
       {project.isExpanded && (
         <div className="ml-4 mt-0.5 space-y-0.5">
           {project.isLoadingWorkspaces ? (
-            <div className="px-2 py-1 text-xs text-gray-400">Loading...</div>
+            <div className="px-2 py-1 text-xs text-surface-400">Loading...</div>
           ) : project.workspaces?.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-gray-400">No workspaces</div>
+            <div className="px-2 py-1 text-xs text-surface-400">No workspaces</div>
           ) : (
             project.workspaces?.map(workspace => (
               <WorkspaceItem
@@ -477,7 +540,7 @@ function ProjectItem({
 }
 
 interface WorkspaceItemProps {
-  workspace: Workspace;
+  workspace: WorkspaceWithDrift;
   isActive: boolean;
   onCreateConversation: () => void;
 }
@@ -485,17 +548,40 @@ interface WorkspaceItemProps {
 function WorkspaceItem({ workspace, isActive, onCreateConversation }: WorkspaceItemProps) {
   const [hovering, setHovering] = useState(false);
 
+  const getDriftIndicator = () => {
+    if (workspace.isMainWorkspace) {
+      return null; // Main workspace doesn't show drift indicator
+    }
+    if (workspace.driftLoading) {
+      return (
+        <span className="flex-shrink-0 w-3 h-3 rounded-full border border-surface-300 border-t-transparent animate-spin" />
+      );
+    }
+    if (workspace.hasDrift) {
+      return (
+        <span title="Out of sync with main">
+          <AlertTriangle className="flex-shrink-0 w-3.5 h-3.5 text-status-warning" />
+        </span>
+      );
+    }
+    return (
+      <span title="Synced with main">
+        <Check className="flex-shrink-0 w-3.5 h-3.5 text-status-success" />
+      </span>
+    );
+  };
+
   return (
     <div
       className={`group flex items-center gap-1 px-2 py-1 rounded-md transition-colors ${
-        isActive ? 'bg-primary-100 text-primary-700' : 'hover:bg-gray-100 text-gray-600'
+        isActive ? 'bg-accent-100 text-accent-700' : 'hover:bg-surface-100 text-surface-600'
       }`}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
     >
       {/* Status indicator */}
       <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${
-        isActive ? 'bg-primary-500' : 'bg-gray-300'
+        isActive ? 'bg-accent-500' : 'bg-surface-300'
       }`} />
 
       {/* Workspace name - links to workspace page */}
@@ -505,10 +591,13 @@ function WorkspaceItem({ workspace, isActive, onCreateConversation }: WorkspaceI
         className="flex-1 text-sm truncate"
       >
         {workspace.name}
-        {workspace.name === 'main' && (
-          <span className="ml-1 text-xs text-green-600">(prod)</span>
+        {workspace.isMainWorkspace && (
+          <span className="ml-1 text-xs text-status-success">(main)</span>
         )}
       </Link>
+
+      {/* Drift indicator */}
+      {!hovering && getDriftIndicator()}
 
       {/* Plus button for creating conversation */}
       {hovering && (
@@ -518,7 +607,7 @@ function WorkspaceItem({ workspace, isActive, onCreateConversation }: WorkspaceI
             e.preventDefault();
             onCreateConversation();
           }}
-          className="flex-shrink-0 p-0.5 text-gray-400 hover:text-primary-600"
+          className="flex-shrink-0 p-0.5 text-surface-400 hover:text-accent-600"
           title="New conversation"
         >
           <Plus className="w-3.5 h-3.5" />

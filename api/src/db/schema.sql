@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  last_snapshot_id TEXT
+  last_snapshot_id TEXT,
+  main_workspace_id TEXT REFERENCES workspaces(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id, updated_at DESC);
@@ -82,19 +83,32 @@ CREATE TABLE IF NOT EXISTS workspaces (
 
 CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id, created_at DESC);
 
--- Drift reports
+-- Drift reports (comparison between workspace and main)
 CREATE TABLE IF NOT EXISTS drift_reports (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  main_workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+
+  -- What we compared
+  compared_at TEXT NOT NULL DEFAULT (datetime('now')),
+  workspace_snapshot_id TEXT REFERENCES snapshots(id),  -- null = current files
+  main_snapshot_id TEXT REFERENCES snapshots(id),       -- null = current files
+
+  -- File categorization (stored as JSON arrays)
+  main_only TEXT NOT NULL DEFAULT '[]',           -- JSON array of file paths
+  workspace_only TEXT NOT NULL DEFAULT '[]',      -- JSON array of file paths
+  both_same TEXT NOT NULL DEFAULT '[]',           -- JSON array of file paths
+  both_different TEXT NOT NULL DEFAULT '[]',      -- JSON array of file paths
+
+  -- Legacy fields (kept for backward compatibility)
   files_added INTEGER DEFAULT 0,
   files_modified INTEGER DEFAULT 0,
   files_deleted INTEGER DEFAULT 0,
   bytes_changed INTEGER DEFAULT 0,
-  summary TEXT,
-  reported_at TEXT NOT NULL DEFAULT (datetime('now'))
+  summary TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_drift_reports_workspace ON drift_reports(workspace_id, reported_at DESC);
+CREATE INDEX IF NOT EXISTS idx_drift_reports_workspace ON drift_reports(workspace_id, compared_at DESC);
 
 -- Activity events
 CREATE TABLE IF NOT EXISTS activity_events (

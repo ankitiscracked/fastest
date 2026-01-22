@@ -46,6 +46,7 @@ export {
   fromJSON,
   hashManifest,
   diff,
+  compareDrift,
   totalSize,
   fileCount,
   getFile,
@@ -53,3 +54,6 @@ export {
   getNewBlobHashes,
   empty,
 } from './manifest';
+
+// Drift comparison type
+export type { DriftComparison } from './manifest';

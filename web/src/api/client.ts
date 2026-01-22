@@ -201,6 +201,22 @@ class ApiClient {
     );
   }
 
+  // Drift comparison (sync with main)
+  async getDriftComparison(workspaceId: string) {
+    return this.request<{
+      drift: import('@fastest/shared').DriftReport | null;
+      is_main_workspace: boolean;
+      message?: string;
+    }>('GET', `/workspaces/${workspaceId}/drift/compare`);
+  }
+
+  async setAsMainWorkspace(workspaceId: string) {
+    return this.request<{ success: boolean; main_workspace_id: string }>(
+      'POST',
+      `/workspaces/${workspaceId}/set-as-main`
+    );
+  }
+
   // Conversations
 
   async createConversation(workspaceId: string, title?: string) {

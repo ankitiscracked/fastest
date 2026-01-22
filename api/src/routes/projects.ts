@@ -50,7 +50,8 @@ projectRoutes.post('/', async (c) => {
     name: body.name.trim(),
     created_at: now,
     updated_at: now,
-    last_snapshot_id: null
+    last_snapshot_id: null,
+    main_workspace_id: null,
   };
 
   return c.json({ project }, 201);
@@ -73,6 +74,7 @@ projectRoutes.get('/', async (c) => {
       created_at: projects.createdAt,
       updated_at: projects.updatedAt,
       last_snapshot_id: projects.lastSnapshotId,
+      main_workspace_id: projects.mainWorkspaceId,
     })
     .from(projects)
     .where(eq(projects.ownerUserId, user.id))
@@ -100,6 +102,7 @@ projectRoutes.get('/:projectId', async (c) => {
       created_at: projects.createdAt,
       updated_at: projects.updatedAt,
       last_snapshot_id: projects.lastSnapshotId,
+      main_workspace_id: projects.mainWorkspaceId,
     })
     .from(projects)
     .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))

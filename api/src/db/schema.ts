@@ -52,6 +52,7 @@ export const projects = sqliteTable('projects', {
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
   lastSnapshotId: text('last_snapshot_id'),
+  mainWorkspaceId: text('main_workspace_id'),
 }, (table) => [
   index('idx_projects_owner').on(table.ownerUserId, table.updatedAt),
 ]);
