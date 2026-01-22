@@ -1,213 +1,315 @@
-# Workspace Drift Management
+# Workspace Drift Management & Sync
 
 ## Overview
 
-Workspace drift occurs when a workspace diverges from the `main` workspace over time. Without proactive management, this leads to complex merge conflicts, lost work, and deployment blockers.
+Workspace drift occurs when a workspace diverges from the `main` workspace over time. This feature provides awareness of divergence and AI-powered reconciliation.
 
-This feature provides:
-1. **Drift Detection** — Track what changed relative to main
-2. **Risk Analysis** — AI-powered conflict prediction
-3. **Resolution Actions** — Guided sync with smart merging
+**Key Principles:**
+- **Agentic-first**: Users work with information, not code. AI handles the low-level work.
+- **Drift ≠ Sync**: Drift is information (tracking). Sync is action (reconciliation).
+- **Pull only**: Workspaces sync FROM main. This is not "merge into main".
+- **AI does the work**: User approves outcomes, not line-by-line diffs.
+
+> **Terminology Note:**
+> - **Sync with main**: Pull changes from main INTO your workspace (this spec)
+> - **Merge into main**: Push changes from your workspace INTO main (separate feature, typically when work is complete)
+
+---
 
 ## Mental Model
 
 ```
-                    main workspace (production)
-                    snapshot: snap-100
-                          │
-          ┌───────────────┼───────────────┐
-          │               │               │
-    feature-auth     feature-api     experiment
-    base: snap-100   base: snap-95   base: snap-90
-    current: +5Δ     current: +12Δ   current: +30Δ
-          │               │               │
-          ▼               ▼               ▼
-    [LOW RISK]      [MEDIUM RISK]   [HIGH RISK]
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│   DRIFT (Information)              SYNC (Action)                │
+│   ───────────────────              ──────────────               │
+│                                                                 │
+│   "What has diverged?"        →    "Pull updates from main"     │
+│                                                                 │
+│   • Tracking & awareness           • AI-first resolution        │
+│   • No files change                • User approves outcome      │
+│   • Can ignore indefinitely        • Files get updated          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 
-    Risk increases with:
-    - Time since base snapshot
-    - Number of overlapping files with main
-    - Semantic conflict likelihood
+Direction: main → workspace (sync = pull from main)
 ```
 
-## Key Concepts
+### Sync vs Merge
 
-### Main Workspace
-- Designated production workspace (typically named "main")
-- Serves as the merge target
-- Deployments happen from main
-- Other workspaces sync TO main, not from each other
+| Operation | Direction | Purpose | When |
+|-----------|-----------|---------|------|
+| **Sync with main** | main → workspace | Stay up to date | Ongoing, multiple times |
+| **Merge into main** | workspace → main | Incorporate completed work | Once, when done |
 
-### Base Snapshot
-- The snapshot a workspace was created from (or last synced to)
-- Used as the common ancestor for 3-way diff
-- Tracked per workspace
-
-### Drift Report
-- Comparison between workspace and main
-- Includes: files only in workspace, files only in main, overlapping files
-- Generated on-demand or periodically
-
-### Overlapping Files
-- Files modified in BOTH the workspace AND main since the base
-- These are potential conflict sources
-- Primary focus of AI analysis
+This spec covers **Sync with main**. Merge into main is a separate feature.
 
 ---
 
-## Architecture
+## Drift Detection
+
+### What We Compare
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                         Drift Service                                   │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐ │
-│  │   Detection      │───▶│   Analysis       │───▶│   Resolution     │ │
-│  │   Layer          │    │   Layer (AI)     │    │   Layer (AI)     │ │
-│  └──────────────────┘    └──────────────────┘    └──────────────────┘ │
-│           │                      │                       │             │
-│           ▼                      ▼                       ▼             │
-│  • Compare snapshots     • Classify risk         • Auto-merge safe    │
-│  • Find overlaps         • Explain changes       • Propose merges     │
-│  • Track changes         • Predict conflicts     • Guide conflicts    │
-│                                                                         │
-└────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────┐         ┌─────────────────────┐
+│     WORKSPACE       │         │        MAIN         │
+│                     │         │                     │
+│  Current files      │   vs    │  Current files      │
+│  (or last snapshot) │         │  (or last snapshot) │
+│                     │         │                     │
+└─────────────────────┘         └─────────────────────┘
+```
+
+**User can choose comparison mode:**
+- Main's current files (recommended) - catches uncommitted changes
+- Main's last snapshot - stable comparison point
+
+**No three-way merge needed.** We don't track base snapshots for drift purposes - that's only for history.
+
+### Drift Categories
+
+```typescript
+interface DriftReport {
+  id: string;
+  workspace_id: string;
+  main_workspace_id: string;
+
+  // Comparison metadata
+  compared_at: string;
+  workspace_state: 'current' | 'snapshot';
+  main_state: 'current' | 'snapshot';
+
+  // File categories
+  main_only: string[];           // Files in main but not workspace
+  workspace_only: string[];      // Files in workspace but not main
+  both_same: string[];           // Same content in both
+  both_different: string[];      // Different content (needs analysis)
+
+  // AI-generated summary
+  summary?: string;
+  risk_level?: 'low' | 'medium' | 'high';
+}
+```
+
+### Categorization Logic
+
+```typescript
+function categorizeFiles(workspace: FileMap, main: FileMap): DriftCategories {
+  const allPaths = new Set([...Object.keys(workspace), ...Object.keys(main)]);
+
+  const categories = {
+    main_only: [],
+    workspace_only: [],
+    both_same: [],
+    both_different: [],
+  };
+
+  for (const path of allPaths) {
+    const inWorkspace = path in workspace;
+    const inMain = path in main;
+
+    if (!inWorkspace && inMain) {
+      categories.main_only.push(path);
+    } else if (inWorkspace && !inMain) {
+      categories.workspace_only.push(path);
+    } else if (workspace[path].hash === main[path].hash) {
+      categories.both_same.push(path);
+    } else {
+      categories.both_different.push(path);
+    }
+  }
+
+  return categories;
+}
+```
+
+---
+
+## Sync Process
+
+### Philosophy
+
+Traditional sync/merge:
+```
+User reads diffs → User resolves conflicts → User applies changes
+```
+
+Agentic sync:
+```
+AI reads diffs → AI resolves conflicts → AI presents summary → User approves
+```
+
+The user should see:
+> "Main added 2 API endpoints. You refactored auth. I've combined them. [Approve]"
+
+NOT:
+> "Here are 47 lines of diff. Resolve these 3 conflicts manually."
+
+### Sync Stages
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 1: Non-AI Work                                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  main_only files      → Copy directly (no analysis needed)      │
+│  workspace_only files → Keep as-is (no action needed)           │
+│  both_same files      → No action needed                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 2: AI Analysis (only for both_different)                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  For each file with different content:                          │
+│  1. AI analyzes what each side changed (semantic intent)        │
+│  2. AI determines if changes are compatible                     │
+│  3. If compatible → AI generates combined version               │
+│  4. If incompatible → AI prepares choice for user               │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 3: User Approval                                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Show summary of all changes                                    │
+│  If conflicts: present semantic choices (not code)              │
+│  User approves → Apply all changes                              │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Data Model
 
-### Enhanced DriftReport
+### Drift Report
 
 ```typescript
 interface DriftReport {
   id: string;
   workspace_id: string;
-  workspace_name: string;
+  main_workspace_id: string;
 
-  // Snapshot references
-  base_snapshot_id: string;       // Common ancestor
-  main_snapshot_id: string;       // Current main
-  workspace_snapshot_id: string;  // Current workspace (if snapshotted)
+  // What we compared
+  compared_at: string;
+  workspace_state: 'current' | 'snapshot';
+  main_state: 'current' | 'snapshot';
 
-  // Time tracking
-  base_snapshot_at: string;       // When workspace branched
-  main_updated_at: string;        // When main last changed
-  analyzed_at: string;            // When this report was generated
+  // File categorization
+  main_only: string[];
+  workspace_only: string[];
+  both_same: string[];
+  both_different: string[];
 
-  // Change categories
-  workspace_only: FileChange[];   // Only changed in workspace
-  main_only: FileChange[];        // Only changed in main (need to pull)
-  overlapping: OverlappingFile[]; // Changed in both (potential conflict)
+  // Computed
+  total_drift_files: number;      // main_only + both_different
+  has_overlaps: boolean;          // both_different.length > 0
 
-  // Computed stats
-  total_changes: number;
-  overlap_count: number;
-
-  // AI analysis (computed lazily)
+  // AI-generated (computed lazily)
   analysis?: DriftAnalysis;
 }
 
-interface FileChange {
-  path: string;
-  change_type: 'added' | 'modified' | 'deleted';
-  size_bytes?: number;
-  hash?: string;
-}
-
-interface OverlappingFile {
-  path: string;
-
-  // Change details
-  workspace_change: FileChange;
-  main_change: FileChange;
-
-  // Diff content (for AI analysis)
-  base_content?: string;
-  workspace_content?: string;
-  main_content?: string;
-  workspace_diff?: string;
-  main_diff?: string;
-
-  // AI analysis result
-  analysis?: FileConflictAnalysis;
-}
-```
-
-### AI Analysis Types
-
-```typescript
 interface DriftAnalysis {
-  // Overall assessment
+  // Human-readable summaries
+  main_changes_summary: string;       // "Added rate limiting, fixed auth bug"
+  workspace_changes_summary: string;  // "Added retry logic, custom errors"
+
+  // Risk assessment
   risk_level: 'low' | 'medium' | 'high';
-  auto_mergeable_count: number;
-  needs_review_count: number;
-  conflict_count: number;
+  risk_explanation: string;
 
-  // Human-readable summary
-  summary: string;
-
-  // Recommendations
-  recommended_action: 'auto_sync' | 'review_sync' | 'manual_sync';
-
-  // Per-file analysis
-  file_analyses: Record<string, FileConflictAnalysis>;
-}
-
-interface FileConflictAnalysis {
-  risk: 'safe' | 'caution' | 'conflict';
-
-  // What each side was trying to do
-  workspace_intent: string;
-  main_intent: string;
-
-  // Why they do or don't conflict
-  compatibility_explanation: string;
-
-  // Can we merge automatically?
-  can_auto_merge: boolean;
-
-  // For caution/conflict: suggested resolution
-  suggested_merge?: string;
-  merge_strategy?: 'workspace_wins' | 'main_wins' | 'combined' | 'manual';
-
-  // Confidence in the analysis
-  confidence: number; // 0-1
+  // Recommendation
+  can_auto_sync: boolean;
+  recommendation: string;             // "Safe to sync automatically"
 }
 ```
 
-### Sync Action
+### Sync Preview
 
 ```typescript
-interface SyncAction {
+interface SyncPreview {
+  id: string;
   workspace_id: string;
-  direction: 'pull' | 'push';  // pull = main→workspace, push = workspace→main
+  drift_report_id: string;
 
-  // Resolution decisions
-  resolutions: FileResolution[];
+  // Actions that need no user input
+  auto_actions: AutoAction[];
+
+  // Decisions user must make
+  decisions_needed: ConflictDecision[];
+
+  // Summary
+  files_to_update: number;
+  files_to_add: number;
+  files_unchanged: number;
+
+  // AI summary of what will happen
+  summary: string;
+}
+
+interface AutoAction {
+  path: string;
+  action: 'copy_from_main' | 'keep_workspace' | 'ai_combined';
+  description: string;  // "Added from main" or "Combined your retry logic with main's error handling"
+}
+
+interface ConflictDecision {
+  path: string;
+
+  // Semantic descriptions (not code!)
+  main_intent: string;      // "Set timeout to 30 seconds for stability"
+  workspace_intent: string; // "Set timeout to 5 seconds for faster feedback"
+  conflict_reason: string;  // "These values are mutually exclusive"
+
+  // Options for user
+  options: DecisionOption[];
+
+  // AI recommendation
+  recommended_option_id?: string;
+}
+
+interface DecisionOption {
+  id: string;
+  label: string;              // "Use 30 seconds (main)"
+  description?: string;       // "Better for production stability"
+
+  // If custom input allowed
+  allows_custom_input?: boolean;
+  custom_input_label?: string; // "Enter timeout in seconds"
+}
+```
+
+### Sync Execution
+
+```typescript
+interface SyncRequest {
+  workspace_id: string;
+  preview_id: string;
+
+  // User's decisions for conflicts
+  decisions: Record<string, string>;  // path → selected option_id
+  custom_values?: Record<string, string>; // path → custom value if applicable
 
   // Options
   create_snapshot_before: boolean;
   create_snapshot_after: boolean;
 }
 
-interface FileResolution {
-  path: string;
-  action: 'keep_workspace' | 'keep_main' | 'use_merged' | 'skip';
-  merged_content?: string;  // Required if action is 'use_merged'
-}
-
 interface SyncResult {
   success: boolean;
+
   files_updated: number;
-  files_skipped: number;
+  files_added: number;
   errors: string[];
 
-  // New snapshot IDs if created
-  before_snapshot_id?: string;
-  after_snapshot_id?: string;
+  // Snapshots created
+  snapshot_before_id?: string;
+  snapshot_after_id?: string;
 }
 ```
 
@@ -221,36 +323,26 @@ interface SyncResult {
 GET /workspaces/{workspace_id}/drift
 ```
 
-Returns drift report comparing workspace to main.
-
 **Query Parameters:**
-- `analyze=true` — Include AI analysis (slower)
-- `include_content=true` — Include file contents for overlaps
+- `main_state`: `current` | `snapshot` (default: `current`)
+- `include_analysis`: `true` | `false` (default: `false`)
 
 **Response:**
 ```json
 {
   "drift": {
     "id": "drift-abc123",
-    "workspace_id": "ws-123",
-    "workspace_name": "feature-auth",
-    "base_snapshot_id": "snap-100",
-    "main_snapshot_id": "snap-105",
-    "workspace_only": [
-      { "path": "src/auth/login.ts", "change_type": "added" }
-    ],
-    "main_only": [
-      { "path": "src/config/env.ts", "change_type": "modified" }
-    ],
-    "overlapping": [
-      {
-        "path": "src/api/client.ts",
-        "workspace_change": { "path": "src/api/client.ts", "change_type": "modified" },
-        "main_change": { "path": "src/api/client.ts", "change_type": "modified" }
-      }
-    ],
-    "total_changes": 3,
-    "overlap_count": 1
+    "workspace_id": "ws-feature",
+    "main_workspace_id": "ws-main",
+    "compared_at": "2024-01-15T10:30:00Z",
+    "workspace_state": "current",
+    "main_state": "current",
+    "main_only": ["src/middleware/rateLimit.ts", "src/api/health.ts"],
+    "workspace_only": ["src/utils/retry.ts"],
+    "both_same": ["package.json", "tsconfig.json"],
+    "both_different": ["src/api/client.ts"],
+    "total_drift_files": 3,
+    "has_overlaps": true
   }
 }
 ```
@@ -261,71 +353,97 @@ Returns drift report comparing workspace to main.
 POST /workspaces/{workspace_id}/drift/analyze
 ```
 
-Triggers AI analysis of overlapping files.
-
-**Request Body:**
-```json
-{
-  "files": ["src/api/client.ts"],  // Optional: specific files only
-  "model": "fast"  // "fast" (haiku) or "thorough" (sonnet)
-}
-```
+Triggers AI analysis for the current drift state.
 
 **Response:**
 ```json
 {
   "analysis": {
-    "risk_level": "medium",
-    "auto_mergeable_count": 0,
-    "needs_review_count": 1,
-    "conflict_count": 0,
-    "summary": "1 file needs review: src/api/client.ts has overlapping changes to error handling.",
-    "recommended_action": "review_sync",
-    "file_analyses": {
-      "src/api/client.ts": {
-        "risk": "caution",
-        "workspace_intent": "Added retry logic to API calls",
-        "main_intent": "Refactored error handling to use custom error classes",
-        "compatibility_explanation": "Both changes touch the error handling code but in different ways. The retry logic wraps API calls while error handling changes the catch blocks. These can likely be combined.",
-        "can_auto_merge": false,
-        "suggested_merge": "... merged file content ...",
-        "merge_strategy": "combined",
-        "confidence": 0.85
-      }
-    }
+    "main_changes_summary": "Added rate limiting middleware and health check endpoint",
+    "workspace_changes_summary": "Added retry logic to API client with exponential backoff",
+    "risk_level": "low",
+    "risk_explanation": "Changes are in different areas of the codebase. The one overlapping file (client.ts) has compatible changes.",
+    "can_auto_sync": true,
+    "recommendation": "Safe to sync. Main's error handling and your retry logic can be combined."
   }
 }
 ```
 
-### Preview Sync
+### Prepare Sync
 
 ```
-POST /workspaces/{workspace_id}/drift/preview
+POST /workspaces/{workspace_id}/sync/prepare
 ```
 
-Generate a preview of what sync would do.
-
-**Request Body:**
-```json
-{
-  "direction": "pull",
-  "auto_resolve": true  // Use AI suggestions for caution files
-}
-```
+Prepares the sync by analyzing all files and generating the preview.
 
 **Response:**
 ```json
 {
   "preview": {
-    "files_to_update": [
-      { "path": "src/config/env.ts", "action": "keep_main", "reason": "Only changed in main" },
-      { "path": "src/api/client.ts", "action": "use_merged", "reason": "AI-merged overlapping changes" }
+    "id": "sync-preview-xyz",
+    "workspace_id": "ws-feature",
+    "drift_report_id": "drift-abc123",
+    "auto_actions": [
+      {
+        "path": "src/middleware/rateLimit.ts",
+        "action": "copy_from_main",
+        "description": "New rate limiting middleware from main"
+      },
+      {
+        "path": "src/api/health.ts",
+        "action": "copy_from_main",
+        "description": "New health check endpoint from main"
+      },
+      {
+        "path": "src/api/client.ts",
+        "action": "ai_combined",
+        "description": "Combined your retry logic with main's improved error handling"
+      }
     ],
-    "files_unchanged": [
-      { "path": "src/auth/login.ts", "reason": "Only changed in workspace, not affected by pull" }
+    "decisions_needed": [],
+    "files_to_update": 1,
+    "files_to_add": 2,
+    "files_unchanged": 3,
+    "summary": "3 files will change. All changes can be synced automatically."
+  }
+}
+```
+
+**Response with conflicts:**
+```json
+{
+  "preview": {
+    "id": "sync-preview-xyz",
+    "auto_actions": [...],
+    "decisions_needed": [
+      {
+        "path": "src/config/timeout.ts",
+        "main_intent": "Set API timeout to 30 seconds for production stability",
+        "workspace_intent": "Set API timeout to 5 seconds for faster development feedback",
+        "conflict_reason": "Both sides changed the same timeout value to different settings",
+        "options": [
+          {
+            "id": "use_main",
+            "label": "30 seconds (main)",
+            "description": "Better for production stability"
+          },
+          {
+            "id": "use_workspace",
+            "label": "5 seconds (yours)",
+            "description": "Better for fast iteration"
+          },
+          {
+            "id": "custom",
+            "label": "Custom value",
+            "allows_custom_input": true,
+            "custom_input_label": "Timeout in seconds"
+          }
+        ],
+        "recommended_option_id": "use_main"
+      }
     ],
-    "requires_manual": [],
-    "estimated_risk": "low"
+    "summary": "3 files will change. 1 decision needed."
   }
 }
 ```
@@ -333,19 +451,16 @@ Generate a preview of what sync would do.
 ### Execute Sync
 
 ```
-POST /workspaces/{workspace_id}/sync
+POST /workspaces/{workspace_id}/sync/execute
 ```
 
-Execute the sync operation.
-
-**Request Body:**
+**Request:**
 ```json
 {
-  "direction": "pull",
-  "resolutions": [
-    { "path": "src/config/env.ts", "action": "keep_main" },
-    { "path": "src/api/client.ts", "action": "use_merged", "merged_content": "..." }
-  ],
+  "preview_id": "sync-preview-xyz",
+  "decisions": {
+    "src/config/timeout.ts": "use_workspace"
+  },
   "create_snapshot_before": true,
   "create_snapshot_after": true
 }
@@ -356,11 +471,11 @@ Execute the sync operation.
 {
   "result": {
     "success": true,
-    "files_updated": 2,
-    "files_skipped": 0,
+    "files_updated": 1,
+    "files_added": 2,
     "errors": [],
-    "before_snapshot_id": "snap-110",
-    "after_snapshot_id": "snap-111"
+    "snapshot_before_id": "snap-110",
+    "snapshot_after_id": "snap-111"
   }
 }
 ```
@@ -369,427 +484,241 @@ Execute the sync operation.
 
 ## AI Prompt Design
 
-### File Analysis Prompt
+### Drift Summary Prompt
 
 ```
-You are analyzing two parallel changes to the same file to determine if they conflict.
+You are analyzing the differences between two workspaces in a software project.
 
-## Base Version (common ancestor)
-```
-{base_content}
+## Files only in main (workspace is missing these):
+{main_only_files}
+
+## Files only in workspace (not in main):
+{workspace_only_files}
+
+## Files that differ between both:
+{both_different_files}
+
+For the differing files, here are the changes:
+{file_diffs}
+
+## Task
+
+Provide a concise analysis:
+
+1. **Main changes summary** (1-2 sentences): What did main add or change?
+2. **Workspace changes summary** (1-2 sentences): What did the workspace add or change?
+3. **Risk level** (low/medium/high): How risky is syncing these changes?
+4. **Risk explanation** (1 sentence): Why this risk level?
+5. **Can auto-sync** (true/false): Can all changes be synced without user decisions?
+6. **Recommendation** (1 sentence): What should the user do?
+
+Respond in JSON format.
 ```
 
-## Workspace Changes (diff from base)
+### File Sync Analysis Prompt
+
 ```
-{workspace_diff}
+You are syncing two versions of a file. Your goal is to combine both sets of changes.
+
+## Workspace version:
+```
+{workspace_content}
 ```
 
-## Main Changes (diff from base)
+## Main version:
 ```
-{main_diff}
+{main_content}
 ```
 
 ## Task
 
-Analyze these changes and provide:
+1. Understand what each version was trying to accomplish
+2. Determine if the changes are compatible
+3. If compatible: produce a combined version that includes both changes
+4. If incompatible: explain the conflict in simple terms
 
-1. **Workspace Intent**: What was the workspace trying to accomplish? (1-2 sentences)
+## Response Format
 
-2. **Main Intent**: What was main trying to accomplish? (1-2 sentences)
-
-3. **Compatibility Assessment**:
-   - Do these changes touch the same code regions?
-   - Are they semantically compatible?
-   - Can they coexist without issues?
-
-4. **Risk Level**:
-   - `safe`: Changes are in different areas, can merge automatically
-   - `caution`: Changes overlap but appear compatible, review suggested merge
-   - `conflict`: Changes are incompatible, manual resolution needed
-
-5. **Merge Strategy** (if not conflict):
-   - `workspace_wins`: Workspace version should be kept
-   - `main_wins`: Main version should be kept
-   - `combined`: Both changes can be combined
-
-6. **Suggested Merge** (if risk is safe or caution):
-   Provide the merged file content that incorporates both changes.
-
-## Output Format
-
-Respond in JSON:
 ```json
 {
-  "workspace_intent": "...",
-  "main_intent": "...",
-  "compatibility_explanation": "...",
-  "risk": "safe|caution|conflict",
-  "can_auto_merge": true|false,
-  "merge_strategy": "...",
-  "suggested_merge": "...",
-  "confidence": 0.0-1.0
-}
-```
-```
-
-### Summary Generation Prompt
-
-```
-You are summarizing a drift report between a feature workspace and the main workspace.
-
-## Drift Statistics
-- Workspace-only changes: {workspace_only_count} files
-- Main-only changes: {main_only_count} files
-- Overlapping changes: {overlap_count} files
-
-## File Risk Assessments
-{file_analyses_json}
-
-## Task
-
-Generate a concise summary (2-3 sentences) that:
-1. States the overall risk level
-2. Highlights the most important conflicts or concerns
-3. Recommends an action
-
-Example: "Medium risk: 2 files have overlapping changes. src/api/client.ts has compatible changes that can be auto-merged. src/auth/session.ts has conflicting session handling logic that needs manual review. Recommend reviewing the session changes before syncing."
-```
-
----
-
-## Smart AI Usage
-
-### When to Use AI
-
-| Scenario | AI Needed? | Model |
-|----------|------------|-------|
-| Basic drift detection | No | - |
-| Counting overlapping files | No | - |
-| Classifying file risk | Yes | Haiku (fast) |
-| Generating merge suggestions | Yes | Sonnet (thorough) |
-| Explaining conflicts | Yes | Haiku (fast) |
-| Complex multi-file conflicts | Yes | Sonnet (thorough) |
-
-### Optimization Strategies
-
-1. **Lazy Analysis**: Only analyze when user requests or opens drift panel
-2. **Incremental Analysis**: Re-analyze only changed files
-3. **Caching**: Cache analysis results until either side changes
-4. **Tiered Models**:
-   - Use Haiku for initial classification
-   - Use Sonnet only for complex merges
-5. **Batch Processing**: Analyze multiple files in single API call
-6. **Skip Obvious Cases**:
-   - File only changed in one side → no AI needed
-   - Identical changes → auto-merge without AI
-   - Binary files → mark as conflict without AI
-
-### Cost Estimation
-
-```
-Per drift analysis (10 overlapping files):
-- Classification (Haiku): ~1K tokens × 10 = 10K tokens ≈ $0.003
-- Merge generation (Sonnet): ~5K tokens × 3 = 15K tokens ≈ $0.05
-- Total: ~$0.05 per analysis
-
-Optimization: Skip files with low overlap, batch similar files
-```
-
----
-
-## Snapshot Comparison Algorithm
-
-### Finding the Base Snapshot
-
-```typescript
-async function findBaseSnapshot(
-  workspaceId: string,
-  mainWorkspaceId: string
-): Promise<Snapshot | null> {
-  // Get workspace's tracked base
-  const workspace = await getWorkspace(workspaceId);
-
-  // The base is the snapshot the workspace was created from
-  // or the last sync point
-  return workspace.base_snapshot_id
-    ? await getSnapshot(workspace.base_snapshot_id)
-    : null;
-}
-```
-
-### Computing Drift
-
-```typescript
-async function computeDrift(
-  baseSnapshot: Snapshot,
-  workspaceSnapshot: Snapshot,
-  mainSnapshot: Snapshot
-): Promise<DriftReport> {
-  // Get file manifests
-  const baseFiles = await getManifest(baseSnapshot.manifest_hash);
-  const workspaceFiles = await getManifest(workspaceSnapshot.manifest_hash);
-  const mainFiles = await getManifest(mainSnapshot.manifest_hash);
-
-  // Compute changes from base to workspace
-  const workspaceChanges = diffManifests(baseFiles, workspaceFiles);
-
-  // Compute changes from base to main
-  const mainChanges = diffManifests(baseFiles, mainFiles);
-
-  // Find overlapping paths
-  const workspacePaths = new Set(workspaceChanges.map(c => c.path));
-  const mainPaths = new Set(mainChanges.map(c => c.path));
-
-  const overlappingPaths = [...workspacePaths].filter(p => mainPaths.has(p));
-
-  return {
-    workspace_only: workspaceChanges.filter(c => !mainPaths.has(c.path)),
-    main_only: mainChanges.filter(c => !workspacePaths.has(c.path)),
-    overlapping: overlappingPaths.map(path => ({
-      path,
-      workspace_change: workspaceChanges.find(c => c.path === path)!,
-      main_change: mainChanges.find(c => c.path === path)!,
-    })),
-  };
-}
-
-function diffManifests(
-  base: FileManifest,
-  current: FileManifest
-): FileChange[] {
-  const changes: FileChange[] = [];
-
-  // Find added and modified
-  for (const [path, entry] of Object.entries(current.files)) {
-    const baseEntry = base.files[path];
-    if (!baseEntry) {
-      changes.push({ path, change_type: 'added', hash: entry.hash });
-    } else if (baseEntry.hash !== entry.hash) {
-      changes.push({ path, change_type: 'modified', hash: entry.hash });
+  "workspace_intent": "Brief description of what workspace changed",
+  "main_intent": "Brief description of what main changed",
+  "compatible": true/false,
+  "combined_content": "...full combined file if compatible...",
+  "conflict_reason": "...explanation if incompatible...",
+  "options": [
+    // Only if incompatible - provide 2-3 resolution options
+    {
+      "id": "option_id",
+      "label": "Short label",
+      "description": "Why choose this",
+      "resulting_content": "...file content if this option is chosen..."
     }
-  }
-
-  // Find deleted
-  for (const path of Object.keys(base.files)) {
-    if (!current.files[path]) {
-      changes.push({ path, change_type: 'deleted' });
-    }
-  }
-
-  return changes;
+  ],
+  "recommended_option": "option_id or null"
 }
 ```
 
----
-
-## Merge/Resolution Logic
-
-### Three-Way Merge
-
-```typescript
-async function threeWayMerge(
-  basePath: string,
-  workspacePath: string,
-  mainPath: string,
-  file: OverlappingFile,
-  analysis: FileConflictAnalysis
-): Promise<MergeResult> {
-  // If AI provided a suggested merge and we trust it
-  if (analysis.can_auto_merge && analysis.suggested_merge) {
-    return {
-      success: true,
-      content: analysis.suggested_merge,
-      strategy: 'ai_merged',
-    };
-  }
-
-  // For conflicts, we need manual intervention
-  if (analysis.risk === 'conflict') {
-    return {
-      success: false,
-      conflict: true,
-      base_content: file.base_content,
-      workspace_content: file.workspace_content,
-      main_content: file.main_content,
-      explanation: analysis.compatibility_explanation,
-    };
-  }
-
-  // For caution, provide suggestion but require review
-  return {
-    success: false,
-    needs_review: true,
-    suggested_content: analysis.suggested_merge,
-    explanation: analysis.compatibility_explanation,
-  };
-}
-```
-
-### Applying Resolutions
-
-```typescript
-async function applySync(
-  workspace: Workspace,
-  resolutions: FileResolution[]
-): Promise<SyncResult> {
-  const errors: string[] = [];
-  let updated = 0;
-  let skipped = 0;
-
-  for (const resolution of resolutions) {
-    try {
-      switch (resolution.action) {
-        case 'keep_main':
-          // Copy main's version to workspace
-          await copyFileFromMain(workspace, resolution.path);
-          updated++;
-          break;
-
-        case 'keep_workspace':
-          // Keep workspace version (no action needed for pull)
-          skipped++;
-          break;
-
-        case 'use_merged':
-          // Write the merged content
-          await writeFile(workspace, resolution.path, resolution.merged_content!);
-          updated++;
-          break;
-
-        case 'skip':
-          skipped++;
-          break;
-      }
-    } catch (err) {
-      errors.push(`${resolution.path}: ${err.message}`);
-    }
-  }
-
-  // Update workspace's base snapshot to main's current
-  await updateWorkspaceBase(workspace.id, mainSnapshot.id);
-
-  return { success: errors.length === 0, files_updated: updated, files_skipped: skipped, errors };
-}
+Important:
+- Describe intents in plain English, not code terms
+- Focus on WHAT changed, not HOW (line numbers, syntax)
+- If changes are in completely different parts of the file, they're compatible
+- Only mark as incompatible if the same logical setting/behavior is changed differently
 ```
 
 ---
 
 ## UI/UX Design
 
-### Sidebar Drift Indicator
+### Drift Indicator (Sidebar)
+
+Simple indicator on workspace, no counts:
 
 ```
 ┌──────────────────┐
-│ PROJECTS         │
-│ ───────────      │
-│ ▼ my-app         │
+│ ▼ my-project     │
 │   ● main         │
-│   ○ feature  ⚠️3 │  ← Badge shows drift count
-│   ○ bugfix   ✓   │  ← Checkmark = synced
-│   ○ experiment ⚠️12
+│   ○ feature  ⚠️  │  ← Drift indicator
+│   ○ bugfix   ✓   │  ← Synced indicator
 └──────────────────┘
 ```
 
-### Workspace Detail - Drift Section
+### Drift Panel (Information)
+
+Shown on workspace detail page or as slide-out panel:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Workspace: feature-auth                                        │
-│  Base: main @ 3 days ago                                        │
+│ Drift from Main                                    [Refresh]    │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ⚠️ DRIFT DETECTED                              [Sync with Main] │
-│                                                                  │
-│  3 files have diverged from main                                │
-│                                                                  │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │ ✓ src/api/routes.ts                              SAFE     │ │
-│  │   Only changed in main • Will be pulled in                 │ │
-│  ├────────────────────────────────────────────────────────────┤ │
-│  │ ⚠️ src/api/client.ts                            CAUTION   │ │
-│  │   Both sides modified error handling                       │ │
-│  │   AI: "Changes appear compatible"      [View Merge]        │ │
-│  ├────────────────────────────────────────────────────────────┤ │
-│  │ ❌ src/config/session.ts                       CONFLICT   │ │
-│  │   Incompatible session timeout changes                     │ │
-│  │   [Keep Mine] [Keep Main] [Manual Merge]                   │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                                                                  │
+│                                                                 │
+│ Your workspace has diverged from main.                          │
+│                                                                 │
+│ ┌─────────────────────────────────────────────────────────────┐│
+│ │                                                             ││
+│ │  What's new in main:                                        ││
+│ │  • Added rate limiting to API endpoints                     ││
+│ │  • New health check endpoint                                ││
+│ │                                                             ││
+│ │  What you've changed:                                       ││
+│ │  • Added retry logic to API calls                           ││
+│ │                                                             ││
+│ │  Overlap: 1 file                                            ││
+│ │  Risk: Low - changes appear compatible                      ││
+│ │                                                             ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│ Compare against: (•) Current files  ( ) Last snapshot           │
+│                                                                 │
+│                                              [Sync with Main]   │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Merge Preview Modal
+### Sync Flow - Preparing
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Merge Preview: src/api/client.ts                    [×]        │
+│ Preparing Sync                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────────────┬─────────────────────────────────────┐ │
-│  │ WORKSPACE           │ MAIN                                │ │
-│  ├─────────────────────┼─────────────────────────────────────┤ │
-│  │ async function      │ async function                      │ │
-│  │ fetchData() {       │ fetchData() {                       │ │
-│  │+  for (let i = 0;   │   try {                             │ │
-│  │+    i < 3; i++) {   │     const res = await              │ │
-│  │     try {           │       fetch(url);                   │ │
-│  │       const res =   │-    return res.json();              │ │
-│  │         await       │+    if (!res.ok) {                  │ │
-│  │         fetch(url); │+      throw new ApiError(          │ │
-│  │       return res;   │+        res.status);                │ │
-│  │+    } catch (e) {   │+    }                               │ │
-│  │+      if (i === 2)  │+    return res.json();              │ │
-│  │+        throw e;    │   } catch (e) {                     │ │
-│  │+    }               │+    throw new ApiError(e);          │ │
-│  │+  }                 │   }                                 │ │
-│  │ }                   │ }                                   │ │
-│  └─────────────────────┴─────────────────────────────────────┘ │
-│                                                                  │
-│  AI Analysis:                                                   │
-│  "Workspace added retry logic, main added custom error class.   │
-│   These can be combined: retry with ApiError on final failure." │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ SUGGESTED MERGE                                             ││
-│  │                                                             ││
-│  │ async function fetchData() {                                ││
-│  │   for (let i = 0; i < 3; i++) {                            ││
-│  │     try {                                                   ││
-│  │       const res = await fetch(url);                        ││
-│  │       if (!res.ok) {                                       ││
-│  │         throw new ApiError(res.status);                    ││
-│  │       }                                                    ││
-│  │       return res.json();                                   ││
-│  │     } catch (e) {                                          ││
-│  │       if (i === 2) throw new ApiError(e);                  ││
-│  │     }                                                      ││
-│  │   }                                                        ││
-│  │ }                                                          ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                                                  │
-│  [Use Suggested Merge]  [Edit Manually]  [Keep Workspace]       │
-│                                                                  │
+│                                                                 │
+│   ◐ Analyzing differences...                                    │
+│                                                                 │
+│   ✓ 2 files to add from main                                   │
+│   ✓ 1 file to combine                                          │
+│   ◐ Checking for conflicts...                                   │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Sync Confirmation
+### Sync Flow - Ready (No Conflicts)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Sync feature-auth with main                         [×]        │
+│ Ready to Sync                                                   │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  This will apply the following changes:                         │
-│                                                                  │
-│  ✓ Pull 2 files from main                                      │
-│  ✓ Auto-merge 1 file                                           │
-│  ⚠️ Skip 1 conflicting file (resolve manually after)            │
-│                                                                  │
-│  ☑ Create snapshot before sync                                  │
-│  ☑ Create snapshot after sync                                   │
-│                                                                  │
-│           [Cancel]                    [Sync Now]                │
-│                                                                  │
+│                                                                 │
+│ ✓ All changes can be synced automatically                       │
+│                                                                 │
+│ ┌─────────────────────────────────────────────────────────────┐│
+│ │                                                             ││
+│ │  Will be added from main:                                   ││
+│ │  • Rate limiting middleware                                 ││
+│ │  • Health check endpoint                                    ││
+│ │                                                             ││
+│ │  Will be combined:                                          ││
+│ │  • API client - combined retry logic with error handling    ││
+│ │                                                             ││
+│ │  Your changes preserved:                                    ││
+│ │  • Retry utility functions                                  ││
+│ │                                                             ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│ ☑ Create snapshot before sync                                   │
+│                                                                 │
+│              [Cancel]                      [Apply Sync]         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Sync Flow - Decision Needed
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Decision Needed                                       1 of 1    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ config/timeout.ts                                               │
+│                                                                 │
+│ ┌─────────────────────────────────────────────────────────────┐│
+│ │                                                             ││
+│ │  Main changed:                                              ││
+│ │  "Set API timeout to 30 seconds for stability"              ││
+│ │                                                             ││
+│ │  You changed:                                               ││
+│ │  "Set API timeout to 5 seconds for faster feedback"         ││
+│ │                                                             ││
+│ │  Why this conflicts:                                        ││
+│ │  Both sides set the timeout to different values.            ││
+│ │                                                             ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│ Choose one:                                                     │
+│                                                                 │
+│ ┌─────────────────────────────────────────────────────────────┐│
+│ │ ( ) 30 seconds (main) ★ recommended                         ││
+│ │     Better for production stability                         ││
+│ ├─────────────────────────────────────────────────────────────┤│
+│ │ (•) 5 seconds (yours)                                       ││
+│ │     Better for fast iteration                               ││
+│ ├─────────────────────────────────────────────────────────────┤│
+│ │ ( ) Custom: [____] seconds                                  ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│              [Back]                           [Continue]        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Sync Flow - Complete
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ ✓ Sync Complete                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ Your workspace is now up to date with main.                     │
+│                                                                 │
+│ ┌─────────────────────────────────────────────────────────────┐│
+│ │                                                             ││
+│ │  • 2 files added                                            ││
+│ │  • 1 file combined                                          ││
+│ │  • Snapshot created: snap-111                               ││
+│ │                                                             ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│                                              [Done]             │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -797,49 +726,53 @@ async function applySync(
 
 ## Implementation Phases
 
-### Phase 1: Detection (No AI)
-- [ ] Add `base_snapshot_id` tracking to workspace
-- [ ] Implement snapshot comparison algorithm
+### Phase 1: Drift Detection (No AI)
+
+- [ ] Add `main_workspace_id` to Project model
+- [ ] Implement file comparison logic (workspace vs main)
 - [ ] Create drift report API endpoint
-- [ ] Add drift indicator to sidebar UI
-- [ ] Basic drift report display on workspace page
+- [ ] Add drift indicator to sidebar
+- [ ] Basic drift panel showing file counts
 
-### Phase 2: Risk Analysis (AI)
-- [ ] Design and test AI prompts
-- [ ] Implement file analysis endpoint
-- [ ] Add risk classification UI (safe/caution/conflict)
-- [ ] Generate human-readable explanations
-- [ ] Caching layer for analysis results
+### Phase 2: AI Analysis
 
-### Phase 3: Resolution (AI)
-- [ ] Implement merge suggestion generation
-- [ ] Build merge preview UI
-- [ ] Create sync execution endpoint
-- [ ] Add resolution action buttons
-- [ ] Snapshot before/after sync
+- [ ] Implement drift summary generation
+- [ ] Add risk level classification
+- [ ] Create `/drift/analyze` endpoint
+- [ ] Update drift panel with AI summaries
 
-### Phase 4: Polish
-- [ ] Batch file analysis for performance
+### Phase 3: Sync Preparation
+
+- [ ] Implement non-AI sync actions (copy, keep)
+- [ ] Implement AI file combination
+- [ ] Create conflict detection and option generation
+- [ ] Build `/sync/prepare` endpoint
+- [ ] Build sync preview UI
+
+### Phase 4: Sync Execution
+
+- [ ] Implement sync application logic
+- [ ] Add snapshot before/after support
+- [ ] Create `/sync/execute` endpoint
+- [ ] Build sync confirmation UI
+- [ ] Build decision UI for conflicts
+
+### Phase 5: Polish
+
 - [ ] Background drift checking
-- [ ] Notifications for high drift
-- [ ] Keyboard shortcuts for common actions
-- [ ] Undo sync capability
+- [ ] Drift notifications
+- [ ] Keyboard shortcuts
+- [ ] Error handling and recovery
+- [ ] Performance optimization for large workspaces
 
 ---
 
 ## Open Questions
 
-1. **Sync Direction**: Should we support push (workspace→main) or only pull (main→workspace)?
-   - Current assumption: Both, but pull is primary
+1. **Automatic drift checking**: Should we check drift automatically on workspace load, or only on user request?
 
-2. **Automatic Sync**: Should we auto-sync safe files without user confirmation?
-   - Current assumption: No, always require confirmation
+2. **Notification threshold**: At what point should we notify users about drift? (e.g., after N files diverge, or after N days)
 
-3. **Conflict Markers**: Should we support git-style conflict markers for manual resolution?
-   - Current assumption: Yes, as fallback
+3. **Conflict escalation**: If AI can't determine compatibility, should we default to "needs decision" or attempt a best-guess combination?
 
-4. **Multi-Workspace Conflicts**: What if two workspaces both want to sync to main?
-   - Current assumption: First-come-first-served, second sees updated main
-
-5. **Large Files**: How to handle large binary files?
-   - Current assumption: Skip AI analysis, simple overwrite options only
+4. **Undo support**: Should users be able to undo a sync (beyond restoring from snapshot)?
