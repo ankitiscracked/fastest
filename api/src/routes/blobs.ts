@@ -161,7 +161,7 @@ blobRoutes.put('/manifests/:hash', async (c) => {
     return c.json({
       error: {
         code: 'HASH_MISMATCH',
-        message: `Manifest hash does not match`
+        message: `Content hash does not match`
       }
     }, 400);
   }
@@ -194,7 +194,7 @@ blobRoutes.get('/manifests/:hash', async (c) => {
   const obj = await c.env.BLOBS.get(key);
 
   if (!obj) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Manifest not found' } }, 404);
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Snapshot data not found' } }, 404);
   }
 
   return new Response(obj.body, {

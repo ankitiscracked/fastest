@@ -87,7 +87,7 @@ func runRollback(files []string, toSnapshot string, all bool, dryRun bool, force
 
 	targetManifest, err := manifest.FromJSON(manifestData)
 	if err != nil {
-		return fmt.Errorf("failed to parse manifest: %w", err)
+		return fmt.Errorf("failed to load snapshot: %w", err)
 	}
 
 	// Build lookup map of target files

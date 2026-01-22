@@ -132,7 +132,7 @@ projectRoutes.get('/:projectId', async (c) => {
     .select({
       id: snapshots.id,
       project_id: snapshots.projectId,
-      manifest_hash: snapshots.manifestHash,
+      content_hash: snapshots.manifestHash,
       parent_snapshot_id: snapshots.parentSnapshotId,
       source: snapshots.source,
       created_at: snapshots.createdAt,
@@ -422,7 +422,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
 
   const projectId = c.req.param('projectId');
   const body = await c.req.json<{
-    manifest_hash: string;
+    content_hash: string;
     parent_snapshot_id?: string;
     source?: 'cli' | 'web';
   }>();
@@ -439,15 +439,15 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
   }
 
-  if (!body.manifest_hash) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'manifest_hash is required' } }, 422);
+  if (!body.content_hash) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'content_hash is required' } }, 422);
   }
 
   // Check if snapshot with same manifest already exists
   const existingResult = await db
     .select({ id: snapshots.id })
     .from(snapshots)
-    .where(and(eq(snapshots.projectId, projectId), eq(snapshots.manifestHash, body.manifest_hash)))
+    .where(and(eq(snapshots.projectId, projectId), eq(snapshots.manifestHash, body.content_hash)))
     .limit(1);
 
   const existing = existingResult[0];
@@ -458,7 +458,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
       .select({
         id: snapshots.id,
         project_id: snapshots.projectId,
-        manifest_hash: snapshots.manifestHash,
+        content_hash: snapshots.manifestHash,
         parent_snapshot_id: snapshots.parentSnapshotId,
         source: snapshots.source,
         created_at: snapshots.createdAt,
@@ -477,7 +477,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
   await db.insert(snapshots).values({
     id: snapshotId,
     projectId,
-    manifestHash: body.manifest_hash,
+    manifestHash: body.content_hash,
     parentSnapshotId: body.parent_snapshot_id || null,
     source,
     createdAt: now,
@@ -504,7 +504,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
   const snapshot: Snapshot = {
     id: snapshotId,
     project_id: projectId,
-    manifest_hash: body.manifest_hash,
+    content_hash: body.content_hash,
     parent_snapshot_id: body.parent_snapshot_id || null,
     source,
     created_at: now
@@ -539,7 +539,7 @@ projectRoutes.get('/:projectId/snapshots', async (c) => {
     .select({
       id: snapshots.id,
       project_id: snapshots.projectId,
-      manifest_hash: snapshots.manifestHash,
+      content_hash: snapshots.manifestHash,
       parent_snapshot_id: snapshots.parentSnapshotId,
       source: snapshots.source,
       created_at: snapshots.createdAt,

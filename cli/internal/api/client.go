@@ -380,14 +380,14 @@ func (c *Client) SendHeartbeat(workspaceID string) error {
 type Snapshot struct {
 	ID               string  `json:"id"`
 	ProjectID        string  `json:"project_id"`
-	ManifestHash     string  `json:"manifest_hash"`
+	ContentHash      string  `json:"content_hash"`
 	ParentSnapshotID *string `json:"parent_snapshot_id"`
 	Source           string  `json:"source"`
 	CreatedAt        string  `json:"created_at"`
 }
 
 type CreateSnapshotRequest struct {
-	ManifestHash     string  `json:"manifest_hash"`
+	ContentHash      string  `json:"content_hash"`
 	ParentSnapshotID *string `json:"parent_snapshot_id,omitempty"`
 	Source           string  `json:"source,omitempty"`
 }
@@ -395,8 +395,8 @@ type CreateSnapshotRequest struct {
 // CreateSnapshot creates a new snapshot for a project
 func (c *Client) CreateSnapshot(projectID, manifestHash string, parentSnapshotID string) (*Snapshot, bool, error) {
 	req := CreateSnapshotRequest{
-		ManifestHash: manifestHash,
-		Source:       "cli",
+		ContentHash: manifestHash,
+		Source:      "cli",
 	}
 	if parentSnapshotID != "" {
 		req.ParentSnapshotID = &parentSnapshotID

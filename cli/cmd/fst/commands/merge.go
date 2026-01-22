@@ -216,10 +216,10 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 	fmt.Printf("Into:         %s (%s)\n", cfg.WorkspaceName, localRoot)
 	fmt.Println()
 
-	// Load base manifest (common ancestor)
+	// Load base snapshot (common ancestor)
 	baseManifest, err := loadBaseManifest(cfg)
 	if err != nil {
-		fmt.Printf("Warning: Could not load base manifest: %v\n", err)
+		fmt.Printf("Warning: Could not load base snapshot: %v\n", err)
 		fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
 		baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
 	}
@@ -667,7 +667,7 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 	manifestPath := filepath.Join(configDir, "cache", "manifests", cfg.BaseSnapshotID+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("manifest not in cache: %w", err)
+		return nil, fmt.Errorf("snapshot not in cache: %w", err)
 	}
 
 	return manifest.FromJSON(data)

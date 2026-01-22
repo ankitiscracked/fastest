@@ -31,8 +31,8 @@ func newSnapshotCmd() *cobra.Command {
 		Long: `Capture the current state of the project as an immutable snapshot.
 
 This will:
-1. Generate a manifest of all files (respecting .fstignore)
-2. Save the manifest locally in .fst/cache/manifests/
+1. Scan all files (respecting .fstignore)
+2. Save the snapshot locally for rollback support
 3. Optionally sync to cloud if authenticated
 
 Use --summary to auto-generate a description using your coding agent.
@@ -60,20 +60,20 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	fmt.Println("Generating manifest...")
+	fmt.Println("Scanning files...")
 
 	// Generate manifest (without mod times for reproducibility)
 	m, err := manifest.Generate(root, false)
 	if err != nil {
-		return fmt.Errorf("failed to generate manifest: %w", err)
+		return fmt.Errorf("failed to scan files: %w", err)
 	}
 
 	fmt.Printf("Found %d files (%s)\n", m.FileCount(), formatBytesLong(m.TotalSize()))
 
-	// Compute manifest hash - this becomes the snapshot ID
+	// Compute content hash - this becomes the snapshot ID
 	manifestHash, err := m.Hash()
 	if err != nil {
-		return fmt.Errorf("failed to hash manifest: %w", err)
+		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
 	// Create snapshot ID from hash (use first 16 chars for readability)
@@ -87,7 +87,7 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 
 	manifestDir := filepath.Join(configDir, "cache", "manifests")
 	if err := os.MkdirAll(manifestDir, 0755); err != nil {
-		return fmt.Errorf("failed to create manifest cache: %w", err)
+		return fmt.Errorf("failed to create snapshot cache: %w", err)
 	}
 
 	manifestPath := filepath.Join(manifestDir, snapshotID+".json")
@@ -140,15 +140,15 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 		fmt.Printf("Cached %d new blobs.\n", blobsCached)
 	}
 
-	// Save manifest locally
+	// Save snapshot locally
 	if !alreadyExists {
 		manifestJSON, err := m.ToJSON()
 		if err != nil {
-			return fmt.Errorf("failed to serialize manifest: %w", err)
+			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
 
 		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-			return fmt.Errorf("failed to save manifest: %w", err)
+			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
 	}
 

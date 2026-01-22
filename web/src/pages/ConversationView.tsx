@@ -913,13 +913,13 @@ function EmptyState() {
 
 function formatErrorMessage(raw: string): string {
   if (!raw) return 'An unexpected error occurred';
-  if (raw.includes('MAX_FILES_PER_MANIFEST') || raw.includes('max allowed')) {
+  if (raw.includes('MAX_FILES') || raw.includes('max allowed') || raw.includes('file limit')) {
     const match = raw.match(/Workspace has (\d+) files; max allowed is (\d+)/);
     if (match) {
       const [, total, max] = match;
-      return `This workspace has ${total} files, which exceeds the current limit (${max}). Remove files or increase MAX_FILES_PER_MANIFEST, then retry.`;
+      return `This workspace has ${total} files, which exceeds the current limit (${max}). Remove files or contact support to increase the limit.`;
     }
-    return 'This workspace exceeds the current file limit. Remove files or increase MAX_FILES_PER_MANIFEST, then retry.';
+    return 'This workspace exceeds the current file limit. Remove files or contact support to increase the limit.';
   }
   return raw;
 }

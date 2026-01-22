@@ -22,7 +22,7 @@ snapshotRoutes.get('/:snapshotId', async (c) => {
     .select({
       id: snapshots.id,
       project_id: snapshots.projectId,
-      manifest_hash: snapshots.manifestHash,
+      content_hash: snapshots.manifestHash,
       parent_snapshot_id: snapshots.parentSnapshotId,
       source: snapshots.source,
       created_at: snapshots.createdAt,
@@ -47,7 +47,7 @@ snapshotRoutes.get('/:snapshotId', async (c) => {
     snapshot: {
       id: snapshot.id,
       project_id: snapshot.project_id,
-      manifest_hash: snapshot.manifest_hash,
+      content_hash: snapshot.content_hash,
       parent_snapshot_id: snapshot.parent_snapshot_id,
       source: snapshot.source,
       created_at: snapshot.created_at,

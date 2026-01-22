@@ -229,16 +229,16 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 			fmt.Printf("  %s: mapped commit missing, re-exporting\n", snap.ID)
 		}
 
-		// Load manifest for this snapshot
+		// Load snapshot data
 		manifestPath := filepath.Join(configDir, "cache", "manifests", snap.ID+".json")
 		manifestData, err := os.ReadFile(manifestPath)
 		if err != nil {
-			return fmt.Errorf("failed to read manifest for %s: %w", snap.ID, err)
+			return fmt.Errorf("failed to load snapshot %s: %w", snap.ID, err)
 		}
 
 		m, err := manifest.FromJSON(manifestData)
 		if err != nil {
-			return fmt.Errorf("failed to parse manifest for %s: %w", snap.ID, err)
+			return fmt.Errorf("failed to parse snapshot %s: %w", snap.ID, err)
 		}
 
 		// Restore files from blobs to working directory

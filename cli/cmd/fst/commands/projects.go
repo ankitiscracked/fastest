@@ -191,12 +191,12 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 
 		m, err := manifest.Generate(cwd, false)
 		if err != nil {
-			return fmt.Errorf("failed to generate manifest: %w", err)
+			return fmt.Errorf("failed to scan files: %w", err)
 		}
 
 		manifestHash, err := m.Hash()
 		if err != nil {
-			return fmt.Errorf("failed to hash manifest: %w", err)
+			return fmt.Errorf("failed to create snapshot: %w", err)
 		}
 
 		snapshotID = "snap-" + manifestHash[:16]
@@ -216,15 +216,15 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 			os.WriteFile(blobPath, content, 0644)
 		}
 
-		// Save manifest
+		// Save snapshot
 		manifestJSON, err := m.ToJSON()
 		if err != nil {
-			return fmt.Errorf("failed to serialize manifest: %w", err)
+			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
 
 		manifestPath := filepath.Join(fstDir, "cache", "manifests", snapshotID+".json")
 		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-			return fmt.Errorf("failed to save manifest: %w", err)
+			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
 
 		// Save metadata
