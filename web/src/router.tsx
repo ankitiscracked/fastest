@@ -10,6 +10,7 @@ import { WorkspaceDetail } from './pages/WorkspaceDetail';
 import { Home } from './pages/Home';
 import { ConversationView } from './pages/ConversationView';
 import { Settings } from './pages/Settings';
+import { DocsPage } from './pages/DocsPage';
 
 // Router context type
 interface RouterContext {
@@ -115,6 +116,13 @@ const settingsRoute = createRoute({
   component: Settings,
 });
 
+// Project docs route
+const projectDocsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/projects/$projectId/docs',
+  component: DocsPage,
+});
+
 // Build route tree
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -128,6 +136,7 @@ const routeTree = rootRoute.addChildren([
     projectsRoute,
     projectDetailRoute,
     workspacesRoute,
+    projectDocsRoute,
     settingsRoute,
   ]),
 ]);

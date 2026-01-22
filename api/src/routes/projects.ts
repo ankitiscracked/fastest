@@ -1,9 +1,27 @@
 import { Hono } from 'hono';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import type { Env } from '../index';
-import type { Project, Workspace, Snapshot, CreateProjectRequest, CreateWorkspaceRequest, SetEnvVarRequest, ProjectEnvVar } from '@fastest/shared';
+import type { Project, Workspace, Snapshot, CreateProjectRequest, CreateWorkspaceRequest, SetEnvVarRequest, ProjectEnvVar, ListProjectDocsResponse, GetDocContentResponse, WorkspaceDocs, DocFile } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
 import { createDb, projects, workspaces, snapshots, activityEvents, driftReports, projectEnvVars } from '../db';
+
+// Doc file patterns - files that are considered documentation
+const DOC_PATTERNS = [
+  /\.md$/i,
+  /\.txt$/i,
+  /\.mdx$/i,
+  /^readme$/i,
+  /^changelog$/i,
+  /^license$/i,
+  /^contributing$/i,
+  /^todo$/i,
+  /^notes$/i,
+];
+
+function isDocFile(path: string): boolean {
+  const filename = path.split('/').pop() || '';
+  return DOC_PATTERNS.some(pattern => pattern.test(filename) || pattern.test(path));
+}
 
 export const projectRoutes = new Hono<{ Bindings: Env }>();
 
@@ -804,6 +822,175 @@ projectRoutes.get('/:projectId/env-vars/values', async (c) => {
       is_secret: Boolean(v.is_secret),
     }))
   });
+});
+
+// =====================
+// Project Documentation
+// =====================
+
+// List all docs across all workspaces in a project
+projectRoutes.get('/:projectId/docs', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const db = createDb(c.env.DB);
+
+  // Verify project ownership
+  const [project] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)));
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  // Get all workspaces for this project
+  const projectWorkspaces = await db
+    .select()
+    .from(workspaces)
+    .where(eq(workspaces.projectId, projectId));
+
+  const workspaceDocs: WorkspaceDocs[] = [];
+  let totalFiles = 0;
+
+  // For each workspace, get docs from its snapshot
+  for (const workspace of projectWorkspaces) {
+    if (!workspace.baseSnapshotId) continue;
+
+    try {
+      // Get the manifest for this workspace's snapshot
+      const manifestKey = `${user.id}/manifests/${workspace.baseSnapshotId}.json`;
+      const manifestObj = await c.env.BLOBS.get(manifestKey);
+
+      if (!manifestObj) continue;
+
+      const manifest = JSON.parse(await manifestObj.text()) as { files: Array<{ path: string; hash: string; size: number }> };
+
+      // Filter for doc files
+      const docFiles: DocFile[] = manifest.files
+        .filter(f => isDocFile(f.path))
+        .map(f => ({
+          path: f.path,
+          workspace_id: workspace.id,
+          workspace_name: workspace.name,
+          size: f.size,
+          hash: f.hash,
+        }));
+
+      if (docFiles.length > 0) {
+        workspaceDocs.push({
+          workspace_id: workspace.id,
+          workspace_name: workspace.name,
+          files: docFiles,
+        });
+        totalFiles += docFiles.length;
+      }
+    } catch (err) {
+      console.error(`Failed to get docs for workspace ${workspace.id}:`, err);
+      // Continue with other workspaces
+    }
+  }
+
+  // Sort workspaces: main first, then alphabetically
+  workspaceDocs.sort((a, b) => {
+    if (a.workspace_name === 'main') return -1;
+    if (b.workspace_name === 'main') return 1;
+    return a.workspace_name.localeCompare(b.workspace_name);
+  });
+
+  const response: ListProjectDocsResponse = {
+    workspaces: workspaceDocs,
+    total_files: totalFiles,
+  };
+
+  return c.json(response);
+});
+
+// Get content of a specific doc file
+projectRoutes.get('/:projectId/docs/content', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const workspaceId = c.req.query('workspace');
+  const filePath = c.req.query('path');
+
+  if (!workspaceId || !filePath) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'workspace and path query params required' } }, 422);
+  }
+
+  const db = createDb(c.env.DB);
+
+  // Verify project ownership
+  const [project] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)));
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  // Get the workspace
+  const [workspace] = await db
+    .select()
+    .from(workspaces)
+    .where(and(eq(workspaces.id, workspaceId), eq(workspaces.projectId, projectId)));
+
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  if (!workspace.baseSnapshotId) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace has no snapshot' } }, 404);
+  }
+
+  try {
+    // Get the manifest
+    const manifestKey = `${user.id}/manifests/${workspace.baseSnapshotId}.json`;
+    const manifestObj = await c.env.BLOBS.get(manifestKey);
+
+    if (!manifestObj) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Snapshot not found' } }, 404);
+    }
+
+    const manifest = JSON.parse(await manifestObj.text()) as { files: Array<{ path: string; hash: string; size: number }> };
+
+    // Find the file
+    const file = manifest.files.find(f => f.path === filePath);
+    if (!file) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'File not found' } }, 404);
+    }
+
+    // Get the blob content
+    const blobKey = `${user.id}/blobs/${file.hash}`;
+    const blobObj = await c.env.BLOBS.get(blobKey);
+
+    if (!blobObj) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'File content not found' } }, 404);
+    }
+
+    const content = await blobObj.text();
+
+    const response: GetDocContentResponse = {
+      content,
+      path: filePath,
+      workspace_id: workspace.id,
+      workspace_name: workspace.name,
+      size: file.size,
+    };
+
+    return c.json(response);
+  } catch (err) {
+    console.error('Failed to get doc content:', err);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get doc content' } }, 500);
+  }
 });
 
 // Helper: Generate ULID

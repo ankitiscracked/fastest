@@ -178,6 +178,21 @@ class ApiClient {
     }>('GET', `/projects/${projectId}`);
   }
 
+  // Project Docs
+  async listProjectDocs(projectId: string) {
+    return this.request<import('@fastest/shared').ListProjectDocsResponse>(
+      'GET',
+      `/projects/${projectId}/docs`
+    );
+  }
+
+  async getDocContent(projectId: string, workspaceId: string, path: string) {
+    return this.request<import('@fastest/shared').GetDocContentResponse>(
+      'GET',
+      `/projects/${projectId}/docs/content?workspace=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`
+    );
+  }
+
   // Workspaces
   async getWorkspace(workspaceId: string) {
     return this.request<{

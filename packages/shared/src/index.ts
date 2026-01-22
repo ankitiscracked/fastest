@@ -520,3 +520,45 @@ export interface ActionItem {
 export interface ListActionItemsResponse {
   items: ActionItem[];
 }
+
+// Project Docs - documentation files across workspaces
+
+export interface DocFile {
+  path: string;
+  workspace_id: string;
+  workspace_name: string;
+  size: number;
+  hash: string;
+}
+
+export interface WorkspaceDocs {
+  workspace_id: string;
+  workspace_name: string;
+  files: DocFile[];
+}
+
+export interface ListProjectDocsResponse {
+  workspaces: WorkspaceDocs[];
+  total_files: number;
+}
+
+export interface GetDocContentResponse {
+  content: string;
+  path: string;
+  workspace_id: string;
+  workspace_name: string;
+  size: number;
+}
+
+// Doc file patterns
+export const DOC_FILE_PATTERNS = [
+  /\.md$/i,
+  /\.txt$/i,
+  /\.mdx$/i,
+  /^readme$/i,
+  /^changelog$/i,
+  /^license$/i,
+  /^contributing$/i,
+  /^todo$/i,
+  /^notes$/i,
+];
