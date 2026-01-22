@@ -181,3 +181,157 @@ func formatBytes(bytes int64) string {
 	}
 	return fmt.Sprintf("%.1f %s", fb, sizes[i])
 }
+
+// ComputeAgainstMain compares current workspace against main workspace
+// For main workspaces, falls back to base comparison (no main to compare against)
+// For linked workspaces, compares against main's last snapshot
+// If includeDirty is true, compares against main's current file state instead
+func ComputeAgainstMain(root string, includeDirty bool) (*Report, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("not in a project directory: %w", err)
+	}
+
+	// Main workspace: compare against base (like current behavior)
+	if cfg.IsMain {
+		return ComputeFromCache(root)
+	}
+
+	// Get main workspace path
+	mainPath, err := config.GetMainWorkspacePath()
+	if err != nil {
+		return nil, fmt.Errorf("cannot find main workspace: %w", err)
+	}
+
+	// Get main workspace's manifest
+	var mainManifest *manifest.Manifest
+	var referenceID string
+
+	if includeDirty {
+		// Generate manifest from main's current files
+		mainManifest, err = manifest.Generate(mainPath, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate main workspace manifest: %w", err)
+		}
+		referenceID = "main:dirty"
+	} else {
+		// Load main's last snapshot manifest
+		mainCfg, err := loadMainConfig(mainPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load main workspace config: %w", err)
+		}
+
+		// Use main's last snapshot, fall back to base
+		snapshotID := mainCfg.LastSnapshotID
+		if snapshotID == "" {
+			snapshotID = mainCfg.BaseSnapshotID
+		}
+
+		if snapshotID == "" {
+			return nil, fmt.Errorf("main workspace has no snapshots")
+		}
+
+		mainManifest, err = loadManifestFromCache(snapshotID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load main's snapshot: %w", err)
+		}
+		referenceID = snapshotID
+	}
+
+	// Generate current workspace manifest
+	currentManifest, err := manifest.Generate(root, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate current manifest: %w", err)
+	}
+
+	// Compute diff: main → current (what's different in current vs main)
+	added, modified, deleted := manifest.Diff(mainManifest, currentManifest)
+
+	// Calculate bytes changed
+	bytesChanged := calculateBytesChanged(mainManifest, currentManifest, added, modified, deleted)
+
+	return &Report{
+		BaseSnapshotID: referenceID,
+		FilesAdded:     added,
+		FilesModified:  modified,
+		FilesDeleted:   deleted,
+		BytesChanged:   bytesChanged,
+	}, nil
+}
+
+// loadMainConfig loads the config from the main workspace
+func loadMainConfig(mainPath string) (*config.ProjectConfig, error) {
+	configPath := filepath.Join(mainPath, config.ConfigDirName, config.ConfigFileName)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read main config: %w", err)
+	}
+
+	var cfg config.ProjectConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse main config: %w", err)
+	}
+
+	return &cfg, nil
+}
+
+// loadManifestFromCache loads a manifest from the cache by snapshot ID
+func loadManifestFromCache(snapshotID string) (*manifest.Manifest, error) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return nil, err
+	}
+
+	manifestPath := filepath.Join(configDir, "cache", "manifests", snapshotID+".json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("manifest not found in cache: %w", err)
+	}
+
+	return manifest.FromJSON(data)
+}
+
+// calculateBytesChanged calculates the total bytes changed between manifests
+func calculateBytesChanged(base, current *manifest.Manifest, added, modified, deleted []string) int64 {
+	var bytesChanged int64
+
+	currentMap := make(map[string]manifest.FileEntry)
+	for _, f := range current.Files {
+		currentMap[f.Path] = f
+	}
+	baseMap := make(map[string]manifest.FileEntry)
+	for _, f := range base.Files {
+		baseMap[f.Path] = f
+	}
+
+	// Added files contribute their full size
+	for _, path := range added {
+		if f, ok := currentMap[path]; ok {
+			bytesChanged += f.Size
+		}
+	}
+
+	// Modified files contribute the delta
+	for _, path := range modified {
+		curr, currOk := currentMap[path]
+		baseF, baseOk := baseMap[path]
+		if currOk && baseOk {
+			if curr.Size > baseF.Size {
+				bytesChanged += curr.Size - baseF.Size
+			} else {
+				bytesChanged += baseF.Size - curr.Size
+			}
+		} else if currOk {
+			bytesChanged += curr.Size
+		}
+	}
+
+	// Deleted files contribute their original size
+	for _, path := range deleted {
+		if f, ok := baseMap[path]; ok {
+			bytesChanged += f.Size
+		}
+	}
+
+	return bytesChanged
+}

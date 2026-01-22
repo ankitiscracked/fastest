@@ -252,9 +252,10 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
   "workspace_id": "%s",
   "workspace_name": "%s",
   "base_snapshot_id": "%s",
+  "last_snapshot_id": "%s",
   "mode": "%s",
   "is_main": true
-}`, projectID, workspaceID, workspaceName, snapshotID, modeString(cloudSynced))
+}`, projectID, workspaceID, workspaceName, snapshotID, snapshotID, modeString(cloudSynced))
 
 	configPath := filepath.Join(fstDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(configData), 0644); err != nil {

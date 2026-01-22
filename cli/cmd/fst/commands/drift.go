@@ -21,27 +21,31 @@ func newDriftCmd() *cobra.Command {
 	var jsonOutput bool
 	var summary bool
 	var sync bool
+	var includeDirty bool
 
 	cmd := &cobra.Command{
 		Use:   "drift",
-		Short: "Show changes from base snapshot",
-		Long: `Show the drift (changes) from the base snapshot.
+		Short: "Show changes from main workspace",
+		Long: `Show the drift (changes) from the main workspace.
 
-This compares your current working directory against the base snapshot
-and shows which files have been added, modified, or deleted.`,
+For linked workspaces, this compares your current working directory against
+the main workspace and shows which files have been added, modified, or deleted.
+
+For main workspaces, this compares against the base snapshot.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDrift(jsonOutput, summary, sync)
+			return runDrift(jsonOutput, summary, sync, includeDirty)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	cmd.Flags().BoolVar(&summary, "summary", false, "Generate LLM summary of changes (requires configured agent)")
 	cmd.Flags().BoolVar(&sync, "sync", false, "Sync drift report to cloud")
+	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include main workspace's uncommitted changes in comparison")
 
 	return cmd
 }
 
-func runDrift(jsonOutput, generateSummary, syncToCloud bool) error {
+func runDrift(jsonOutput, generateSummary, syncToCloud, includeDirty bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -52,8 +56,8 @@ func runDrift(jsonOutput, generateSummary, syncToCloud bool) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	// Compute drift
-	report, err := drift.ComputeFromCache(root)
+	// Compute drift against main workspace (or base for main workspaces)
+	report, err := drift.ComputeAgainstMain(root, includeDirty)
 	if err != nil {
 		return fmt.Errorf("failed to compute drift: %w", err)
 	}
@@ -137,11 +141,19 @@ func runDrift(jsonOutput, generateSummary, syncToCloud bool) error {
 
 	// Human-readable output
 	if !report.HasChanges() {
-		fmt.Println("No changes from base snapshot")
+		if cfg.IsMain {
+			fmt.Println("No changes from base snapshot")
+		} else {
+			fmt.Println("No differences from main workspace")
+		}
 		return nil
 	}
 
-	fmt.Printf("Drift from base: %s\n", report.FormatSummary())
+	if cfg.IsMain {
+		fmt.Printf("Drift from base: %s\n", report.FormatSummary())
+	} else {
+		fmt.Printf("Differences from main: %s\n", report.FormatSummary())
+	}
 	fmt.Println()
 
 	if len(report.FilesAdded) > 0 {

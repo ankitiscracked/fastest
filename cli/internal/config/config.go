@@ -20,6 +20,7 @@ type ProjectConfig struct {
 	WorkspaceID    string `json:"workspace_id,omitempty"`
 	WorkspaceName  string `json:"workspace_name,omitempty"`
 	BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
+	LastSnapshotID string `json:"last_snapshot_id,omitempty"` // Most recent snapshot for this workspace
 	APIURL         string `json:"api_url,omitempty"`
 	Mode           string `json:"mode,omitempty"` // "cloud" or "local"
 	IsMain         bool   `json:"is_main,omitempty"`

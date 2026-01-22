@@ -190,6 +190,18 @@ Summary:`, diffContext)
 	return invokeAgent(agent, prompt)
 }
 
+// InvokeConflictSummary invokes an agent to summarize conflicts
+func InvokeConflictSummary(agent *Agent, conflictContext string) (string, error) {
+	prompt := fmt.Sprintf(`Summarize these git-style conflicts in 2-3 concise sentences. Describe what's conflicting and suggest resolution strategies.
+
+Conflicts:
+%s
+
+Summary:`, conflictContext)
+
+	return invokeAgent(agent, prompt)
+}
+
 // InvokeMerge invokes an agent to merge conflicting files
 func InvokeMerge(agent *Agent, baseContent, localContent, remoteContent, filename string) (string, error) {
 	prompt := fmt.Sprintf(`Merge these two versions of %s. Both diverged from a common base.
@@ -345,6 +357,50 @@ func BuildDiffContext(added, modified, deleted []string, fileContents map[string
 	}
 
 	return sb.String()
+}
+
+// BuildConflictContext creates a context string from conflicts for LLM summarization
+func BuildConflictContext(conflicts []ConflictInfo) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("%d conflicting files:\n\n", len(conflicts)))
+
+	for _, c := range conflicts {
+		sb.WriteString(fmt.Sprintf("File: %s (%d conflicting regions)\n", c.Path, c.HunkCount))
+		for i, h := range c.Hunks {
+			sb.WriteString(fmt.Sprintf("  Conflict %d (lines %d-%d):\n", i+1, h.StartLine, h.EndLine))
+			if len(h.LocalPreview) > 0 {
+				sb.WriteString("    Local changes:\n")
+				for _, line := range h.LocalPreview {
+					sb.WriteString(fmt.Sprintf("      %s\n", line))
+				}
+			}
+			if len(h.RemotePreview) > 0 {
+				sb.WriteString("    Main changes:\n")
+				for _, line := range h.RemotePreview {
+					sb.WriteString(fmt.Sprintf("      %s\n", line))
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// ConflictInfo represents conflict data for LLM context
+type ConflictInfo struct {
+	Path      string
+	HunkCount int
+	Hunks     []HunkInfo
+}
+
+// HunkInfo represents a conflict hunk for LLM context
+type HunkInfo struct {
+	StartLine     int
+	EndLine       int
+	LocalPreview  []string
+	RemotePreview []string
 }
 
 // ReadFileContent reads file content for diff context (with size limit)

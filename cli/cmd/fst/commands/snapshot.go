@@ -185,12 +185,13 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 		}
 	}
 
-	// Update base snapshot if requested
+	// Always update last snapshot ID, optionally update base
+	cfg.LastSnapshotID = snapshotID
 	if setBase {
 		cfg.BaseSnapshotID = snapshotID
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to update config: %w", err)
-		}
+	}
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("failed to update config: %w", err)
 	}
 
 	// Output result
