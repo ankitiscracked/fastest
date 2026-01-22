@@ -1,8 +1,18 @@
 import { Hono } from 'hono';
 import { eq, and, desc } from 'drizzle-orm';
 import type { Env } from '../index';
-import type { Workspace, DriftReport, ReportDriftRequest, Manifest } from '@fastest/shared';
-import { compareDrift, fromJSON } from '@fastest/shared';
+import type {
+  Workspace,
+  DriftReport,
+  ReportDriftRequest,
+  Manifest,
+  DriftAnalysis,
+  SyncPreview,
+  AutoAction,
+  ConflictDecision,
+  DecisionOption,
+} from '@fastest/shared';
+import { compareDrift, fromJSON, getFile } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
 import { createDb, workspaces, projects, driftReports, activityEvents, snapshots } from '../db';
 
@@ -415,6 +425,200 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   });
 });
 
+// Analyze drift with AI
+workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  // Fetch workspace with project info
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      name: workspaces.name,
+      base_snapshot_id: workspaces.baseSnapshotId,
+      main_workspace_id: projects.mainWorkspaceId,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Check if this is the main workspace
+  if (workspace.id === workspace.main_workspace_id) {
+    return c.json({
+      analysis: null,
+      error: 'This is the main workspace - nothing to analyze'
+    });
+  }
+
+  // Check if main workspace is set
+  if (!workspace.main_workspace_id) {
+    return c.json({
+      analysis: null,
+      error: 'No main workspace configured for this project'
+    });
+  }
+
+  // Get main workspace's snapshot
+  const mainWorkspaceResult = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      base_snapshot_id: workspaces.baseSnapshotId,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspace.main_workspace_id))
+    .limit(1);
+
+  const mainWorkspace = mainWorkspaceResult[0];
+
+  if (!mainWorkspace) {
+    return c.json({
+      analysis: null,
+      error: 'Main workspace not found'
+    });
+  }
+
+  // Get snapshot manifest hashes
+  const workspaceSnapshotId = workspace.base_snapshot_id;
+  const mainSnapshotId = mainWorkspace.base_snapshot_id;
+
+  if (!workspaceSnapshotId || !mainSnapshotId) {
+    return c.json({
+      analysis: null,
+      error: 'One or both workspaces have no snapshot'
+    });
+  }
+
+  // Get snapshot manifest hashes
+  const [snapshotResults, mainSnapshotResults] = await Promise.all([
+    db.select({ manifest_hash: snapshots.manifestHash }).from(snapshots).where(eq(snapshots.id, workspaceSnapshotId)),
+    db.select({ manifest_hash: snapshots.manifestHash }).from(snapshots).where(eq(snapshots.id, mainSnapshotId)),
+  ]);
+
+  const workspaceSnapshot = snapshotResults[0];
+  const mainSnapshot = mainSnapshotResults[0];
+
+  if (!workspaceSnapshot || !mainSnapshot) {
+    return c.json({
+      analysis: null,
+      error: 'Snapshot data not found'
+    });
+  }
+
+  // Fetch manifests from R2
+  const workspaceManifestKey = `${user.id}/manifests/${workspaceSnapshot.manifest_hash}.json`;
+  const mainManifestKey = `${user.id}/manifests/${mainSnapshot.manifest_hash}.json`;
+
+  const [workspaceManifestObj, mainManifestObj] = await Promise.all([
+    c.env.BLOBS.get(workspaceManifestKey),
+    c.env.BLOBS.get(mainManifestKey),
+  ]);
+
+  if (!workspaceManifestObj || !mainManifestObj) {
+    return c.json({
+      analysis: null,
+      error: 'Manifest data not found in storage'
+    });
+  }
+
+  const workspaceManifestText = await workspaceManifestObj.text();
+  const mainManifestText = await mainManifestObj.text();
+
+  let workspaceManifest: Manifest;
+  let mainManifest: Manifest;
+
+  try {
+    workspaceManifest = fromJSON(workspaceManifestText);
+    mainManifest = fromJSON(mainManifestText);
+  } catch {
+    return c.json({
+      analysis: null,
+      error: 'Failed to parse manifest data'
+    });
+  }
+
+  // Compare the manifests
+  const comparison = compareDrift(workspaceManifest, mainManifest);
+
+  // If no drift, return a simple analysis
+  if (comparison.main_only.length === 0 && comparison.both_different.length === 0) {
+    const analysis: DriftAnalysis = {
+      main_changes_summary: 'No new changes in main',
+      workspace_changes_summary: comparison.workspace_only.length > 0
+        ? `${comparison.workspace_only.length} files unique to your workspace`
+        : 'No unique changes in your workspace',
+      risk_level: 'low',
+      risk_explanation: 'Your workspace is in sync with main',
+      can_auto_sync: true,
+      recommendation: 'No sync needed - your workspace is up to date with main',
+      analyzed_at: new Date().toISOString(),
+    };
+
+    return c.json({ analysis });
+  }
+
+  // Build AI prompt
+  const prompt = buildDriftAnalysisPrompt(
+    workspace.name,
+    mainWorkspace.name,
+    comparison.main_only,
+    comparison.workspace_only,
+    comparison.both_different
+  );
+
+  try {
+    // Call Workers AI
+    const response = await (c.env.AI as Ai).run(
+      '@cf/meta/llama-3.1-8b-instruct-fast' as Parameters<Ai['run']>[0],
+      {
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 500,
+      }
+    ) as { response?: string };
+
+    const aiResponse = response.response?.trim() || '';
+
+    // Parse AI response
+    const analysis = parseAIAnalysisResponse(aiResponse, comparison);
+
+    return c.json({ analysis });
+
+  } catch (error) {
+    console.error('Failed to generate drift analysis:', error);
+
+    // Return a fallback analysis
+    const analysis: DriftAnalysis = {
+      main_changes_summary: `${comparison.main_only.length} new files in main`,
+      workspace_changes_summary: `${comparison.workspace_only.length} files unique to workspace`,
+      risk_level: comparison.both_different.length > 5 ? 'high' : comparison.both_different.length > 0 ? 'medium' : 'low',
+      risk_explanation: comparison.both_different.length > 0
+        ? `${comparison.both_different.length} files have been modified in both workspaces`
+        : 'No overlapping changes detected',
+      can_auto_sync: comparison.both_different.length === 0,
+      recommendation: comparison.both_different.length === 0
+        ? 'Safe to sync - no conflicting changes'
+        : 'Review the modified files before syncing',
+      analyzed_at: new Date().toISOString(),
+    };
+
+    return c.json({ analysis });
+  }
+});
+
 // Set main workspace for a project
 workspaceRoutes.post('/:workspaceId/set-as-main', async (c) => {
   const user = await getAuthUser(c);
@@ -452,6 +656,681 @@ workspaceRoutes.post('/:workspaceId/set-as-main', async (c) => {
   return c.json({ success: true, main_workspace_id: workspaceId });
 });
 
+// Prepare sync preview
+workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  // Fetch workspace with project info
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      name: workspaces.name,
+      base_snapshot_id: workspaces.baseSnapshotId,
+      main_workspace_id: projects.mainWorkspaceId,
+      owner_user_id: projects.ownerUserId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Check if this is the main workspace
+  if (workspace.id === workspace.main_workspace_id) {
+    return c.json({ error: { code: 'INVALID_OPERATION', message: 'Cannot sync main workspace with itself' } }, 400);
+  }
+
+  // Check if main workspace is set
+  if (!workspace.main_workspace_id) {
+    return c.json({ error: { code: 'NO_MAIN_WORKSPACE', message: 'No main workspace configured for this project' } }, 400);
+  }
+
+  // Get main workspace's snapshot
+  const mainWorkspaceResult = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      base_snapshot_id: workspaces.baseSnapshotId,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspace.main_workspace_id))
+    .limit(1);
+
+  const mainWorkspace = mainWorkspaceResult[0];
+
+  if (!mainWorkspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Main workspace not found' } }, 404);
+  }
+
+  // Get snapshot manifest hashes
+  const workspaceSnapshotId = workspace.base_snapshot_id;
+  const mainSnapshotId = mainWorkspace.base_snapshot_id;
+
+  if (!workspaceSnapshotId || !mainSnapshotId) {
+    return c.json({ error: { code: 'NO_SNAPSHOT', message: 'One or both workspaces have no snapshot' } }, 400);
+  }
+
+  // Get snapshot manifest hashes
+  const [snapshotResults, mainSnapshotResults] = await Promise.all([
+    db.select({ manifest_hash: snapshots.manifestHash }).from(snapshots).where(eq(snapshots.id, workspaceSnapshotId)),
+    db.select({ manifest_hash: snapshots.manifestHash }).from(snapshots).where(eq(snapshots.id, mainSnapshotId)),
+  ]);
+
+  const workspaceSnapshot = snapshotResults[0];
+  const mainSnapshot = mainSnapshotResults[0];
+
+  if (!workspaceSnapshot || !mainSnapshot) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Snapshot data not found' } }, 404);
+  }
+
+  // Fetch manifests from R2
+  const workspaceManifestKey = `${user.id}/manifests/${workspaceSnapshot.manifest_hash}.json`;
+  const mainManifestKey = `${user.id}/manifests/${mainSnapshot.manifest_hash}.json`;
+
+  const [workspaceManifestObj, mainManifestObj] = await Promise.all([
+    c.env.BLOBS.get(workspaceManifestKey),
+    c.env.BLOBS.get(mainManifestKey),
+  ]);
+
+  if (!workspaceManifestObj || !mainManifestObj) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Manifest data not found in storage' } }, 404);
+  }
+
+  const workspaceManifestText = await workspaceManifestObj.text();
+  const mainManifestText = await mainManifestObj.text();
+
+  let workspaceManifest: Manifest;
+  let mainManifest: Manifest;
+
+  try {
+    workspaceManifest = fromJSON(workspaceManifestText);
+    mainManifest = fromJSON(mainManifestText);
+  } catch {
+    return c.json({ error: { code: 'PARSE_ERROR', message: 'Failed to parse manifest data' } }, 500);
+  }
+
+  // Compare the manifests
+  const comparison = compareDrift(workspaceManifest, mainManifest);
+
+  // If nothing to sync, return empty preview
+  if (comparison.main_only.length === 0 && comparison.both_different.length === 0) {
+    const preview: SyncPreview = {
+      id: generateULID(),
+      workspace_id: workspaceId,
+      drift_report_id: '',
+      auto_actions: [],
+      decisions_needed: [],
+      files_to_update: 0,
+      files_to_add: 0,
+      files_unchanged: comparison.both_same.length,
+      summary: 'Your workspace is already in sync with main.',
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
+    };
+
+    return c.json({ preview });
+  }
+
+  // Build auto actions for main_only files (simple copy)
+  const autoActions: AutoAction[] = [];
+
+  for (const path of comparison.main_only) {
+    autoActions.push({
+      path,
+      action: 'copy_from_main',
+      description: `Add ${path} from main`,
+    });
+  }
+
+  // Process both_different files with AI
+  const decisionsNeeded: ConflictDecision[] = [];
+
+  // For each file that differs, analyze with AI
+  for (const path of comparison.both_different) {
+    const workspaceFile = getFile(workspaceManifest, path);
+    const mainFile = getFile(mainManifest, path);
+
+    if (!workspaceFile || !mainFile) {
+      // Shouldn't happen, but handle gracefully
+      autoActions.push({
+        path,
+        action: 'copy_from_main',
+        description: `Update ${path} from main`,
+      });
+      continue;
+    }
+
+    // Fetch actual file contents from R2
+    const workspaceBlobKey = `${user.id}/blobs/${workspaceFile.hash}`;
+    const mainBlobKey = `${user.id}/blobs/${mainFile.hash}`;
+
+    const [workspaceBlobObj, mainBlobObj] = await Promise.all([
+      c.env.BLOBS.get(workspaceBlobKey),
+      c.env.BLOBS.get(mainBlobKey),
+    ]);
+
+    if (!workspaceBlobObj || !mainBlobObj) {
+      // Can't fetch contents, default to copy from main
+      autoActions.push({
+        path,
+        action: 'copy_from_main',
+        description: `Update ${path} from main (could not compare contents)`,
+      });
+      continue;
+    }
+
+    const workspaceContent = await workspaceBlobObj.text();
+    const mainContent = await mainBlobObj.text();
+
+    // Use AI to analyze the file differences
+    try {
+      const analysis = await analyzeFileDifference(
+        c.env.AI as Ai,
+        path,
+        workspaceContent,
+        mainContent
+      );
+
+      if (analysis.compatible && analysis.combined_content) {
+        // AI successfully combined the files
+        autoActions.push({
+          path,
+          action: 'ai_combined',
+          description: analysis.description || `Combined changes in ${path}`,
+          combined_content: analysis.combined_content,
+        });
+      } else {
+        // Files have incompatible changes, need user decision
+        decisionsNeeded.push({
+          path,
+          main_intent: analysis.main_intent || 'Changes from main',
+          workspace_intent: analysis.workspace_intent || 'Your changes',
+          conflict_reason: analysis.conflict_reason || 'Files have conflicting changes',
+          options: analysis.options || [
+            {
+              id: 'use_main',
+              label: 'Use main version',
+              description: 'Replace your changes with main',
+              resulting_content: mainContent,
+            },
+            {
+              id: 'use_workspace',
+              label: 'Keep your version',
+              description: 'Keep your changes, ignore main',
+              resulting_content: workspaceContent,
+            },
+          ],
+          recommended_option_id: analysis.recommended_option || 'use_main',
+        });
+      }
+    } catch (error) {
+      console.error(`Failed to analyze ${path}:`, error);
+      // Fallback: create a decision for the user
+      decisionsNeeded.push({
+        path,
+        main_intent: 'Changes from main',
+        workspace_intent: 'Your changes',
+        conflict_reason: 'Could not automatically analyze - files differ',
+        options: [
+          {
+            id: 'use_main',
+            label: 'Use main version',
+            description: 'Replace your changes with main',
+            resulting_content: mainContent,
+          },
+          {
+            id: 'use_workspace',
+            label: 'Keep your version',
+            description: 'Keep your changes, ignore main',
+            resulting_content: workspaceContent,
+          },
+        ],
+        recommended_option_id: 'use_main',
+      });
+    }
+  }
+
+  // Build summary
+  const summaryParts: string[] = [];
+  const copyCount = autoActions.filter(a => a.action === 'copy_from_main').length;
+  const combineCount = autoActions.filter(a => a.action === 'ai_combined').length;
+
+  if (copyCount > 0) {
+    summaryParts.push(`${copyCount} file${copyCount !== 1 ? 's' : ''} to add from main`);
+  }
+  if (combineCount > 0) {
+    summaryParts.push(`${combineCount} file${combineCount !== 1 ? 's' : ''} combined automatically`);
+  }
+  if (decisionsNeeded.length > 0) {
+    summaryParts.push(`${decisionsNeeded.length} decision${decisionsNeeded.length !== 1 ? 's' : ''} needed`);
+  }
+
+  const summary = summaryParts.length > 0
+    ? summaryParts.join('. ') + '.'
+    : 'Ready to sync.';
+
+  const previewId = generateULID();
+  const preview: SyncPreview = {
+    id: previewId,
+    workspace_id: workspaceId,
+    drift_report_id: '',
+    auto_actions: autoActions,
+    decisions_needed: decisionsNeeded,
+    files_to_update: combineCount + decisionsNeeded.length,
+    files_to_add: copyCount,
+    files_unchanged: comparison.both_same.length,
+    summary,
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
+  };
+
+  // Store preview in KV for later execution
+  await c.env.KV.put(
+    `sync_preview:${previewId}`,
+    JSON.stringify({
+      preview,
+      user_id: user.id,
+      workspace_manifest_hash: workspaceSnapshot.manifest_hash,
+      main_manifest_hash: mainSnapshot.manifest_hash,
+    }),
+    { expirationTtl: 30 * 60 } // 30 minutes
+  );
+
+  return c.json({ preview });
+});
+
+// Execute sync
+workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const body = await c.req.json<{
+    preview_id: string;
+    decisions?: Record<string, string>;
+    create_snapshot_before?: boolean;
+    create_snapshot_after?: boolean;
+  }>();
+
+  const { preview_id, decisions = {}, create_snapshot_before = true, create_snapshot_after = true } = body;
+
+  if (!preview_id) {
+    return c.json({ error: { code: 'MISSING_PREVIEW_ID', message: 'preview_id is required' } }, 400);
+  }
+
+  // Retrieve preview from KV
+  const previewData = await c.env.KV.get(`sync_preview:${preview_id}`);
+  if (!previewData) {
+    return c.json({ error: { code: 'PREVIEW_EXPIRED', message: 'Sync preview has expired. Please prepare sync again.' } }, 404);
+  }
+
+  const { preview, user_id, main_manifest_hash } = JSON.parse(previewData) as {
+    preview: SyncPreview;
+    user_id: string;
+    workspace_manifest_hash: string;
+    main_manifest_hash: string;
+  };
+
+  // Verify ownership
+  if (user_id !== user.id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'You do not own this sync preview' } }, 403);
+  }
+
+  // Verify workspace matches
+  if (preview.workspace_id !== workspaceId) {
+    return c.json({ error: { code: 'WORKSPACE_MISMATCH', message: 'Workspace ID does not match preview' } }, 400);
+  }
+
+  // Check if all required decisions are provided
+  const missingDecisions = preview.decisions_needed
+    .filter(d => !decisions[d.path])
+    .map(d => d.path);
+
+  if (missingDecisions.length > 0) {
+    return c.json({
+      error: {
+        code: 'MISSING_DECISIONS',
+        message: `Missing decisions for: ${missingDecisions.join(', ')}`,
+        details: { missing: missingDecisions }
+      }
+    }, 400);
+  }
+
+  const db = createDb(c.env.DB);
+
+  // Get workspace info
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      base_snapshot_id: workspaces.baseSnapshotId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Get current workspace manifest
+  const currentSnapshotId = workspace.base_snapshot_id;
+  if (!currentSnapshotId) {
+    return c.json({ error: { code: 'NO_SNAPSHOT', message: 'Workspace has no snapshot' } }, 400);
+  }
+
+  const snapshotResult = await db
+    .select({ manifest_hash: snapshots.manifestHash })
+    .from(snapshots)
+    .where(eq(snapshots.id, currentSnapshotId))
+    .limit(1);
+
+  const currentSnapshot = snapshotResult[0];
+  if (!currentSnapshot) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Current snapshot not found' } }, 404);
+  }
+
+  // Load current manifest
+  const manifestKey = `${user.id}/manifests/${currentSnapshot.manifest_hash}.json`;
+  const manifestObj = await c.env.BLOBS.get(manifestKey);
+  if (!manifestObj) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Manifest not found' } }, 404);
+  }
+
+  let workspaceManifest: Manifest;
+  try {
+    workspaceManifest = fromJSON(await manifestObj.text());
+  } catch {
+    return c.json({ error: { code: 'PARSE_ERROR', message: 'Failed to parse manifest' } }, 500);
+  }
+
+  // Load main manifest for copying files
+  const mainManifestKey = `${user.id}/manifests/${main_manifest_hash}.json`;
+  const mainManifestObj = await c.env.BLOBS.get(mainManifestKey);
+  if (!mainManifestObj) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Main manifest not found' } }, 404);
+  }
+
+  let mainManifest: Manifest;
+  try {
+    mainManifest = fromJSON(await mainManifestObj.text());
+  } catch {
+    return c.json({ error: { code: 'PARSE_ERROR', message: 'Failed to parse main manifest' } }, 500);
+  }
+
+  // Create snapshot before (if requested)
+  let snapshotBeforeId: string | undefined;
+  if (create_snapshot_before) {
+    snapshotBeforeId = generateULID();
+    await db.insert(snapshots).values({
+      id: snapshotBeforeId,
+      projectId: workspace.project_id,
+      manifestHash: currentSnapshot.manifest_hash,
+      parentSnapshotId: currentSnapshotId,
+      source: 'system',
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // Apply sync changes
+  const errors: string[] = [];
+  let filesUpdated = 0;
+  let filesAdded = 0;
+
+  // Build new manifest by cloning current
+  const newFiles = new Map(workspaceManifest.files);
+
+  // Process auto actions
+  for (const action of preview.auto_actions) {
+    try {
+      if (action.action === 'copy_from_main') {
+        // Copy file from main manifest
+        const mainFile = getFile(mainManifest, action.path);
+        if (mainFile) {
+          // Copy blob if not already present (it likely is since same user)
+          const blobKey = `${user.id}/blobs/${mainFile.hash}`;
+          const exists = await c.env.BLOBS.head(blobKey);
+          if (!exists) {
+            // This shouldn't happen for same user, but handle it
+            const mainBlobKey = `${user.id}/blobs/${mainFile.hash}`;
+            const mainBlob = await c.env.BLOBS.get(mainBlobKey);
+            if (mainBlob) {
+              await c.env.BLOBS.put(blobKey, await mainBlob.arrayBuffer());
+            }
+          }
+
+          // Add to new manifest
+          newFiles.set(action.path, mainFile);
+          filesAdded++;
+        } else {
+          errors.push(`Could not find ${action.path} in main manifest`);
+        }
+      } else if (action.action === 'ai_combined' && action.combined_content) {
+        // Write combined content as new blob
+        const content = new TextEncoder().encode(action.combined_content);
+        const hash = await computeSha256(content);
+        const blobKey = `${user.id}/blobs/${hash}`;
+
+        await c.env.BLOBS.put(blobKey, content);
+
+        // Update manifest entry
+        newFiles.set(action.path, {
+          hash,
+          size: content.length,
+          mode: getFile(workspaceManifest, action.path)?.mode || 0o644,
+        });
+        filesUpdated++;
+      }
+    } catch (error) {
+      console.error(`Failed to apply action for ${action.path}:`, error);
+      errors.push(`Failed to sync ${action.path}`);
+    }
+  }
+
+  // Process user decisions
+  for (const decision of preview.decisions_needed) {
+    const selectedOptionId = decisions[decision.path];
+    const selectedOption = decision.options.find(o => o.id === selectedOptionId);
+
+    if (!selectedOption) {
+      errors.push(`Invalid decision for ${decision.path}`);
+      continue;
+    }
+
+    try {
+      // Write the selected content
+      const content = new TextEncoder().encode(selectedOption.resulting_content);
+      const hash = await computeSha256(content);
+      const blobKey = `${user.id}/blobs/${hash}`;
+
+      await c.env.BLOBS.put(blobKey, content);
+
+      // Update manifest entry
+      newFiles.set(decision.path, {
+        hash,
+        size: content.length,
+        mode: getFile(workspaceManifest, decision.path)?.mode || 0o644,
+      });
+      filesUpdated++;
+    } catch (error) {
+      console.error(`Failed to apply decision for ${decision.path}:`, error);
+      errors.push(`Failed to apply decision for ${decision.path}`);
+    }
+  }
+
+  // Create new manifest
+  const newManifest: Manifest = {
+    ...workspaceManifest,
+    files: newFiles,
+    createdAt: new Date().toISOString(),
+  };
+
+  // Compute manifest hash and save
+  const { toJSON, hashManifest } = await import('@fastest/shared');
+  const newManifestJson = toJSON(newManifest);
+  const newManifestHash = await hashManifest(newManifest);
+
+  await c.env.BLOBS.put(
+    `${user.id}/manifests/${newManifestHash}.json`,
+    newManifestJson
+  );
+
+  // Create new snapshot
+  const newSnapshotId = generateULID();
+  await db.insert(snapshots).values({
+    id: newSnapshotId,
+    projectId: workspace.project_id,
+    manifestHash: newManifestHash,
+    parentSnapshotId: currentSnapshotId,
+    source: 'web',
+    createdAt: new Date().toISOString(),
+  });
+
+  // Update workspace to point to new snapshot
+  await db
+    .update(workspaces)
+    .set({
+      baseSnapshotId: newSnapshotId,
+      lastSeenAt: new Date().toISOString(),
+    })
+    .where(eq(workspaces.id, workspaceId));
+
+  // Update project's last snapshot
+  await db
+    .update(projects)
+    .set({ lastSnapshotId: newSnapshotId })
+    .where(eq(projects.id, workspace.project_id));
+
+  // Delete the preview from KV
+  await c.env.KV.delete(`sync_preview:${preview_id}`);
+
+  // Log activity
+  const eventId = generateULID();
+  await db.insert(activityEvents).values({
+    id: eventId,
+    projectId: workspace.project_id,
+    workspaceId,
+    actor: 'web',
+    type: 'merge.completed',
+    snapshotId: newSnapshotId,
+    message: `Synced with main: +${filesAdded} files, ~${filesUpdated} updated`,
+    createdAt: new Date().toISOString(),
+  });
+
+  return c.json({
+    success: errors.length === 0,
+    files_updated: filesUpdated,
+    files_added: filesAdded,
+    errors,
+    snapshot_before_id: snapshotBeforeId,
+    snapshot_after_id: create_snapshot_after ? newSnapshotId : undefined,
+  });
+});
+
+// Undo last sync (restore to previous snapshot)
+workspaceRoutes.post('/:workspaceId/sync/undo', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const body = await c.req.json<{ snapshot_id: string }>();
+
+  if (!body.snapshot_id) {
+    return c.json({ error: { code: 'MISSING_SNAPSHOT_ID', message: 'snapshot_id is required' } }, 400);
+  }
+
+  const db = createDb(c.env.DB);
+
+  // Get workspace info and verify ownership
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      base_snapshot_id: workspaces.baseSnapshotId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Verify the target snapshot exists and belongs to this project
+  const snapshotResult = await db
+    .select({
+      id: snapshots.id,
+      project_id: snapshots.projectId,
+      manifest_hash: snapshots.manifestHash,
+    })
+    .from(snapshots)
+    .where(eq(snapshots.id, body.snapshot_id))
+    .limit(1);
+
+  const targetSnapshot = snapshotResult[0];
+  if (!targetSnapshot) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Snapshot not found' } }, 404);
+  }
+
+  if (targetSnapshot.project_id !== workspace.project_id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Snapshot does not belong to this project' } }, 403);
+  }
+
+  // Update workspace to point to the target snapshot
+  await db
+    .update(workspaces)
+    .set({
+      baseSnapshotId: body.snapshot_id,
+      lastSeenAt: new Date().toISOString(),
+    })
+    .where(eq(workspaces.id, workspaceId));
+
+  // Log activity
+  const eventId = generateULID();
+  await db.insert(activityEvents).values({
+    id: eventId,
+    projectId: workspace.project_id,
+    workspaceId,
+    actor: 'web',
+    type: 'snapshot.pulled',
+    snapshotId: body.snapshot_id,
+    message: 'Reverted to previous snapshot (undo sync)',
+    createdAt: new Date().toISOString(),
+  });
+
+  return c.json({
+    success: true,
+    restored_snapshot_id: body.snapshot_id,
+  });
+});
+
+// Helper: Compute SHA256 hash
+async function computeSha256(data: Uint8Array): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // Helper: Generate ULID
 function generateULID(): string {
   const timestamp = Date.now().toString(36).padStart(10, '0');
@@ -459,4 +1338,290 @@ function generateULID(): string {
     Math.floor(Math.random() * 36).toString(36)
   ).join('');
   return (timestamp + random).toUpperCase();
+}
+
+// Helper: Build AI prompt for drift analysis
+function buildDriftAnalysisPrompt(
+  workspaceName: string,
+  mainWorkspaceName: string,
+  mainOnly: string[],
+  workspaceOnly: string[],
+  bothDifferent: string[]
+): string {
+  const mainOnlyList = mainOnly.length > 0
+    ? mainOnly.slice(0, 20).join('\n') + (mainOnly.length > 20 ? `\n... and ${mainOnly.length - 20} more` : '')
+    : 'None';
+
+  const workspaceOnlyList = workspaceOnly.length > 0
+    ? workspaceOnly.slice(0, 20).join('\n') + (workspaceOnly.length > 20 ? `\n... and ${workspaceOnly.length - 20} more` : '')
+    : 'None';
+
+  const bothDifferentList = bothDifferent.length > 0
+    ? bothDifferent.slice(0, 20).join('\n') + (bothDifferent.length > 20 ? `\n... and ${bothDifferent.length - 20} more` : '')
+    : 'None';
+
+  return `You are analyzing the differences between two workspaces in a software project.
+
+WORKSPACE: "${workspaceName}" (the workspace being analyzed)
+MAIN: "${mainWorkspaceName}" (the source of truth)
+
+## Files only in main (workspace is missing these):
+${mainOnlyList}
+
+## Files only in workspace (not in main):
+${workspaceOnlyList}
+
+## Files that differ between both:
+${bothDifferentList}
+
+## Task
+
+Provide a concise analysis in this EXACT JSON format (no other text):
+
+{
+  "main_changes_summary": "1-2 sentence summary of what's new in main",
+  "workspace_changes_summary": "1-2 sentence summary of workspace-specific changes",
+  "risk_level": "low" or "medium" or "high",
+  "risk_explanation": "1 sentence explaining the risk level",
+  "can_auto_sync": true or false,
+  "recommendation": "1 sentence recommendation for the user"
+}
+
+Guidelines:
+- "low" risk: No overlapping changes, safe to sync automatically
+- "medium" risk: Some overlapping files but likely compatible
+- "high" risk: Many overlapping changes or critical files modified
+- Focus on what the changes mean, not just file counts
+- Be specific about what types of files changed (config, source code, tests, etc.)`;
+}
+
+// Helper: Parse AI response into DriftAnalysis
+function parseAIAnalysisResponse(
+  aiResponse: string,
+  comparison: { main_only: string[]; workspace_only: string[]; both_different: string[] }
+): DriftAnalysis {
+  try {
+    // Try to extract JSON from the response
+    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      return {
+        main_changes_summary: parsed.main_changes_summary || `${comparison.main_only.length} new files in main`,
+        workspace_changes_summary: parsed.workspace_changes_summary || `${comparison.workspace_only.length} files unique to workspace`,
+        risk_level: ['low', 'medium', 'high'].includes(parsed.risk_level) ? parsed.risk_level : 'medium',
+        risk_explanation: parsed.risk_explanation || 'Analysis could not determine specific risks',
+        can_auto_sync: typeof parsed.can_auto_sync === 'boolean' ? parsed.can_auto_sync : comparison.both_different.length === 0,
+        recommendation: parsed.recommendation || 'Review the changes before syncing',
+        analyzed_at: new Date().toISOString(),
+      };
+    }
+  } catch (e) {
+    console.error('Failed to parse AI response:', e);
+  }
+
+  // Fallback if parsing fails
+  return {
+    main_changes_summary: `${comparison.main_only.length} new files in main`,
+    workspace_changes_summary: `${comparison.workspace_only.length} files unique to workspace`,
+    risk_level: comparison.both_different.length > 5 ? 'high' : comparison.both_different.length > 0 ? 'medium' : 'low',
+    risk_explanation: comparison.both_different.length > 0
+      ? `${comparison.both_different.length} files have been modified in both workspaces`
+      : 'No overlapping changes detected',
+    can_auto_sync: comparison.both_different.length === 0,
+    recommendation: comparison.both_different.length === 0
+      ? 'Safe to sync - no conflicting changes'
+      : 'Review the modified files before syncing',
+    analyzed_at: new Date().toISOString(),
+  };
+}
+
+// Helper: Analyze file differences with AI
+interface FileAnalysisResult {
+  compatible: boolean;
+  combined_content?: string;
+  description?: string;
+  main_intent?: string;
+  workspace_intent?: string;
+  conflict_reason?: string;
+  options?: DecisionOption[];
+  recommended_option?: string;
+}
+
+async function analyzeFileDifference(
+  ai: Ai,
+  path: string,
+  workspaceContent: string,
+  mainContent: string
+): Promise<FileAnalysisResult> {
+  // For very large files, skip AI and default to decision needed
+  if (workspaceContent.length > 50000 || mainContent.length > 50000) {
+    return {
+      compatible: false,
+      main_intent: 'Changes from main',
+      workspace_intent: 'Your changes',
+      conflict_reason: 'File too large for automatic analysis',
+      options: [
+        {
+          id: 'use_main',
+          label: 'Use main version',
+          description: 'Replace with main version',
+          resulting_content: mainContent,
+        },
+        {
+          id: 'use_workspace',
+          label: 'Keep your version',
+          description: 'Keep your current version',
+          resulting_content: workspaceContent,
+        },
+      ],
+      recommended_option: 'use_main',
+    };
+  }
+
+  // Truncate for AI prompt if needed
+  const maxContentLength = 10000;
+  const truncatedWorkspace = workspaceContent.length > maxContentLength
+    ? workspaceContent.slice(0, maxContentLength) + '\n... (truncated)'
+    : workspaceContent;
+  const truncatedMain = mainContent.length > maxContentLength
+    ? mainContent.slice(0, maxContentLength) + '\n... (truncated)'
+    : mainContent;
+
+  const prompt = buildFileSyncPrompt(path, truncatedWorkspace, truncatedMain);
+
+  const response = await ai.run(
+    '@cf/meta/llama-3.1-8b-instruct-fast' as Parameters<Ai['run']>[0],
+    {
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2000,
+    }
+  ) as { response?: string };
+
+  const aiResponse = response.response?.trim() || '';
+
+  return parseFileSyncResponse(aiResponse, workspaceContent, mainContent);
+}
+
+// Helper: Build prompt for file sync analysis
+function buildFileSyncPrompt(
+  path: string,
+  workspaceContent: string,
+  mainContent: string
+): string {
+  return `You are syncing two versions of a file. Your goal is to combine both sets of changes if possible.
+
+FILE: ${path}
+
+## Your workspace version:
+\`\`\`
+${workspaceContent}
+\`\`\`
+
+## Main version:
+\`\`\`
+${mainContent}
+\`\`\`
+
+## Task
+
+Analyze both versions and respond with ONLY a JSON object (no other text):
+
+If the changes are COMPATIBLE (can be combined):
+{
+  "compatible": true,
+  "workspace_intent": "Brief description of what your version changed",
+  "main_intent": "Brief description of what main changed",
+  "combined_content": "The full combined file content that includes both changes",
+  "description": "Brief description of how they were combined"
+}
+
+If the changes are INCOMPATIBLE (conflict):
+{
+  "compatible": false,
+  "workspace_intent": "Brief description of what your version changed",
+  "main_intent": "Brief description of what main changed",
+  "conflict_reason": "Why these changes conflict"
+}
+
+Guidelines:
+- Changes in DIFFERENT parts of the file are usually compatible
+- Changes to the SAME lines/values are usually incompatible
+- If imports were added by both, combine them
+- If functions were added by both in different places, combine them
+- If the same config value was changed to different values, that's a conflict
+- Describe intents in plain English, not code
+- For combined_content, output the COMPLETE file, not just the changed parts`;
+}
+
+// Helper: Parse AI response for file sync
+function parseFileSyncResponse(
+  aiResponse: string,
+  workspaceContent: string,
+  mainContent: string
+): FileAnalysisResult {
+  try {
+    // Try to extract JSON from the response
+    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      if (parsed.compatible && parsed.combined_content) {
+        return {
+          compatible: true,
+          combined_content: parsed.combined_content,
+          description: parsed.description || 'Combined changes from both versions',
+          main_intent: parsed.main_intent,
+          workspace_intent: parsed.workspace_intent,
+        };
+      } else {
+        return {
+          compatible: false,
+          main_intent: parsed.main_intent || 'Changes from main',
+          workspace_intent: parsed.workspace_intent || 'Your changes',
+          conflict_reason: parsed.conflict_reason || 'Files have conflicting changes',
+          options: [
+            {
+              id: 'use_main',
+              label: 'Use main version',
+              description: parsed.main_intent || 'Use the version from main',
+              resulting_content: mainContent,
+            },
+            {
+              id: 'use_workspace',
+              label: 'Keep your version',
+              description: parsed.workspace_intent || 'Keep your current version',
+              resulting_content: workspaceContent,
+            },
+          ],
+          recommended_option: 'use_main',
+        };
+      }
+    }
+  } catch (e) {
+    console.error('Failed to parse file sync AI response:', e);
+  }
+
+  // Fallback: return as incompatible
+  return {
+    compatible: false,
+    main_intent: 'Changes from main',
+    workspace_intent: 'Your changes',
+    conflict_reason: 'Could not automatically analyze differences',
+    options: [
+      {
+        id: 'use_main',
+        label: 'Use main version',
+        description: 'Replace with main version',
+        resulting_content: mainContent,
+      },
+      {
+        id: 'use_workspace',
+        label: 'Keep your version',
+        description: 'Keep your current version',
+        resulting_content: workspaceContent,
+      },
+    ],
+    recommended_option: 'use_main',
+  };
 }

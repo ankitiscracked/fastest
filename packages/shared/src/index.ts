@@ -175,6 +175,33 @@ export interface GetDriftResponse {
   is_main_workspace: boolean;
 }
 
+// AI-generated drift analysis
+export interface DriftAnalysis {
+  // Human-readable summaries
+  main_changes_summary: string;       // "Added rate limiting, fixed auth bug"
+  workspace_changes_summary: string;  // "Added retry logic, custom errors"
+
+  // Risk assessment
+  risk_level: 'low' | 'medium' | 'high';
+  risk_explanation: string;
+
+  // Recommendation
+  can_auto_sync: boolean;
+  recommendation: string;             // "Safe to sync automatically"
+
+  // Metadata
+  analyzed_at: string;
+}
+
+export interface AnalyzeDriftRequest {
+  workspace_id: string;
+}
+
+export interface AnalyzeDriftResponse {
+  analysis: DriftAnalysis | null;
+  error?: string;
+}
+
 // API request/response types
 
 export interface CreateProjectRequest {
@@ -369,3 +396,92 @@ export const API_KEY_PROVIDERS: Record<ApiKeyProvider, { name: string; keyName: 
   groq: { name: 'Groq', keyName: 'GROQ_API_KEY', description: 'Groq-hosted models' },
   mistral: { name: 'Mistral', keyName: 'MISTRAL_API_KEY', description: 'Mistral models' },
 };
+
+// Sync types for workspace synchronization
+
+export interface SyncPreview {
+  id: string;
+  workspace_id: string;
+  drift_report_id: string;
+
+  // Actions that need no user input
+  auto_actions: AutoAction[];
+
+  // Decisions user must make
+  decisions_needed: ConflictDecision[];
+
+  // Summary
+  files_to_update: number;
+  files_to_add: number;
+  files_unchanged: number;
+
+  // AI summary of what will happen
+  summary: string;
+
+  // Timestamps
+  created_at: string;
+  expires_at: string;
+}
+
+export interface AutoAction {
+  path: string;
+  action: 'copy_from_main' | 'keep_workspace' | 'ai_combined';
+  description: string;
+  // For ai_combined, the combined content
+  combined_content?: string;
+}
+
+export interface ConflictDecision {
+  path: string;
+
+  // Semantic descriptions (not code!)
+  main_intent: string;
+  workspace_intent: string;
+  conflict_reason: string;
+
+  // Options for user
+  options: DecisionOption[];
+
+  // AI recommendation
+  recommended_option_id?: string;
+}
+
+export interface DecisionOption {
+  id: string;
+  label: string;
+  description?: string;
+
+  // The resulting content if this option is chosen
+  resulting_content: string;
+
+  // If custom input allowed
+  allows_custom_input?: boolean;
+  custom_input_label?: string;
+}
+
+// API request/response types for sync
+
+export interface PrepareSyncRequest {
+  workspace_id: string;
+}
+
+export interface PrepareSyncResponse {
+  preview: SyncPreview;
+}
+
+export interface ExecuteSyncRequest {
+  preview_id: string;
+  decisions: Record<string, string>;  // path → selected option_id
+  custom_values?: Record<string, string>; // path → custom value if applicable
+  create_snapshot_before?: boolean;
+  create_snapshot_after?: boolean;
+}
+
+export interface ExecuteSyncResponse {
+  success: boolean;
+  files_updated: number;
+  files_added: number;
+  errors: string[];
+  snapshot_before_id?: string;
+  snapshot_after_id?: string;
+}

@@ -210,10 +210,51 @@ class ApiClient {
     }>('GET', `/workspaces/${workspaceId}/drift/compare`);
   }
 
+  async analyzeDrift(workspaceId: string) {
+    return this.request<{
+      analysis: import('@fastest/shared').DriftAnalysis | null;
+      error?: string;
+    }>('POST', `/workspaces/${workspaceId}/drift/analyze`);
+  }
+
   async setAsMainWorkspace(workspaceId: string) {
     return this.request<{ success: boolean; main_workspace_id: string }>(
       'POST',
       `/workspaces/${workspaceId}/set-as-main`
+    );
+  }
+
+  // Sync operations
+  async prepareSync(workspaceId: string) {
+    return this.request<{ preview: import('@fastest/shared').SyncPreview }>(
+      'POST',
+      `/workspaces/${workspaceId}/sync/prepare`
+    );
+  }
+
+  async executeSync(
+    workspaceId: string,
+    previewId: string,
+    decisions: Record<string, string> = {},
+    options?: { createSnapshotBefore?: boolean; createSnapshotAfter?: boolean }
+  ) {
+    return this.request<import('@fastest/shared').ExecuteSyncResponse>(
+      'POST',
+      `/workspaces/${workspaceId}/sync/execute`,
+      {
+        preview_id: previewId,
+        decisions,
+        create_snapshot_before: options?.createSnapshotBefore ?? true,
+        create_snapshot_after: options?.createSnapshotAfter ?? true,
+      }
+    );
+  }
+
+  async undoSync(workspaceId: string, snapshotId: string) {
+    return this.request<{ success: boolean; restored_snapshot_id: string }>(
+      'POST',
+      `/workspaces/${workspaceId}/sync/undo`,
+      { snapshot_id: snapshotId }
     );
   }
 
