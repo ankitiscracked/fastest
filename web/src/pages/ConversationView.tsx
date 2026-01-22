@@ -6,8 +6,6 @@ import type { OpenCodeEvent, OpenCodeGlobalEvent, OpenCodePart, OpenCodeQuestion
 import {
   ConversationMessage,
   PromptInput,
-  SuggestionsBar,
-  generateSuggestions,
   Timeline,
   DeploymentLogs,
 } from '../components/conversation';
@@ -61,7 +59,7 @@ function ConfirmDialog({
       />
 
       {/* Dialog */}
-      <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+      <div className="relative bg-white rounded-md shadow-xl max-w-md w-full mx-4 p-6">
         <h3 className="text-lg font-semibold text-surface-800 mb-2">{title}</h3>
         <p className="text-sm text-surface-600 mb-6">{message}</p>
 
@@ -69,14 +67,14 @@ function ConfirmDialog({
           <button
             onClick={onCancel}
             disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 rounded-lg transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 rounded-md transition-colors disabled:opacity-50"
           >
             {cancelLabel}
           </button>
           <button
             onClick={onConfirm}
             disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-white bg-status-error hover:bg-red-600 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 text-sm font-medium text-white bg-status-error hover:bg-red-600 rounded-md transition-colors disabled:opacity-50 flex items-center gap-2"
           >
             {isLoading && (
               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -118,7 +116,7 @@ function ConversationActionsMenu({ onClearConversation, onNewConversation, disab
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled}
-        className="p-2 text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-lg transition-colors disabled:opacity-50"
+        className="p-2 text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-md transition-colors disabled:opacity-50"
         title="Conversation actions"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -127,7 +125,7 @@ function ConversationActionsMenu({ onClearConversation, onNewConversation, disab
       </button>
 
       {isOpen && (
-        <div className="absolute bottom-full right-0 mb-1 w-48 bg-white border border-surface-200 rounded-lg shadow-lg z-50 py-1">
+        <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-surface-200 rounded-md shadow-lg z-50 py-1">
           <button
             onClick={() => {
               onNewConversation();
@@ -202,6 +200,8 @@ export function ConversationView() {
   const realMessageIdRef = useRef<string | null>(null);
   // Counter for generating unique part IDs when none provided
   const partIdCounterRef = useRef(0);
+  // Track OpenCode assistant message IDs to filter out user message parts
+  const assistantOpenCodeIdsRef = useRef<Set<string>>(new Set());
 
   // Debounced scroll to bottom - prevents scroll thrashing during streaming
   const scrollToBottom = useDebounce(() => {
@@ -314,7 +314,26 @@ export function ConversationView() {
   const handleOpenCodeEvent = (messageId: string, globalEvent: OpenCodeGlobalEvent) => {
     const payload = globalEvent.payload;
     if (!payload || typeof payload.type !== 'string') return;
+
+    // Track assistant message IDs from OpenCode
+    if (payload.type === 'message.updated') {
+      const info = payload.properties?.info as { role?: string; id?: string } | undefined;
+      if (info?.role === 'assistant' && info?.id) {
+        assistantOpenCodeIdsRef.current.add(info.id);
+      }
+    }
+
     if (payload.type === 'message.part.updated') {
+      // Only store parts that belong to assistant messages
+      const part = payload.properties?.part as { messageID?: string } | undefined;
+      const partMessageId = part?.messageID;
+
+      // Skip if this part belongs to a user message (not in our assistant IDs set)
+      // Allow parts with no messageID or parts whose messageID is in the assistant set
+      if (partMessageId && !assistantOpenCodeIdsRef.current.has(partMessageId)) {
+        return;
+      }
+
       upsertOpenCodePart(messageId, payload);
     }
     if (payload.type === 'question.asked') {
@@ -528,6 +547,7 @@ export function ConversationView() {
     setLoading(true);
     setError(null);
     pendingPromptSent.current = false;
+    assistantOpenCodeIdsRef.current.clear();
 
     try {
       // Load conversation details
@@ -642,33 +662,6 @@ export function ConversationView() {
     }
   };
 
-  const handleSuggestionAction = (action: string, data?: unknown) => {
-    switch (action) {
-      case 'retry':
-        if (data && typeof data === 'object' && 'prompt' in data) {
-          handleSubmitPrompt((data as { prompt: string }).prompt);
-        }
-        break;
-      case 'test':
-        handleSubmitPrompt('Run the test suite and fix any failing tests');
-        break;
-      case 'deploy':
-        handleSubmitPrompt('Deploy the application to production');
-        break;
-      case 'sync':
-        handleSubmitPrompt('Sync this workspace with the latest changes from main');
-        break;
-      case 'merge':
-        handleSubmitPrompt('Prepare changes for merging to main');
-        break;
-      case 'snapshot':
-        handleSubmitPrompt('Create a snapshot of the current state');
-        break;
-      default:
-        console.log('Unknown action:', action);
-    }
-  };
-
   const handleClearConversation = async () => {
     if (!conversationId) return;
 
@@ -750,18 +743,6 @@ export function ConversationView() {
     completed_at: m.completedAt,
   }));
 
-  // Generate suggestions based on current state
-  const lastMessage = messages.filter(m => m.role === 'assistant').slice(-1)[0];
-  const suggestions = generateSuggestions({
-    lastMessageStatus: lastMessage?.status === 'failed' ? 'failed' : null,
-    lastUserPrompt: sortedMessages.filter(m => m.role === 'user').slice(-1)[0]?.content,
-    hasDrift: false,
-    driftCount: 0,
-    hasUncommittedChanges: messages.some((m) => m.status === 'completed' && m.filesChanged?.length),
-    isMainWorkspace: currentWorkspace?.name === 'main',
-    onAction: handleSuggestionAction,
-  });
-
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -835,7 +816,7 @@ export function ConversationView() {
                 <button
                   onClick={handleDeploy}
                   disabled={isDeploying || !!runningMessageId}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
                     isDeploying
                       ? 'bg-status-running/10 text-status-running'
                       : 'bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50'
@@ -864,7 +845,7 @@ export function ConversationView() {
               {/* Timeline toggle */}
               <button
                 onClick={() => setShowTimeline(!showTimeline)}
-                className={`p-2 rounded-lg transition-colors ${
+                className={`p-2 rounded-md transition-colors ${
                   showTimeline ? 'bg-accent-100 text-accent-600' : 'text-surface-400 hover:text-surface-600 hover:bg-surface-100'
                 }`}
                 title={showTimeline ? 'Hide timeline' : 'Show timeline'}
@@ -873,6 +854,13 @@ export function ConversationView() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </button>
+
+              {/* Conversation actions menu */}
+              <ConversationActionsMenu
+                onClearConversation={() => setShowClearConfirm(true)}
+                onNewConversation={handleNewConversation}
+                disabled={!!runningMessageId}
+              />
             </div>
           </div>
         </div>
@@ -900,7 +888,7 @@ export function ConversationView() {
                 href={previewBanner.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-4 py-2 bg-white text-status-success rounded-lg font-medium text-sm hover:bg-status-success/10 transition-colors flex items-center gap-2"
+                className="px-4 py-2 bg-white text-status-success rounded-md font-medium text-sm hover:bg-status-success/10 transition-colors flex items-center gap-2"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -911,7 +899,7 @@ export function ConversationView() {
                 onClick={() => {
                   navigator.clipboard.writeText(previewBanner.url);
                 }}
-                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
                 title="Copy URL"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -920,7 +908,7 @@ export function ConversationView() {
               </button>
               <button
                 onClick={() => setShowingLogsFor(previewBanner.deploymentId)}
-                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
                 title="View logs"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -929,7 +917,7 @@ export function ConversationView() {
               </button>
               <button
                 onClick={() => setPreviewBanner(null)}
-                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
                 title="Dismiss"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -944,27 +932,42 @@ export function ConversationView() {
       {/* Main content area with sidebar */}
       <div className="flex-1 flex overflow-hidden">
         {/* Conversation area */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-6">
-          <div className="max-w-3xl mx-auto space-y-6">
-            {messages.length === 0 ? (
-              <EmptyState />
-            ) : (
-              conversationMessages
-                .filter(j => j.prompt || j.output || j.status === 'running')
-                .map((message) => (
-                  <ConversationMessage
-                    key={message.id}
-                    message={message as any}
-                    isStreaming={message.id === runningMessageId}
-                    streamingContent={message.id === runningMessageId ? streamingContent : undefined}
-                    parts={opencodePartsByMessageId[message.id]}
-                    questions={opencodeQuestionsByMessageId[message.id]}
-                    onQuestionSubmit={handleQuestionSubmit}
-                    onQuestionReject={handleQuestionReject}
-                  />
-                ))
-            )}
-            <div ref={conversationEndRef} />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-6">
+            <div className="max-w-3xl mx-auto space-y-6">
+              {messages.length === 0 ? (
+                <EmptyState />
+              ) : (
+                conversationMessages
+                  .filter(j => j.prompt || j.output || j.status === 'running')
+                  .map((message) => (
+                    <ConversationMessage
+                      key={message.id}
+                      message={message as any}
+                      isStreaming={message.id === runningMessageId}
+                      streamingContent={message.id === runningMessageId ? streamingContent : undefined}
+                      parts={opencodePartsByMessageId[message.id]}
+                      questions={opencodeQuestionsByMessageId[message.id]}
+                      onQuestionSubmit={handleQuestionSubmit}
+                      onQuestionReject={handleQuestionReject}
+                    />
+                  ))
+              )}
+              <div ref={conversationEndRef} />
+            </div>
+          </div>
+
+          {/* Input area */}
+          <div className="px-4 py-4">
+            <div className="max-w-3xl mx-auto">
+              <PromptInput
+                onSubmit={handleSubmitPrompt}
+                isRunning={!!runningMessageId}
+                placeholder={
+                  messages.length === 0 ? 'What do you want to build?' : 'Continue the conversation...'
+                }
+              />
+            </div>
           </div>
         </div>
 
@@ -974,28 +977,6 @@ export function ConversationView() {
             <Timeline items={timeline} />
           </div>
         )}
-      </div>
-
-      {/* Input area */}
-      <div className="border-t border-surface-200 bg-white px-4 py-4">
-        <div className="max-w-3xl mx-auto space-y-3">
-          <PromptInput
-            onSubmit={handleSubmitPrompt}
-            isRunning={!!runningMessageId}
-            placeholder={
-              messages.length === 0 ? 'What do you want to build?' : 'Continue the conversation...'
-            }
-          />
-
-          <div className="flex items-center justify-between">
-            <SuggestionsBar suggestions={suggestions} />
-            <ConversationActionsMenu
-              onClearConversation={() => setShowClearConfirm(true)}
-              onNewConversation={handleNewConversation}
-              disabled={!!runningMessageId}
-            />
-          </div>
-        </div>
       </div>
 
       {/* Clear Conversation Confirmation Dialog */}

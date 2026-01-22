@@ -5,7 +5,6 @@ interface PromptInputProps {
   disabled?: boolean;
   placeholder?: string;
   isRunning?: boolean;
-  queuedCount?: number;
 }
 
 export function PromptInput({
@@ -13,7 +12,6 @@ export function PromptInput({
   disabled = false,
   placeholder = 'What do you want to build?',
   isRunning = false,
-  queuedCount = 0,
 }: PromptInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -42,54 +40,34 @@ export function PromptInput({
     }
   };
 
-  const getPlaceholder = () => {
-    if (isRunning && queuedCount > 0) {
-      return `${queuedCount} job(s) queued. Add another...`;
-    }
-    if (isRunning) {
-      return 'Agent is working... (your message will queue)';
-    }
-    return placeholder;
-  };
-
   return (
-    <div className="relative">
-      <div className="flex items-end gap-2 bg-white border border-surface-200 rounded-xl shadow-sm focus-within:border-accent-500 focus-within:ring-1 focus-within:ring-accent-500 transition-all">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={getPlaceholder()}
-          disabled={disabled}
-          rows={1}
-          className="flex-1 px-4 py-3 bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-sm placeholder-surface-400 disabled:text-surface-400"
-          style={{ maxHeight: '200px' }}
-        />
-        <button
-          onClick={handleSubmit}
-          disabled={disabled || !value.trim()}
-          className="m-2 p-2 bg-accent-500 text-white rounded-lg hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          title="Send (Enter)"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-            />
-          </svg>
-        </button>
-      </div>
-
-      {/* Running indicator */}
-      {isRunning && (
-        <div className="absolute -top-6 left-0 flex items-center gap-2 text-xs text-surface-500">
-          <div className="w-2 h-2 bg-status-running rounded-full animate-pulse" />
-          <span>Agent is working...</span>
-        </div>
-      )}
+    <div className="flex items-center gap-2 bg-white border border-surface-200 rounded-md shadow-sm focus-within:border-surface-300 transition-all">
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        disabled={disabled}
+        rows={1}
+        className="flex-1 px-3 py-2.5 bg-transparent border-0 resize-none focus:ring-0 focus:outline-none text-sm placeholder-surface-400 disabled:text-surface-400"
+        style={{ maxHeight: '200px' }}
+      />
+      <button
+        onClick={handleSubmit}
+        disabled={disabled || !value.trim()}
+        className="mr-2 p-1.5 text-surface-400 hover:text-surface-700 hover:bg-surface-100 rounded disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        title="Send (Enter)"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M13 7l5 5m0 0l-5 5m5-5H6"
+          />
+        </svg>
+      </button>
     </div>
   );
 }

@@ -49,7 +49,7 @@ export function OpenCodeParts({ parts }: OpenCodePartsProps) {
   if (parts.length === 0) return null;
 
   return (
-    <div className="space-y-3 text-sm text-surface-700">
+    <div className="space-y-2 text-sm text-surface-700">
       {parts.map((part) => {
         switch (part.type) {
           case 'text':
@@ -75,15 +75,8 @@ export function OpenCodeParts({ parts }: OpenCodePartsProps) {
             return <SnapshotPart key={part.id} part={part as OpenCodeSnapshotPart} />;
 
           default:
-            return (
-              <div
-                key={part.id || `${part.type}-part`}
-                className="rounded-lg border border-surface-200 bg-white px-3 py-2"
-              >
-                <div className="text-xs font-medium text-surface-500">Part</div>
-                <div className="text-xs text-surface-700">{part.type}</div>
-              </div>
-            );
+            // Don't render unknown/internal part types (step-start, step-finish, etc.)
+            return null;
         }
       })}
     </div>
@@ -92,10 +85,10 @@ export function OpenCodeParts({ parts }: OpenCodePartsProps) {
 
 // Reasoning Part - Collapsible thinking/reasoning display
 function ReasoningPart({ part }: { part: OpenCodeReasoningPart }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(true); // Default to open to show streaming content
   const text = part.text || '';
 
-  // Show a preview of the reasoning
+  // Show a preview of the reasoning when collapsed
   const previewLength = 100;
   const preview = text.length > previewLength
     ? text.substring(0, previewLength).trim() + '...'
@@ -117,7 +110,7 @@ function ReasoningPart({ part }: { part: OpenCodeReasoningPart }) {
         )}
       </summary>
       <div className="reasoning-content">
-        <MarkdownContent content={text} mode="static" />
+        <MarkdownContent content={text} mode="streaming" />
       </div>
     </details>
   );
@@ -126,7 +119,7 @@ function ReasoningPart({ part }: { part: OpenCodeReasoningPart }) {
 // File Part - File reference display
 function FilePart({ part }: { part: OpenCodeFilePart }) {
   return (
-    <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2">
+    <div className="rounded-md border border-surface-200 bg-surface-50 px-3 py-2">
       <div className="flex items-center gap-2">
         <FileIcon className="w-4 h-4 text-surface-400" />
         <div className="flex-1 min-w-0">
@@ -155,9 +148,11 @@ function FilePart({ part }: { part: OpenCodeFilePart }) {
 // Tool Part - Tool invocation with status
 function ToolPart({ part }: { part: OpenCodeToolPart }) {
   const { status, output } = extractToolOutput(part);
+  const normalizedStatus = status?.toLowerCase();
+  const isCompleted = normalizedStatus === 'success' || normalizedStatus === 'completed';
 
   return (
-    <div className="tool-part rounded-lg border border-surface-200 bg-white px-3 py-2">
+    <div className="tool-part rounded-md border border-surface-200 bg-white px-3 py-2">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ToolIcon className="w-4 h-4 text-surface-400" />
@@ -165,7 +160,7 @@ function ToolPart({ part }: { part: OpenCodeToolPart }) {
             {part.tool || 'unknown'}
           </span>
         </div>
-        {status && <ToolStatus status={status} />}
+        {status && !isCompleted && <ToolStatus status={status} />}
       </div>
       {output && (
         <details className="mt-2">
@@ -219,7 +214,7 @@ function PatchPart({ part }: { part: OpenCodePatchPart }) {
   const deleted = categorized.filter(f => f.changeType === 'deleted').length;
 
   return (
-    <div className="rounded-lg border border-surface-200 bg-white px-3 py-2">
+    <div className="rounded-md border border-surface-200 bg-white px-3 py-2">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <PatchIcon className="w-4 h-4 text-surface-400" />
@@ -280,7 +275,7 @@ function PatchPart({ part }: { part: OpenCodePatchPart }) {
 // Snapshot Part
 function SnapshotPart({ part }: { part: OpenCodeSnapshotPart }) {
   return (
-    <div className="rounded-lg border border-accent-200 bg-accent-50 px-3 py-2">
+    <div className="rounded-md border border-accent-200 bg-accent-50 px-3 py-2">
       <div className="flex items-center gap-2">
         <SnapshotIcon className="w-4 h-4 text-accent-500" />
         <div>

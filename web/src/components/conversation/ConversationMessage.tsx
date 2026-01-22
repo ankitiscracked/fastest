@@ -28,25 +28,38 @@ interface ConversationMessageProps {
 export function ConversationMessage({ message, isStreaming, streamingContent, parts, questions, onQuestionSubmit, onQuestionReject }: ConversationMessageProps) {
   const hasParts = !!parts && parts.length > 0;
   const hasQuestions = !!questions && questions.length > 0;
+  const hasContent = hasParts || hasQuestions || (isStreaming && streamingContent);
+
+  // Check if we're in the "thinking" state - running but no content yet
+  const isThinking = message.status === 'running' && !hasContent;
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {/* User message - only render if there's a prompt */}
       {message.prompt && (
         <div className="flex justify-end">
-          <div className="max-w-[85%] bg-accent-500 text-white rounded-2xl rounded-tr-sm px-4 py-3">
-            <p className="text-sm whitespace-pre-wrap">{message.prompt}</p>
+          <div className="max-w-[85%] bg-surface-200 text-surface-800 rounded-sm px-2.5 py-1.5 text-sm">
+            <p className="whitespace-pre-wrap">{message.prompt}</p>
           </div>
         </div>
       )}
 
-      {/* Agent message - only show for assistant messages (no prompt but has output/streaming/running status) */}
-      {(!message.prompt || message.output || isStreaming) && (
+      {/* Thinking state - just shimmer text, no card */}
+      {isThinking && (
         <div className="flex justify-start">
-          <div className="max-w-[85%] bg-white border border-surface-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-surface-500">Agent</span>
-              <StatusBadge status={message.status} />
-            </div>
+          <span className="shimmer-text text-sm">Thinking...</span>
+        </div>
+      )}
+
+      {/* Agent message with content - show in card */}
+      {(!message.prompt || message.output || isStreaming) && !isThinking && (
+        <div className="flex justify-start">
+          <div className="max-w-[85%] bg-white border border-surface-200 rounded-sm px-2.5 py-1.5 text-sm">
+            {message.status !== 'completed' && message.status !== 'running' && (
+              <div className="flex items-center justify-end mb-1.5">
+                <StatusBadge status={message.status} />
+              </div>
+            )}
 
             {/* Content based on status */}
             {message.status === 'pending' && (
@@ -70,19 +83,14 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
                   <OpenCodeParts parts={parts} />
                 ) : isStreaming && streamingContent ? (
                   <MarkdownContent content={streamingContent} mode="streaming" />
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 bg-status-running rounded-full animate-pulse" />
-                    <p className="text-sm text-surface-500">Working on it...</p>
-                  </div>
-                )}
+                ) : null}
               </div>
             )}
 
             {message.status === 'completed' && (
               <div className="space-y-3">
-                {message.output ? (
-                  <MarkdownContent content={message.output} mode="static" />
+                {hasParts ? (
+                  <OpenCodeParts parts={parts} />
                 ) : hasQuestions && onQuestionSubmit && onQuestionReject ? (
                   <div className="space-y-3">
                     {questions?.map((question) => (
@@ -94,8 +102,8 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
                       />
                     ))}
                   </div>
-                ) : hasParts ? (
-                  <OpenCodeParts parts={parts} />
+                ) : message.output ? (
+                  <MarkdownContent content={message.output} mode="static" />
                 ) : (
                   <p className="text-sm text-surface-700">Task completed successfully.</p>
                 )}
@@ -113,7 +121,7 @@ export function ConversationMessage({ message, isStreaming, streamingContent, pa
             )}
 
             {/* Timestamp */}
-            <div className="mt-2 text-xs text-surface-400">
+            <div className="mt-1.5 text-xs text-surface-400">
               {formatTimestamp(message.created_at)}
               {message.completed_at && (
                 <span className="ml-2">
