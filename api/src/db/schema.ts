@@ -80,6 +80,8 @@ export const workspaces = sqliteTable('workspaces', {
   localPath: text('local_path'),
   lastSeenAt: text('last_seen_at'),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  // Version for optimistic locking - prevents concurrent sync race conditions
+  version: integer('version').notNull().default(1),
 }, (table) => [
   index('idx_workspaces_project').on(table.projectId, table.createdAt),
 ]);

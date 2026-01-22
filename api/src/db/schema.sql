@@ -78,10 +78,15 @@ CREATE TABLE IF NOT EXISTS workspaces (
   base_snapshot_id TEXT REFERENCES snapshots(id),
   local_path TEXT,
   last_seen_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Version for optimistic locking - prevents concurrent sync race conditions
+  version INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id, created_at DESC);
+
+-- Migration: Add version column to existing workspaces (run once)
+-- ALTER TABLE workspaces ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
 
 -- Drift reports (comparison between workspace and main)
 CREATE TABLE IF NOT EXISTS drift_reports (

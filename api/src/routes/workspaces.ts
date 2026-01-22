@@ -15,6 +15,14 @@ import type {
 import { compareDrift, fromJSON, getFile } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
 import { createDb, workspaces, projects, driftReports, activityEvents, snapshots } from '../db';
+import {
+  createRollbackContext,
+  executeRollback,
+  uploadBlobWithRollback,
+  validateManifestIntegrity,
+  createOptimisticLockError,
+  pMap,
+} from '../sync_utils';
 
 export const workspaceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -1012,12 +1020,13 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
 
   const db = createDb(c.env.DB);
 
-  // Get workspace info
+  // Get workspace info including version for optimistic locking
   const workspaceResult = await db
     .select({
       id: workspaces.id,
       project_id: workspaces.projectId,
       base_snapshot_id: workspaces.baseSnapshotId,
+      version: workspaces.version,
     })
     .from(workspaces)
     .innerJoin(projects, eq(workspaces.projectId, projects.id))
@@ -1028,6 +1037,9 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
   if (!workspace) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
   }
+
+  // Store initial version for optimistic locking
+  const initialVersion = workspace.version ?? 1;
 
   // Get current workspace manifest
   const currentSnapshotId = workspace.base_snapshot_id;
@@ -1088,98 +1100,168 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     });
   }
 
-  // Apply sync changes
+  // Create rollback context to track uploaded resources
+  const rollbackContext = createRollbackContext();
   const errors: string[] = [];
   let filesUpdated = 0;
   let filesAdded = 0;
 
-  // Build new manifest by cloning current
-  const newFiles = new Map(workspaceManifest.files);
+  // Build new manifest by cloning current (convert array to Map for easier manipulation)
+  const newFiles = new Map<string, { hash: string; size: number; mode: number }>(
+    workspaceManifest.files.map(f => [f.path, { hash: f.hash, size: f.size, mode: f.mode }])
+  );
 
-  // Process auto actions
-  for (const action of preview.auto_actions) {
-    try {
-      if (action.action === 'copy_from_main') {
-        // Copy file from main manifest
-        const mainFile = getFile(mainManifest, action.path);
-        if (mainFile) {
-          // Copy blob if not already present (it likely is since same user)
-          const blobKey = `${user.id}/blobs/${mainFile.hash}`;
-          const exists = await c.env.BLOBS.head(blobKey);
-          if (!exists) {
-            // This shouldn't happen for same user, but handle it
-            const mainBlobKey = `${user.id}/blobs/${mainFile.hash}`;
-            const mainBlob = await c.env.BLOBS.get(mainBlobKey);
-            if (mainBlob) {
-              await c.env.BLOBS.put(blobKey, await mainBlob.arrayBuffer());
+  try {
+    // Process auto actions with rollback support
+    for (const action of preview.auto_actions) {
+      try {
+        if (action.action === 'copy_from_main') {
+          // Copy file from main manifest
+          const mainFile = getFile(mainManifest, action.path);
+          if (mainFile) {
+            // Copy blob if not already present (it likely is since same user)
+            const blobKey = `${user.id}/blobs/${mainFile.hash}`;
+            const exists = await c.env.BLOBS.head(blobKey);
+            if (!exists) {
+              // This shouldn't happen for same user, but handle it
+              const mainBlobKey = `${user.id}/blobs/${mainFile.hash}`;
+              const mainBlob = await c.env.BLOBS.get(mainBlobKey);
+              if (mainBlob) {
+                await uploadBlobWithRollback(
+                  c.env.BLOBS,
+                  user.id,
+                  mainFile.hash,
+                  await mainBlob.arrayBuffer(),
+                  rollbackContext
+                );
+              }
             }
+
+            // Add to new manifest
+            newFiles.set(action.path, mainFile);
+            filesAdded++;
+          } else {
+            errors.push(`Could not find ${action.path} in main manifest`);
           }
+        } else if (action.action === 'ai_combined' && action.combined_content) {
+          // Write combined content as new blob
+          const content = new TextEncoder().encode(action.combined_content);
+          const hash = await computeSha256(content);
 
-          // Add to new manifest
-          newFiles.set(action.path, mainFile);
-          filesAdded++;
-        } else {
-          errors.push(`Could not find ${action.path} in main manifest`);
+          await uploadBlobWithRollback(
+            c.env.BLOBS,
+            user.id,
+            hash,
+            content,
+            rollbackContext
+          );
+
+          // Update manifest entry
+          newFiles.set(action.path, {
+            hash,
+            size: content.length,
+            mode: getFile(workspaceManifest, action.path)?.mode || 0o644,
+          });
+          filesUpdated++;
         }
-      } else if (action.action === 'ai_combined' && action.combined_content) {
-        // Write combined content as new blob
-        const content = new TextEncoder().encode(action.combined_content);
-        const hash = await computeSha256(content);
-        const blobKey = `${user.id}/blobs/${hash}`;
+      } catch (error) {
+        console.error(`Failed to apply action for ${action.path}:`, error);
+        errors.push(`Failed to sync ${action.path}`);
+        // Trigger rollback on any error
+        throw error;
+      }
+    }
 
-        await c.env.BLOBS.put(blobKey, content);
+    // Process user decisions with rollback support
+    for (const decision of preview.decisions_needed) {
+      const selectedOptionId = decisions[decision.path];
+      const selectedOption = decision.options.find(o => o.id === selectedOptionId);
+
+      if (!selectedOption) {
+        errors.push(`Invalid decision for ${decision.path}`);
+        throw new Error(`Invalid decision for ${decision.path}`);
+      }
+
+      try {
+        // Write the selected content
+        const content = new TextEncoder().encode(selectedOption.resulting_content);
+        const hash = await computeSha256(content);
+
+        await uploadBlobWithRollback(
+          c.env.BLOBS,
+          user.id,
+          hash,
+          content,
+          rollbackContext
+        );
 
         // Update manifest entry
-        newFiles.set(action.path, {
+        newFiles.set(decision.path, {
           hash,
           size: content.length,
-          mode: getFile(workspaceManifest, action.path)?.mode || 0o644,
+          mode: getFile(workspaceManifest, decision.path)?.mode || 0o644,
         });
         filesUpdated++;
+      } catch (error) {
+        console.error(`Failed to apply decision for ${decision.path}:`, error);
+        errors.push(`Failed to apply decision for ${decision.path}`);
+        // Trigger rollback on any error
+        throw error;
       }
-    } catch (error) {
-      console.error(`Failed to apply action for ${action.path}:`, error);
-      errors.push(`Failed to sync ${action.path}`);
     }
+  } catch (error) {
+    // Rollback all uploaded blobs on failure
+    console.error('Sync failed, executing rollback:', error);
+    const rollbackResult = await executeRollback(c.env.BLOBS, user.id, rollbackContext);
+    if (rollbackResult.errors.length > 0) {
+      console.error('Rollback errors:', rollbackResult.errors);
+    }
+
+    return c.json({
+      error: {
+        code: 'SYNC_FAILED',
+        message: 'Sync failed and changes were rolled back',
+        details: { errors, rollbackErrors: rollbackResult.errors }
+      }
+    }, 500);
   }
 
-  // Process user decisions
-  for (const decision of preview.decisions_needed) {
-    const selectedOptionId = decisions[decision.path];
-    const selectedOption = decision.options.find(o => o.id === selectedOptionId);
-
-    if (!selectedOption) {
-      errors.push(`Invalid decision for ${decision.path}`);
-      continue;
-    }
-
-    try {
-      // Write the selected content
-      const content = new TextEncoder().encode(selectedOption.resulting_content);
-      const hash = await computeSha256(content);
-      const blobKey = `${user.id}/blobs/${hash}`;
-
-      await c.env.BLOBS.put(blobKey, content);
-
-      // Update manifest entry
-      newFiles.set(decision.path, {
-        hash,
-        size: content.length,
-        mode: getFile(workspaceManifest, decision.path)?.mode || 0o644,
-      });
-      filesUpdated++;
-    } catch (error) {
-      console.error(`Failed to apply decision for ${decision.path}:`, error);
-      errors.push(`Failed to apply decision for ${decision.path}`);
-    }
-  }
-
-  // Create new manifest
+  // Create new manifest (convert Map back to array)
   const newManifest: Manifest = {
-    ...workspaceManifest,
-    files: newFiles,
-    createdAt: new Date().toISOString(),
+    version: workspaceManifest.version,
+    files: Array.from(newFiles.entries()).map(([path, file]) => ({
+      path,
+      hash: file.hash,
+      size: file.size,
+      mode: file.mode,
+    })),
   };
+
+  // Validate manifest integrity - ensure all referenced blobs exist
+  const validationResult = await validateManifestIntegrity(
+    c.env.BLOBS,
+    user.id,
+    newManifest
+  );
+
+  if (!validationResult.valid) {
+    console.error('Manifest validation failed:', validationResult);
+
+    // Rollback uploaded blobs since manifest is invalid
+    const rollbackResult = await executeRollback(c.env.BLOBS, user.id, rollbackContext);
+
+    return c.json({
+      error: {
+        code: 'MANIFEST_INVALID',
+        message: 'Manifest validation failed - some blobs are missing',
+        details: {
+          missingBlobs: validationResult.missingBlobs,
+          validationErrors: validationResult.errors,
+          rollbackErrors: rollbackResult.errors,
+        }
+      }
+    }, 500);
+  }
 
   // Compute manifest hash and save
   const { toJSON, hashManifest } = await import('@fastest/shared');
@@ -1190,6 +1272,9 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     `${user.id}/manifests/${newManifestHash}.json`,
     newManifestJson
   );
+
+  // Track manifest for potential rollback
+  rollbackContext.createdManifests.push(newManifestHash);
 
   // Create new snapshot
   const newSnapshotId = generateULID();
@@ -1202,14 +1287,48 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     createdAt: new Date().toISOString(),
   });
 
-  // Update workspace to point to new snapshot
-  await db
+  // Update workspace with OPTIMISTIC LOCKING
+  // Only update if version matches what we read initially
+  const updateResult = await db
     .update(workspaces)
     .set({
       baseSnapshotId: newSnapshotId,
       lastSeenAt: new Date().toISOString(),
+      version: initialVersion + 1,
     })
-    .where(eq(workspaces.id, workspaceId));
+    .where(
+      and(
+        eq(workspaces.id, workspaceId),
+        eq(workspaces.version, initialVersion)
+      )
+    );
+
+  // Check if optimistic lock succeeded (rowsAffected > 0)
+  // D1 doesn't expose rowsAffected directly, so we verify by re-reading
+  const verifyResult = await db
+    .select({ version: workspaces.version, base_snapshot_id: workspaces.baseSnapshotId })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+
+  if (!verifyResult[0] || verifyResult[0].version !== initialVersion + 1 || verifyResult[0].base_snapshot_id !== newSnapshotId) {
+    // Optimistic lock failed - concurrent modification detected
+    console.error('Optimistic lock failed: workspace was modified concurrently');
+
+    // Rollback - but note the snapshot record remains (orphaned but harmless)
+    const rollbackResult = await executeRollback(c.env.BLOBS, user.id, rollbackContext);
+
+    return c.json({
+      error: {
+        code: 'CONCURRENT_MODIFICATION',
+        message: 'Another sync operation modified this workspace. Please try again.',
+        details: {
+          expectedVersion: initialVersion,
+          rollbackErrors: rollbackResult.errors,
+        }
+      }
+    }, 409); // 409 Conflict
+  }
 
   // Update project's last snapshot
   await db

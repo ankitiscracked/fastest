@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../index';
 import type { BlobExistsRequest, PresignUploadRequest, PresignDownloadRequest } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
+import { collectGarbage } from '../sync_utils';
 
 export const blobRoutes = new Hono<{ Bindings: Env }>();
 
@@ -203,6 +204,111 @@ blobRoutes.get('/manifests/:hash', async (c) => {
       'Cache-Control': 'public, max-age=31536000, immutable',
     }
   });
+});
+
+// Garbage Collection - Find and optionally delete orphaned blobs
+// Note: This is an expensive operation and should be triggered manually or by a scheduled job
+blobRoutes.post('/gc', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const body = await c.req.json<{ dryRun?: boolean; maxBlobs?: number }>().catch(() => ({ dryRun: true, maxBlobs: 10000 }));
+  const dryRun = body.dryRun ?? true;
+  const maxBlobs = body.maxBlobs ?? 10000;
+
+  try {
+    const result = await collectGarbage(c.env.BLOBS, user.id, {
+      dryRun,
+      maxBlobs,
+    });
+
+    return c.json({
+      success: true,
+      dryRun: result.dryRun,
+      scannedBlobs: result.scannedBlobs,
+      orphanedBlobs: result.deletedBlobs,
+      freedBytes: result.freedBytes,
+      freedMB: Math.round(result.freedBytes / 1024 / 1024 * 100) / 100,
+      errors: result.errors.length > 0 ? result.errors : undefined,
+      message: result.dryRun
+        ? `Found ${result.deletedBlobs} orphaned blobs (${Math.round(result.freedBytes / 1024 / 1024 * 100) / 100} MB). Run with dryRun=false to delete.`
+        : `Deleted ${result.deletedBlobs} orphaned blobs, freed ${Math.round(result.freedBytes / 1024 / 1024 * 100) / 100} MB`,
+    });
+  } catch (error) {
+    console.error('Garbage collection failed:', error);
+    return c.json({
+      error: {
+        code: 'GC_FAILED',
+        message: error instanceof Error ? error.message : 'Garbage collection failed'
+      }
+    }, 500);
+  }
+});
+
+// Storage stats for a user
+blobRoutes.get('/stats', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  try {
+    let totalBlobs = 0;
+    let totalBlobBytes = 0;
+    let totalManifests = 0;
+    let totalManifestBytes = 0;
+
+    // Count blobs
+    const blobPrefix = `${user.id}/blobs/`;
+    let cursor: string | undefined;
+    do {
+      const list = await c.env.BLOBS.list({ prefix: blobPrefix, cursor, limit: 1000 });
+      for (const obj of list.objects) {
+        totalBlobs++;
+        totalBlobBytes += obj.size;
+      }
+      cursor = list.truncated ? list.cursor : undefined;
+    } while (cursor);
+
+    // Count manifests
+    const manifestPrefix = `${user.id}/manifests/`;
+    cursor = undefined;
+    do {
+      const list = await c.env.BLOBS.list({ prefix: manifestPrefix, cursor, limit: 1000 });
+      for (const obj of list.objects) {
+        totalManifests++;
+        totalManifestBytes += obj.size;
+      }
+      cursor = list.truncated ? list.cursor : undefined;
+    } while (cursor);
+
+    return c.json({
+      blobs: {
+        count: totalBlobs,
+        bytes: totalBlobBytes,
+        mb: Math.round(totalBlobBytes / 1024 / 1024 * 100) / 100,
+      },
+      manifests: {
+        count: totalManifests,
+        bytes: totalManifestBytes,
+        mb: Math.round(totalManifestBytes / 1024 / 1024 * 100) / 100,
+      },
+      total: {
+        bytes: totalBlobBytes + totalManifestBytes,
+        mb: Math.round((totalBlobBytes + totalManifestBytes) / 1024 / 1024 * 100) / 100,
+      },
+    });
+  } catch (error) {
+    console.error('Failed to compute storage stats:', error);
+    return c.json({
+      error: {
+        code: 'STATS_FAILED',
+        message: error instanceof Error ? error.message : 'Failed to compute storage stats'
+      }
+    }, 500);
+  }
 });
 
 // Helper: Compute SHA-256 hash

@@ -4,6 +4,13 @@ import type { E2BSandbox } from 'e2b';
 import type { Env } from './index';
 import type { ConversationState, SandboxRunner } from './conversation_types';
 import type { ConversationSandbox } from './conversation_sandbox';
+import {
+  fetchWithRetry,
+  pMap,
+  createUploadStats,
+  type UploadStats,
+  type SkippedFile,
+} from './sync_utils';
 
 type EnsureState = () => Promise<ConversationState>;
 type PersistState = (state: ConversationState) => Promise<void>;
@@ -115,13 +122,23 @@ export class ConversationFiles {
   /**
    * Collect files and upload to blob storage
    * Returns file changes with proper diff against previous manifest
+   *
+   * Improvements:
+   * - Retry logic with exponential backoff for network operations
+   * - Parallel blob uploads with concurrency limit
+   * - Tracks and returns skipped files for visibility
    */
   async collectAndUploadFiles(
     sandbox: SandboxRunner,
     apiUrl: string,
     apiToken: string,
     workDir: string
-  ): Promise<{ fileChanges: FileChange[]; manifestHash: string; previousManifestHash?: string }> {
+  ): Promise<{
+    fileChanges: FileChange[];
+    manifestHash: string;
+    previousManifestHash?: string;
+    uploadStats?: UploadStats;
+  }> {
     if (sandbox.type === 'e2b') {
       return this.collectAndUploadFilesE2B(apiUrl, apiToken, workDir);
     }
@@ -131,20 +148,27 @@ export class ConversationFiles {
     const state = await this.ensureState();
     const previousManifestHash = state.lastManifestHash;
 
+    // Initialize upload stats for tracking
+    const uploadStats = createUploadStats();
+
     let previousFiles: Map<string, string> = new Map();
     if (previousManifestHash) {
       try {
-        const manifestResponse = await fetch(`${apiUrl}/v1/blobs/manifests/${previousManifestHash}`, {
-          headers: { Authorization: `Bearer ${apiToken}` },
-        });
+        // Use retry logic for fetching previous manifest
+        const manifestResponse = await fetchWithRetry(
+          `${apiUrl}/v1/blobs/manifests/${previousManifestHash}`,
+          { headers: { Authorization: `Bearer ${apiToken}` } },
+          { maxRetries: 3 }
+        );
         if (manifestResponse.ok) {
           const prevManifest = await manifestResponse.json() as { files: Array<{ path: string; hash: string }> };
           for (const f of prevManifest.files) {
             previousFiles.set(f.path, f.hash);
           }
         }
-      } catch {
-        // Ignore - treat as no previous state
+      } catch (error) {
+        // Log but continue - treat as no previous state
+        console.warn('Failed to fetch previous manifest after retries:', error);
       }
     }
 
@@ -168,12 +192,20 @@ export class ConversationFiles {
     }
     const files: Array<{ path: string; hash: string; size: number }> = [];
     const currentFiles: Map<string, string> = new Map();
+    uploadStats.totalFiles = filePaths.length;
 
     for (const fullPath of filePaths) {
       const path = fullPath.replace(`${workDir}/`, '');
 
       const hashResult = await sandbox.exec(`sha256sum "${fullPath}" | cut -d' ' -f1`);
-      if (!hashResult.success) continue;
+      if (!hashResult.success) {
+        // Track skipped files instead of silently ignoring
+        uploadStats.skippedFiles.push({
+          path,
+          reason: `Hash computation failed: ${hashResult.stderr || 'unknown error'}`,
+        });
+        continue;
+      }
 
       const hash = hashResult.stdout.trim();
 
@@ -215,47 +247,107 @@ export class ConversationFiles {
     const manifestHash = await this.computeSHA256(manifestJson);
 
     const allHashes = [...new Set(files.map(f => f.hash))];
-    const existsResponse = await fetch(`${apiUrl}/v1/blobs/exists`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
+
+    // Check which blobs exist with retry
+    const existsResponse = await fetchWithRetry(
+      `${apiUrl}/v1/blobs/exists`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ hashes: allHashes }),
       },
-      body: JSON.stringify({ hashes: allHashes }),
-    });
+      { maxRetries: 3 }
+    );
 
-    const { missing } = await existsResponse.json() as { missing: string[] };
+    const { missing, existing } = await existsResponse.json() as { missing: string[]; existing?: string[] };
+    uploadStats.existingFiles = existing?.length || (allHashes.length - missing.length);
 
-    for (const file of files) {
-      if (missing.includes(file.hash)) {
+    // Get files that need to be uploaded
+    const filesToUpload = files.filter(f => missing.includes(f.hash));
+
+    // Upload blobs in parallel with concurrency limit
+    await pMap(
+      filesToUpload,
+      async (file) => {
         const fullPath = `${workDir}/${file.path}`;
 
-        const presignResponse = await fetch(`${apiUrl}/v1/blobs/presign-upload`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${apiToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ hashes: [file.hash] }),
-        });
+        try {
+          // Get presigned URL with retry
+          const presignResponse = await fetchWithRetry(
+            `${apiUrl}/v1/blobs/presign-upload`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ hashes: [file.hash] }),
+            },
+            { maxRetries: 2 }
+          );
 
-        const { urls } = await presignResponse.json() as { urls: Record<string, string> };
-        const url = urls[file.hash]?.startsWith('http') ? urls[file.hash] : `${sandboxApiUrl}${urls[file.hash]}`;
+          const { urls } = await presignResponse.json() as { urls: Record<string, string> };
+          const url = urls[file.hash]?.startsWith('http') ? urls[file.hash] : `${sandboxApiUrl}${urls[file.hash]}`;
 
-        await sandbox.exec(`curl -s -X PUT -H "Authorization: Bearer ${apiToken}" --data-binary @"${fullPath}" "${url}"`);
-      }
+          // Upload with retry
+          const uploadResult = await sandbox.exec(
+            `curl -s -w "%{http_code}" -X PUT -H "Authorization: Bearer ${apiToken}" --data-binary @"${fullPath}" "${url}"`
+          );
+
+          if (!uploadResult.success) {
+            throw new Error(`Upload failed: ${uploadResult.stderr || 'curl error'}`);
+          }
+
+          // Check HTTP status code (last 3 characters of output)
+          const output = uploadResult.stdout.trim();
+          const httpCode = output.slice(-3);
+          if (!httpCode.startsWith('2')) {
+            throw new Error(`Upload returned HTTP ${httpCode}`);
+          }
+
+          uploadStats.uploadedFiles++;
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          uploadStats.failedFiles.push({
+            path: file.path,
+            hash: file.hash,
+            error: errorMessage,
+          });
+          console.error(`Failed to upload ${file.path}:`, error);
+          // Continue with other files instead of failing entirely
+        }
+      },
+      { concurrency: 5, stopOnError: false }
+    );
+
+    // Log upload stats
+    if (uploadStats.skippedFiles.length > 0 || uploadStats.failedFiles.length > 0) {
+      console.warn('File upload issues:', {
+        skipped: uploadStats.skippedFiles.length,
+        failed: uploadStats.failedFiles.length,
+        skippedFiles: uploadStats.skippedFiles.slice(0, 5), // Log first 5
+        failedFiles: uploadStats.failedFiles.slice(0, 5),
+      });
     }
 
-    await fetch(`${apiUrl}/v1/blobs/manifests/${manifestHash}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
+    // Upload manifest with retry
+    await fetchWithRetry(
+      `${apiUrl}/v1/blobs/manifests/${manifestHash}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: manifestJson,
       },
-      body: manifestJson,
-    });
+      { maxRetries: 3 }
+    );
 
-    return { fileChanges, manifestHash, previousManifestHash };
+    return { fileChanges, manifestHash, previousManifestHash, uploadStats };
   }
 
   private resolveApiUrl(apiUrl: string, pathOrUrl: string): string {
