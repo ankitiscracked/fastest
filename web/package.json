@@ -13,9 +13,10 @@
     "@base-ui-components/react": "^1.0.0-rc.0",
     "@fastest/shared": "workspace:*",
     "@tanstack/react-router": "^1.151.3",
+    "lucide-react": "^0.562.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
     "react-compiler-runtime": "^1.0.0",
+    "react-dom": "^18.2.0",
     "streamdown": "^1.6.0"
   },
   "devDependencies": {

@@ -6,6 +6,7 @@ import { Device } from './pages/Device';
 import { Projects } from './pages/Projects';
 import { ProjectDetail } from './pages/ProjectDetail';
 import { Workspaces } from './pages/Workspaces';
+import { WorkspaceDetail } from './pages/WorkspaceDetail';
 import { Home } from './pages/Home';
 import { ConversationView } from './pages/ConversationView';
 import { Settings } from './pages/Settings';
@@ -64,6 +65,13 @@ const conversationRoute = createRoute({
   component: ConversationView,
 });
 
+// Workspace detail route
+const workspaceDetailRoute = createRoute({
+  getParentRoute: () => conversationLayoutRoute,
+  path: '/workspaces/$workspaceId',
+  component: WorkspaceDetail,
+});
+
 // Authenticated layout route for admin/settings pages
 const authenticatedRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -114,6 +122,7 @@ const routeTree = rootRoute.addChildren([
   conversationLayoutRoute.addChildren([
     homeRoute,
     conversationRoute,
+    workspaceDetailRoute,
   ]),
   authenticatedRoute.addChildren([
     projectsRoute,

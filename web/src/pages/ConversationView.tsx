@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
-import type { Project, Workspace, ConversationWithContext, TimelineItem } from '@fastest/shared';
+import type { ConversationWithContext, TimelineItem } from '@fastest/shared';
 import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo, type DeploymentLogEntry } from '../api/client';
 import type { OpenCodeEvent, OpenCodeGlobalEvent, OpenCodePart, OpenCodeQuestionRequest } from '../api/opencode';
 import {
   ConversationMessage,
   PromptInput,
-  ContextBar,
   SuggestionsBar,
   generateSuggestions,
   Timeline,
@@ -163,11 +162,8 @@ export function ConversationView() {
   const [showingLogsFor, setShowingLogsFor] = useState<string | null>(null);
   const [previewBanner, setPreviewBanner] = useState<{ url: string; deploymentId: string } | null>(null);
 
-  // Context data (for switching workspaces)
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [currentProject, setCurrentProject] = useState<Project | null>(null);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null);
+  // Context data
+  const [currentWorkspace, setCurrentWorkspace] = useState<{ id: string; name: string } | null>(null);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -176,8 +172,6 @@ export function ConversationView() {
   const [streamingContent, setStreamingContent] = useState<string>('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearingConversation, setClearingConversation] = useState(false);
-  const [isCreatingProject, setIsCreatingProject] = useState(false);
-  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
 
   // Refs
   const conversationEndRef = useRef<HTMLDivElement>(null);
@@ -287,8 +281,14 @@ export function ConversationView() {
         setStreamingContent(prev => prev + event.content);
         break;
 
-      case 'status':
-        // Update running message status if needed
+      case 'message_status':
+        setMessages(prev => prev.map(m =>
+          m.id === event.messageId ? { ...m, status: event.status } : m
+        ));
+        if (event.status === 'completed' || event.status === 'failed') {
+          setRunningMessageId(null);
+          setStreamingContent('');
+        }
         break;
 
       case 'files_changed':
@@ -308,6 +308,18 @@ export function ConversationView() {
         });
         setRunningMessageId(null);
         setStreamingContent('');
+        break;
+
+      case 'message_update':
+        setMessages(prev => {
+          const idx = prev.findIndex(m => m.id === event.message.id);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = event.message;
+            return updated;
+          }
+          return prev;
+        });
         break;
 
       case 'opencode_event':
@@ -359,7 +371,7 @@ export function ConversationView() {
         break;
 
       case 'error':
-        setError(event.error);
+        setError(formatErrorMessage(event.error));
         setRunningMessageId(null);
         setStreamingContent('');
         break;
@@ -440,8 +452,8 @@ export function ConversationView() {
         setRunningMessageId(running.id);
       }
 
-      // Load project and workspaces for context bar
-      await loadContextData(conv.project_id, conv.workspace_id);
+      // Store current workspace info
+      setCurrentWorkspace({ id: conv.workspace_id, name: conv.workspace_name });
     } catch (err) {
       console.error('Failed to load conversation:', err);
       setError(err instanceof Error ? err.message : 'Failed to load conversation');
@@ -450,31 +462,6 @@ export function ConversationView() {
     }
   };
 
-  const loadContextData = async (projectId: string, workspaceId: string) => {
-    try {
-      // Load all projects
-      const { projects: projectList } = await api.listProjects();
-      setProjects(projectList);
-
-      // Set current project
-      const project = projectList.find(p => p.id === projectId);
-      if (project) {
-        setCurrentProject(project);
-      }
-
-      // Load workspaces for the project
-      const { workspaces: workspaceList } = await api.listWorkspaces(projectId);
-      setWorkspaces(workspaceList);
-
-      // Set current workspace
-      const workspace = workspaceList.find(w => w.id === workspaceId);
-      if (workspace) {
-        setCurrentWorkspace(workspace);
-      }
-    } catch (err) {
-      console.error('Failed to load context data:', err);
-    }
-  };
 
   const handleSubmitPrompt = async (prompt: string) => {
     if (!conversationId) return;
@@ -505,86 +492,21 @@ export function ConversationView() {
 
     try {
       // Send message - the actual response will come via WebSocket
-      const { message } = await api.sendMessage(conversationId, prompt);
-
-      // Update with the real message from server
-      setMessages(prev => prev.map(m =>
-        m.id === assistantPlaceholder.id ? message : m
-      ));
-
-      if (message.status !== 'running') {
-        setRunningMessageId(null);
+      const { messageId } = await api.sendMessage(conversationId, prompt);
+      if (messageId) {
+        setMessages(prev => prev.map(m =>
+          m.id === assistantPlaceholder.id ? { ...m, id: messageId } : m
+        ));
+        setRunningMessageId(messageId);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
+      setError(formatErrorMessage(err instanceof Error ? err.message : 'Failed to send message'));
       // Remove placeholder on error
       setMessages(prev => prev.filter(m => m.id !== assistantPlaceholder.id));
       setRunningMessageId(null);
     }
   };
 
-  const handleProjectChange = async (projectId: string) => {
-    const project = projects.find((p) => p.id === projectId);
-    if (project) {
-      setCurrentProject(project);
-      const { workspaces: workspaceList } = await api.listWorkspaces(projectId);
-      setWorkspaces(workspaceList);
-      if (workspaceList.length > 0) {
-        const mainWorkspace = workspaceList.find((w) => w.name === 'main') || workspaceList[0];
-        setCurrentWorkspace(mainWorkspace);
-      }
-    }
-  };
-
-  const handleWorkspaceChange = async (workspaceId: string) => {
-    const workspace = workspaces.find((w) => w.id === workspaceId);
-    if (workspace) {
-      setCurrentWorkspace(workspace);
-    }
-  };
-
-  const handleCreateProject = async (name: string) => {
-    setIsCreatingProject(true);
-    setError(null);
-    try {
-      const { project } = await api.createProject(name);
-      setProjects(prev => [project, ...prev]);
-      setCurrentProject(project);
-
-      // Create default 'main' workspace for new project
-      const { workspace } = await api.createWorkspace(project.id, 'main');
-      setWorkspaces([workspace]);
-      setCurrentWorkspace(workspace);
-
-      // Create a new conversation in this workspace and navigate to it
-      const { conversation: newConv } = await api.createConversation(workspace.id);
-      navigate({ to: '/$conversationId', params: { conversationId: newConv.id } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create project');
-    } finally {
-      setIsCreatingProject(false);
-    }
-  };
-
-  const handleCreateWorkspace = async (name: string) => {
-    if (!currentProject) return;
-
-    setIsCreatingWorkspace(true);
-    setError(null);
-    try {
-      const { workspace } = await api.createWorkspace(currentProject.id, name);
-      setWorkspaces(prev => [...prev, workspace]);
-      setCurrentWorkspace(workspace);
-
-      // Create a new conversation in this workspace and navigate to it
-      const { conversation: newConv } = await api.createConversation(workspace.id);
-      navigate({ to: '/$conversationId', params: { conversationId: newConv.id } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create workspace');
-    } finally {
-      setIsCreatingWorkspace(false);
-    }
-  };
 
   const handleNewConversation = async () => {
     if (!currentWorkspace) return;
@@ -924,20 +846,6 @@ export function ConversationView() {
             }
           />
 
-          <ContextBar
-            projects={projects}
-            currentProject={currentProject}
-            workspaces={workspaces}
-            currentWorkspace={currentWorkspace}
-            onProjectChange={handleProjectChange}
-            onWorkspaceChange={handleWorkspaceChange}
-            onCreateProject={handleCreateProject}
-            onCreateWorkspace={handleCreateWorkspace}
-            isCreatingProject={isCreatingProject}
-            isCreatingWorkspace={isCreatingWorkspace}
-            runningMessagesCount={runningMessageId ? 1 : 0}
-          />
-
           <div className="flex items-center justify-between">
             <SuggestionsBar suggestions={suggestions} />
             <ConversationActionsMenu
@@ -1001,4 +909,17 @@ function EmptyState() {
       </p>
     </div>
   );
+}
+
+function formatErrorMessage(raw: string): string {
+  if (!raw) return 'An unexpected error occurred';
+  if (raw.includes('MAX_FILES_PER_MANIFEST') || raw.includes('max allowed')) {
+    const match = raw.match(/Workspace has (\d+) files; max allowed is (\d+)/);
+    if (match) {
+      const [, total, max] = match;
+      return `This workspace has ${total} files, which exceeds the current limit (${max}). Remove files or increase MAX_FILES_PER_MANIFEST, then retry.`;
+    }
+    return 'This workspace exceeds the current file limit. Remove files or increase MAX_FILES_PER_MANIFEST, then retry.';
+  }
+  return raw;
 }

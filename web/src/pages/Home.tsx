@@ -26,23 +26,6 @@ export function Home() {
     loadData();
   }, []);
 
-  // Handle Ctrl+X to clear selection
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'x' && !e.shiftKey) {
-        // Only clear if no text is selected (don't interfere with cut)
-        const selection = window.getSelection();
-        if (!selection || selection.toString().length === 0) {
-          e.preventDefault();
-          handleClearSelection();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
   const loadData = async () => {
     setLoading(true);
     try {
@@ -252,7 +235,6 @@ export function Home() {
                 onClearSelection={handleClearSelection}
                 isCreatingProject={isCreatingProject}
                 isCreatingWorkspace={isCreatingWorkspace}
-                runningMessagesCount={0}
               />
             </div>
           </div>
