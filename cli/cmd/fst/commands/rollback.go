@@ -19,6 +19,7 @@ func init() {
 
 func newRollbackCmd() *cobra.Command {
 	var toSnapshot string
+	var toBase bool
 	var all bool
 	var dryRun bool
 	var force bool
@@ -28,24 +29,30 @@ func newRollbackCmd() *cobra.Command {
 		Short: "Restore files from a snapshot",
 		Long: `Restore files from a previous snapshot.
 
-By default, restores files from the current base snapshot.
+By default, restores files from the last snapshot (most recent save point).
 Use --to to specify a different snapshot.
+Use --to-base to restore to the base/fork point snapshot.
 
 Examples:
-  fst rollback src/main.py           # Restore single file from base
+  fst rollback src/main.py           # Restore single file from last snapshot
   fst rollback src/                  # Restore all files in directory
-  fst rollback --all                 # Restore entire workspace to base
+  fst rollback --all                 # Restore entire workspace to last snapshot
   fst rollback --all --to snap-abc   # Restore to specific snapshot
+  fst rollback --all --to-base       # Restore to fork point
   fst rollback --dry-run --all       # Show what would be restored`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !all && len(args) == 0 {
 				return fmt.Errorf("specify files to rollback, or use --all")
 			}
-			return runRollback(args, toSnapshot, all, dryRun, force)
+			if toSnapshot != "" && toBase {
+				return fmt.Errorf("cannot use both --to and --to-base")
+			}
+			return runRollback(args, toSnapshot, toBase, all, dryRun, force)
 		},
 	}
 
-	cmd.Flags().StringVar(&toSnapshot, "to", "", "Target snapshot ID (default: current base)")
+	cmd.Flags().StringVar(&toSnapshot, "to", "", "Target snapshot ID (default: last snapshot)")
+	cmd.Flags().BoolVar(&toBase, "to-base", false, "Restore to base/fork point snapshot")
 	cmd.Flags().BoolVar(&all, "all", false, "Rollback entire workspace")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be restored without making changes")
 	cmd.Flags().BoolVar(&force, "force", false, "Force rollback even if files have local changes")
@@ -53,7 +60,7 @@ Examples:
 	return cmd
 }
 
-func runRollback(files []string, toSnapshot string, all bool, dryRun bool, force bool) error {
+func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRun bool, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -69,13 +76,26 @@ func runRollback(files []string, toSnapshot string, all bool, dryRun bool, force
 		return fmt.Errorf("failed to get snapshots directory: %w", err)
 	}
 
-	// Determine target snapshot
+	// Determine target snapshot (default to last snapshot, not base)
 	targetSnapshotID := toSnapshot
 	if targetSnapshotID == "" {
-		targetSnapshotID = cfg.BaseSnapshotID
+		if toBase {
+			// Explicit --to-base: use fork point
+			targetSnapshotID = cfg.BaseSnapshotID
+			if targetSnapshotID == "" {
+				return fmt.Errorf("no base snapshot set")
+			}
+		} else {
+			// Default: prefer last snapshot (most recent save point) over base (fork point)
+			if cfg.LastSnapshotID != "" {
+				targetSnapshotID = cfg.LastSnapshotID
+			} else {
+				targetSnapshotID = cfg.BaseSnapshotID
+			}
+		}
 	}
 	if targetSnapshotID == "" {
-		return fmt.Errorf("no base snapshot set - create one with 'fst snapshot --set-base'")
+		return fmt.Errorf("no snapshots found - create one with 'fst snapshot'")
 	}
 
 	// Load target manifest from local snapshots directory
