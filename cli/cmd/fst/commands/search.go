@@ -71,6 +71,16 @@ func (w workspaceItem) String() string {
 	return fmt.Sprintf("%s %s %s", w.ProjectName, w.WorkspaceName, w.Agent)
 }
 
+// mergeResultInfo holds the result of a merge operation for display
+type mergeResultInfo struct {
+	workspaceName string
+	success       bool
+	applied       int
+	conflicts     int
+	failed        int
+	errorMsg      string
+}
+
 // model is the Bubble Tea model
 type model struct {
 	textInput      textinput.Model
@@ -85,6 +95,8 @@ type model struct {
 	err            error
 	action         string // action to perform after quit
 	actionTarget   *workspaceItem
+	showOverlay    bool            // true when showing merge result overlay
+	mergeResult    *mergeResultInfo // result to display in overlay
 }
 
 // Styles
@@ -269,9 +281,35 @@ func (m model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+// mergeCompleteMsg is sent when a merge operation completes
+type mergeCompleteMsg struct {
+	result *mergeResultInfo
+}
+
+// refreshMsg triggers a refresh of the workspace list
+type refreshMsg struct{}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case mergeCompleteMsg:
+		m.mergeResult = msg.result
+		m.showOverlay = true
+		return m, nil
+
+	case refreshMsg:
+		m.items = loadAllWorkspaces(m.currentProject)
+		m.filterItems()
+		return m, nil
+
 	case tea.KeyMsg:
+		// If overlay is showing, any key dismisses it
+		if m.showOverlay {
+			m.showOverlay = false
+			m.mergeResult = nil
+			// Refresh the list after dismissing
+			return m, func() tea.Msg { return refreshMsg{} }
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
 			return m, tea.Quit
@@ -297,9 +335,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.inWorkspace && len(m.filtered) > 0 {
 				item := &m.filtered[m.cursor]
 				if item.SameProject && !item.IsCurrent {
-					m.action = "merge"
-					m.actionTarget = item
-					return m, tea.Quit
+					// Run merge and show result in overlay
+					return m, m.doMerge(item)
 				}
 			}
 
@@ -317,14 +354,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textInput.Width = msg.Width - 4
 	}
 
-	// Handle text input
-	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(msg)
+	// Handle text input (only if overlay not showing)
+	if !m.showOverlay {
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		m.filterItems()
+		return m, cmd
+	}
 
-	// Filter items based on search
-	m.filterItems()
+	return m, nil
+}
 
-	return m, cmd
+// doMerge performs the merge operation and returns a command that sends the result
+func (m model) doMerge(item *workspaceItem) tea.Cmd {
+	return func() tea.Msg {
+		result := &mergeResultInfo{
+			workspaceName: item.WorkspaceName,
+		}
+
+		// Capture merge by running it and tracking results
+		// We need to run the merge logic but capture the outcome
+		err := runMergeForUI(item.WorkspaceName, item.Path)
+		if err != nil {
+			result.success = false
+			result.errorMsg = err.Error()
+		} else {
+			result.success = true
+			// For now, we don't have detailed counts from runMerge
+			// We could enhance this later
+			result.applied = item.Added + item.Modified
+		}
+
+		return mergeCompleteMsg{result: result}
+	}
+}
+
+// runMergeForUI runs merge silently and returns error status
+func runMergeForUI(workspaceName, workspacePath string) error {
+	// Run merge with auto-snapshot, agent mode for conflicts
+	return runMerge(workspaceName, "", ConflictModeAgent, nil, false, false, false)
 }
 
 func (m *model) filterItems() {
@@ -353,6 +421,11 @@ func (m *model) filterItems() {
 }
 
 func (m model) View() string {
+	// Show overlay if merge result is pending
+	if m.showOverlay && m.mergeResult != nil {
+		return m.renderOverlay()
+	}
+
 	// Calculate layout dimensions
 	leftWidth := 45
 	rightWidth := m.width - leftWidth - 3 // 3 for border
@@ -680,6 +753,91 @@ func (m model) renderItemCompact(item workspaceItem, selected bool) string {
 	return line
 }
 
+func (m model) renderOverlay() string {
+	// Overlay dimensions
+	overlayWidth := 45
+
+	// Build overlay content
+	var content strings.Builder
+
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(1, 2).
+		Width(overlayWidth)
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("255"))
+
+	result := m.mergeResult
+
+	if result.success {
+		content.WriteString(currentStyle.Render("✓"))
+		content.WriteString(" ")
+		content.WriteString(titleStyle.Render("Merged " + result.workspaceName))
+		content.WriteString("\n\n")
+
+		if result.applied > 0 {
+			content.WriteString(fmt.Sprintf("  Applied: %s\n", addedStyle.Render(fmt.Sprintf("%d files", result.applied))))
+		}
+		if result.conflicts > 0 {
+			content.WriteString(fmt.Sprintf("  Conflicts: %s\n", deletedStyle.Render(fmt.Sprintf("%d files", result.conflicts))))
+		}
+		if result.failed > 0 {
+			content.WriteString(fmt.Sprintf("  Failed: %s\n", deletedStyle.Render(fmt.Sprintf("%d files", result.failed))))
+		}
+		if result.applied == 0 && result.conflicts == 0 {
+			content.WriteString("  No changes to apply\n")
+		}
+	} else {
+		content.WriteString(deletedStyle.Render("✗"))
+		content.WriteString(" ")
+		content.WriteString(titleStyle.Render("Merge failed"))
+		content.WriteString("\n\n")
+
+		errMsg := result.errorMsg
+		if len(errMsg) > overlayWidth-6 {
+			errMsg = errMsg[:overlayWidth-9] + "..."
+		}
+		content.WriteString(fmt.Sprintf("  %s\n", helpStyle.Render(errMsg)))
+	}
+
+	content.WriteString("\n")
+	content.WriteString(helpStyle.Render("  Press any key to continue..."))
+
+	box := borderStyle.Render(content.String())
+
+	// Center vertically and horizontally
+	lines := strings.Split(box, "\n")
+	padTop := (m.height - len(lines)) / 2
+	padLeft := (m.width - overlayWidth - 4) / 2
+
+	if padTop < 0 {
+		padTop = 0
+	}
+	if padLeft < 0 {
+		padLeft = 0
+	}
+
+	var b strings.Builder
+
+	// Top padding
+	for i := 0; i < padTop; i++ {
+		b.WriteString("\n")
+	}
+
+	// Box with left padding
+	leftPad := strings.Repeat(" ", padLeft)
+	for _, line := range lines {
+		b.WriteString(leftPad)
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
 // stripAnsi removes ANSI escape codes for length calculation
 func stripAnsi(s string) string {
 	var result strings.Builder
@@ -807,10 +965,6 @@ func runSearch() error {
 		case "open":
 			// Print cd command for user to copy/execute
 			fmt.Printf("cd %s\n", m.actionTarget.Path)
-
-		case "merge":
-			fmt.Printf("Merging %s...\n\n", m.actionTarget.WorkspaceName)
-			return runMerge(m.actionTarget.WorkspaceName, "", ConflictModeAgent, nil, false, false, false)
 
 		case "editor":
 			// Try to open in editor
