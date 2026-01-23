@@ -5,9 +5,10 @@ import { api } from '../../api/client';
 interface ActionItemsProps {
   onNavigateToWorkspace: (workspaceId: string, projectId: string) => void;
   onSyncWorkspace: (workspaceId: string) => void;
+  onApplyPrompt?: (workspaceId: string, prompt: string) => void;
 }
 
-export function ActionItems({ onNavigateToWorkspace, onSyncWorkspace }: ActionItemsProps) {
+export function ActionItems({ onNavigateToWorkspace, onSyncWorkspace, onApplyPrompt }: ActionItemsProps) {
   const [items, setItems] = useState<ActionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +36,14 @@ export function ActionItems({ onNavigateToWorkspace, onSyncWorkspace }: ActionIt
       onSyncWorkspace(item.workspace_id);
     } else if (item.action_type === 'navigate') {
       onNavigateToWorkspace(item.workspace_id, item.project_id);
+    } else if (item.action_type === 'prompt') {
+      const suggestedPrompt = item.action_data?.suggested_prompt as string | undefined;
+      if (onApplyPrompt && suggestedPrompt) {
+        onApplyPrompt(item.workspace_id, suggestedPrompt);
+      } else {
+        // Fallback: just navigate to the workspace
+        onNavigateToWorkspace(item.workspace_id, item.project_id);
+      }
     }
   };
 
@@ -53,7 +62,7 @@ export function ActionItems({ onNavigateToWorkspace, onSyncWorkspace }: ActionIt
   }
 
   return (
-    <div className="border border-surface-200 rounded-lg bg-surface-50 overflow-hidden">
+    <div className="border border-surface-200 rounded-md bg-surface-50 overflow-hidden">
       {/* Header */}
       <button
         onClick={() => setCollapsed(!collapsed)}
@@ -62,7 +71,7 @@ export function ActionItems({ onNavigateToWorkspace, onSyncWorkspace }: ActionIt
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-surface-600">Action Items</span>
           {items.length > 0 && (
-            <span className="px-1.5 py-0.5 text-xs font-medium bg-accent-100 text-accent-700 rounded-full">
+            <span className="px-1.5 py-0.5 text-xs font-medium bg-accent-100 text-accent-700 rounded-sm">
               {items.length}
             </span>
           )}
@@ -135,7 +144,7 @@ function ActionItemRow({ item, onAction, onDismiss }: ActionItemRowProps) {
   return (
     <div className="px-4 py-3 flex items-center gap-3 hover:bg-white transition-colors group">
       {/* Icon */}
-      <div className={`p-1.5 rounded-md ${iconBgStyles[item.severity]}`}>
+      <div className={`p-1.5 rounded-sm ${iconBgStyles[item.severity]}`}>
         <ItemIcon type={item.type} className={`w-4 h-4 ${severityStyles[item.severity]}`} />
       </div>
 
@@ -168,7 +177,7 @@ function ActionItemRow({ item, onAction, onDismiss }: ActionItemRowProps) {
         </button>
         <button
           onClick={onAction}
-          className="px-3 py-1 text-sm font-medium bg-accent-600 text-white rounded-md hover:bg-accent-700 transition-colors"
+          className="px-3 py-1 text-sm font-medium bg-accent-600 text-white rounded-sm hover:bg-accent-700 transition-colors"
         >
           {item.action_label}
         </button>

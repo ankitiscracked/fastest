@@ -19,9 +19,11 @@ export interface Project {
 export interface Snapshot {
   id: string;
   project_id: string;
+  workspace_id: string | null;
   content_hash: string;
   parent_snapshot_id: string | null;
   source: 'cli' | 'web' | 'import' | 'system';
+  summary: string | null;
   created_at: string;
 }
 

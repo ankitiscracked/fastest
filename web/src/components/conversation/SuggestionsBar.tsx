@@ -26,7 +26,7 @@ export function SuggestionsBar({ suggestions, maxVisible = 5 }: SuggestionsBarPr
       ))}
 
       {hasMore && (
-        <button className="px-3 py-1.5 text-xs font-medium text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-lg transition-colors">
+        <button className="px-3 py-1.5 text-xs font-medium text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-sm transition-colors">
           +{suggestions.length - maxVisible} more
         </button>
       )}
@@ -36,10 +36,10 @@ export function SuggestionsBar({ suggestions, maxVisible = 5 }: SuggestionsBarPr
 
 function SuggestionButton({ suggestion }: { suggestion: Suggestion }) {
   const variantStyles: Record<NonNullable<Suggestion['variant']>, string> = {
-    default: 'bg-surface-100 text-surface-700 hover:bg-surface-200',
-    warning: 'bg-status-warning/10 text-status-warning hover:bg-status-warning/20',
-    primary: 'bg-accent-100 text-accent-700 hover:bg-accent-200',
-    success: 'bg-status-success/10 text-status-success hover:bg-status-success/20',
+    default: 'border border-surface-300 text-surface-600 hover:border-surface-400 hover:text-surface-700',
+    warning: 'border border-status-warning text-status-warning hover:bg-status-warning/5',
+    primary: 'border border-accent-500 text-accent-600 hover:bg-accent-50',
+    success: 'border border-status-success text-status-success hover:bg-status-success/5',
   };
 
   const variant = suggestion.variant || 'default';
@@ -47,7 +47,7 @@ function SuggestionButton({ suggestion }: { suggestion: Suggestion }) {
   return (
     <button
       onClick={suggestion.onClick}
-      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${variantStyles[variant]}`}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-sm font-medium transition-colors ${variantStyles[variant]}`}
     >
       {suggestion.icon && <SuggestionIcon icon={suggestion.icon} />}
       <span>{suggestion.label}</span>

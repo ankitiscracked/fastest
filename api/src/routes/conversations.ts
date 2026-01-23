@@ -9,8 +9,17 @@ import { Hono } from 'hono';
 import { eq, and } from 'drizzle-orm';
 import type { Env } from '../index';
 import { authMiddleware, getAuthUser } from '../middleware/auth';
-import { createDb, conversations, workspaces, projects } from '../db';
+import { createDb, conversations, workspaces, projects, snapshots } from '../db';
 import type { Conversation, ConversationWithContext } from '@fastest/shared';
+
+// Helper: Generate ULID
+function generateULID(): string {
+  const timestamp = Date.now().toString(36).padStart(10, '0');
+  const random = Array.from({ length: 16 }, () =>
+    Math.floor(Math.random() * 36).toString(36)
+  ).join('');
+  return (timestamp + random).toUpperCase();
+}
 
 export const conversationRoutes = new Hono<{ Bindings: Env }>();
 
@@ -177,7 +186,7 @@ conversationRoutes.get('/:conversationId', async (c) => {
 });
 
 /**
- * Update conversation title
+ * Update conversation (title or workspace)
  * PATCH /v1/conversations/:conversationId
  */
 conversationRoutes.patch('/:conversationId', async (c) => {
@@ -187,31 +196,61 @@ conversationRoutes.patch('/:conversationId', async (c) => {
   }
 
   const { conversationId } = c.req.param();
-  const { title } = await c.req.json<{ title: string }>();
+  const body = await c.req.json<{ title?: string; workspace_id?: string }>();
 
   const db = c.env.DB;
 
-  // Verify ownership
+  // Verify ownership of conversation
   const existing = await db
     .prepare(`
-      SELECT c.id
+      SELECT c.id, c.workspace_id, w.project_id
       FROM conversations c
       JOIN workspaces w ON c.workspace_id = w.id
       JOIN projects p ON w.project_id = p.id
       WHERE c.id = ? AND p.owner_user_id = ?
     `)
     .bind(conversationId, user.id)
-    .first();
+    .first<{ id: string; workspace_id: string; project_id: string }>();
 
   if (!existing) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
   }
 
   const now = new Date().toISOString();
-  await db
-    .prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?')
-    .bind(title, now, conversationId)
-    .run();
+
+  // If moving to a new workspace, verify it's in the same project and user owns it
+  if (body.workspace_id && body.workspace_id !== existing.workspace_id) {
+    const targetWorkspace = await db
+      .prepare(`
+        SELECT w.id, w.project_id
+        FROM workspaces w
+        JOIN projects p ON w.project_id = p.id
+        WHERE w.id = ? AND p.owner_user_id = ?
+      `)
+      .bind(body.workspace_id, user.id)
+      .first<{ id: string; project_id: string }>();
+
+    if (!targetWorkspace) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Target workspace not found' } }, 404);
+    }
+
+    if (targetWorkspace.project_id !== existing.project_id) {
+      return c.json({ error: { code: 'INVALID_INPUT', message: 'Cannot move conversation to a workspace in a different project' } }, 400);
+    }
+
+    await db
+      .prepare('UPDATE conversations SET workspace_id = ?, updated_at = ? WHERE id = ?')
+      .bind(body.workspace_id, now, conversationId)
+      .run();
+  }
+
+  // Update title if provided
+  if (body.title !== undefined) {
+    await db
+      .prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?')
+      .bind(body.title, now, conversationId)
+      .run();
+  }
 
   return c.json({ success: true });
 });
@@ -752,4 +791,231 @@ conversationRoutes.get('/:conversationId/stream', async (c) => {
 
   // Forward the WebSocket upgrade to the DO
   return stub.fetch(c.req.raw);
+});
+
+/**
+ * Create a snapshot from the conversation's current file state
+ * POST /v1/conversations/:conversationId/snapshot
+ *
+ * Options:
+ * - generate_summary: boolean - Generate an LLM summary of changes
+ *
+ * Used for:
+ * - Branching: capture dirty files before creating new workspace
+ * - Save snapshot: explicitly checkpoint work with a summary
+ *
+ * Note: This does NOT update the workspace's base_snapshot_id.
+ * base_snapshot_id represents the origin snapshot the workspace was created from.
+ */
+conversationRoutes.post('/:conversationId/snapshot', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const { conversationId } = c.req.param();
+  const body = await c.req.json<{
+    generate_summary?: boolean;
+  }>().catch(() => ({} as { generate_summary?: boolean }));
+
+  const generate_summary = body.generate_summary ?? false;
+  const db = createDb(c.env.DB);
+
+  // Verify ownership and get workspace/project info
+  const result = await db
+    .select({
+      id: conversations.id,
+      workspace_id: conversations.workspaceId,
+      project_id: workspaces.projectId,
+      base_snapshot_id: workspaces.baseSnapshotId,
+    })
+    .from(conversations)
+    .innerJoin(workspaces, eq(conversations.workspaceId, workspaces.id))
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(
+      eq(conversations.id, conversationId),
+      eq(projects.ownerUserId, user.id)
+    ))
+    .limit(1);
+
+  if (result.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
+  }
+
+  const conversation = result[0];
+
+  // Get the conversation's current manifest hash and recent messages from the Durable Object
+  const doId = getConversationDOId(c.env, conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  const stateResponse = await stub.fetch(new Request('http://do/state'));
+  if (!stateResponse.ok) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get conversation state' } }, 500);
+  }
+
+  const { state } = await stateResponse.json() as {
+    state: {
+      lastManifestHash?: string;
+      messages?: Array<{ role: string; content: string }>;
+    };
+  };
+  const currentManifestHash = state?.lastManifestHash;
+
+  if (!currentManifestHash) {
+    // No files have been modified yet, just return the existing snapshot
+    return c.json({
+      snapshot_id: conversation.base_snapshot_id,
+      manifest_hash: null,
+      was_dirty: false,
+      summary: null,
+    });
+  }
+
+  // Check if the manifest is different from the workspace's current snapshot
+  let existingManifestHash: string | null = null;
+  if (conversation.base_snapshot_id) {
+    const snapshotResult = await db
+      .select({ manifest_hash: snapshots.manifestHash })
+      .from(snapshots)
+      .where(eq(snapshots.id, conversation.base_snapshot_id))
+      .limit(1);
+    existingManifestHash = snapshotResult[0]?.manifest_hash ?? null;
+  }
+
+  // If the manifest hasn't changed, return the existing snapshot
+  if (currentManifestHash === existingManifestHash) {
+    return c.json({
+      snapshot_id: conversation.base_snapshot_id,
+      manifest_hash: currentManifestHash,
+      was_dirty: false,
+      summary: null,
+    });
+  }
+
+  // Calculate file changes for summary generation
+  let fileChanges: { added: string[]; modified: string[]; deleted: string[] } = {
+    added: [],
+    modified: [],
+    deleted: [],
+  };
+  let summary: string | null = null;
+
+  if (generate_summary) {
+    // Fetch current and previous manifests to compute diff
+    const currentManifestKey = `${user.id}/manifests/${currentManifestHash}.json`;
+    const currentManifestObj = await c.env.BLOBS.get(currentManifestKey);
+
+    let currentFiles: Map<string, string> = new Map();
+    let previousFiles: Map<string, string> = new Map();
+
+    if (currentManifestObj) {
+      try {
+        const manifest = JSON.parse(await currentManifestObj.text()) as {
+          files: Array<{ path: string; hash: string }>;
+        };
+        for (const f of manifest.files) {
+          currentFiles.set(f.path, f.hash);
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    if (existingManifestHash) {
+      const prevManifestKey = `${user.id}/manifests/${existingManifestHash}.json`;
+      const prevManifestObj = await c.env.BLOBS.get(prevManifestKey);
+      if (prevManifestObj) {
+        try {
+          const manifest = JSON.parse(await prevManifestObj.text()) as {
+            files: Array<{ path: string; hash: string }>;
+          };
+          for (const f of manifest.files) {
+            previousFiles.set(f.path, f.hash);
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+
+    // Compute file changes
+    for (const [path, hash] of currentFiles) {
+      const prevHash = previousFiles.get(path);
+      if (!prevHash) {
+        fileChanges.added.push(path);
+      } else if (prevHash !== hash) {
+        fileChanges.modified.push(path);
+      }
+    }
+    for (const path of previousFiles.keys()) {
+      if (!currentFiles.has(path)) {
+        fileChanges.deleted.push(path);
+      }
+    }
+
+    // Get recent conversation messages for context
+    const recentMessages = (state.messages || [])
+      .slice(-6)
+      .map(m => `${m.role}: ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`)
+      .join('\n');
+
+    // Generate summary using AI
+    const totalChanges = fileChanges.added.length + fileChanges.modified.length + fileChanges.deleted.length;
+    if (totalChanges > 0) {
+      const prompt = `You are summarizing changes made to a codebase. Based on the file changes and conversation context, write a brief 1-2 sentence summary of what was accomplished. Use past tense and be specific.
+
+File changes:
+${fileChanges.added.length > 0 ? `Added: ${fileChanges.added.slice(0, 10).join(', ')}${fileChanges.added.length > 10 ? ` (+${fileChanges.added.length - 10} more)` : ''}` : ''}
+${fileChanges.modified.length > 0 ? `Modified: ${fileChanges.modified.slice(0, 10).join(', ')}${fileChanges.modified.length > 10 ? ` (+${fileChanges.modified.length - 10} more)` : ''}` : ''}
+${fileChanges.deleted.length > 0 ? `Deleted: ${fileChanges.deleted.slice(0, 10).join(', ')}${fileChanges.deleted.length > 10 ? ` (+${fileChanges.deleted.length - 10} more)` : ''}` : ''}
+
+Recent conversation:
+${recentMessages || 'No conversation context available.'}
+
+Write a brief summary (1-2 sentences):`;
+
+      try {
+        const response = await (c.env.AI as Ai).run(
+          '@cf/meta/llama-3.1-8b-instruct-fast' as Parameters<Ai['run']>[0],
+          {
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 100,
+          }
+        ) as { response?: string };
+
+        summary = response.response?.trim() || null;
+      } catch (err) {
+        console.error('Failed to generate snapshot summary:', err);
+        // Fallback to a simple summary
+        summary = `${totalChanges} file${totalChanges !== 1 ? 's' : ''} changed: ${fileChanges.added.length} added, ${fileChanges.modified.length} modified, ${fileChanges.deleted.length} deleted`;
+      }
+    }
+  }
+
+  // Create a new snapshot with the current manifest
+  const snapshotId = generateULID();
+  const now = new Date().toISOString();
+
+  await db.insert(snapshots).values({
+    id: snapshotId,
+    projectId: conversation.project_id,
+    workspaceId: conversation.workspace_id,
+    manifestHash: currentManifestHash,
+    parentSnapshotId: conversation.base_snapshot_id,
+    source: 'web',
+    summary,
+    createdAt: now,
+  });
+
+  return c.json({
+    snapshot_id: snapshotId,
+    manifest_hash: currentManifestHash,
+    was_dirty: true,
+    summary,
+    file_changes: generate_summary ? {
+      added: fileChanges.added.length,
+      modified: fileChanges.modified.length,
+      deleted: fileChanges.deleted.length,
+    } : null,
+  });
 });

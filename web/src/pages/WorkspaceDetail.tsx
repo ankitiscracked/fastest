@@ -1,13 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from '@tanstack/react-router';
 import {
   ArrowLeft,
   Plus,
   MessageSquare,
-  Clock,
   GitBranch,
   AlertTriangle,
-  FolderOpen,
   RefreshCw,
   Check,
   FileText,
@@ -21,9 +19,13 @@ import {
   Merge,
   Copy,
   Undo2,
+  History,
+  Rocket,
+  ExternalLink,
 } from 'lucide-react';
-import type { Workspace, ConversationWithContext, DriftReport, DriftAnalysis, SyncPreview } from '@fastest/shared';
+import type { Workspace, ConversationWithContext, DriftReport, DriftAnalysis, SyncPreview, DeploymentLogEntry } from '@fastest/shared';
 import { api } from '../api/client';
+import { DeploymentLogs } from '../components/conversation';
 
 export function WorkspaceDetail() {
   const { workspaceId } = useParams({ strict: false }) as { workspaceId: string };
@@ -34,7 +36,6 @@ export function WorkspaceDetail() {
   const [conversations, setConversations] = useState<ConversationWithContext[]>([]);
   const [drift, setDrift] = useState<DriftReport | null>(null);
   const [isMainWorkspace, setIsMainWorkspace] = useState(false);
-  const [driftMessage, setDriftMessage] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string>('');
 
   // AI Analysis state
@@ -66,6 +67,37 @@ export function WorkspaceDetail() {
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
   const [isLoadingDrift, setIsLoadingDrift] = useState(false);
   const [expandedDriftSection, setExpandedDriftSection] = useState<string | null>(null);
+
+  // Snapshot history state
+  interface Snapshot {
+    id: string;
+    project_id: string;
+    manifest_hash: string;
+    parent_snapshot_id: string | null;
+    source: string;
+    summary: string | null;
+    created_at: string;
+    is_current: boolean;
+  }
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [isLoadingSnapshots, setIsLoadingSnapshots] = useState(false);
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'conversations' | 'snapshots'>('conversations');
+
+  // Deploy state
+  const [isDeploying, setIsDeploying] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const [currentDeployment, setCurrentDeployment] = useState<{
+    id: string;
+    conversationId: string;
+    status: 'deploying' | 'success' | 'failed';
+    url?: string;
+  } | null>(null);
+  const [deploymentLogs, setDeploymentLogs] = useState<DeploymentLogEntry[]>([]);
+  const [showDeploymentLogs, setShowDeploymentLogs] = useState(false);
+  const [latestDeploymentUrl, setLatestDeploymentUrl] = useState<string | null>(null);
+  const deploymentPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (workspaceId) {
@@ -115,11 +147,27 @@ export function WorkspaceDetail() {
 
       // Load drift comparison (sync with main)
       await loadDriftComparison(id);
+
+      // Load snapshot history
+      await loadSnapshots(id);
     } catch (err) {
       console.error('Failed to load workspace:', err);
       setError(err instanceof Error ? err.message : 'Failed to load workspace');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadSnapshots = async (id: string) => {
+    setIsLoadingSnapshots(true);
+    try {
+      const { snapshots: snaps } = await api.getWorkspaceSnapshots(id, { limit: 20 });
+      setSnapshots(snaps);
+    } catch (err) {
+      console.error('Failed to load snapshots:', err);
+      // Don't show error for snapshots, just log it
+    } finally {
+      setIsLoadingSnapshots(false);
     }
   };
 
@@ -137,7 +185,6 @@ export function WorkspaceDetail() {
         if (age < CACHE_TTL) {
           setDrift(data.drift);
           setIsMainWorkspace(data.is_main_workspace);
-          setDriftMessage(data.message || null);
           return;
         }
       } catch {
@@ -147,19 +194,17 @@ export function WorkspaceDetail() {
 
     setIsLoadingDrift(true);
     try {
-      const { drift: driftReport, is_main_workspace, message } = await api.getDriftComparison(id);
+      const { drift: driftReport, is_main_workspace } = await api.getDriftComparison(id);
       setDrift(driftReport);
       setIsMainWorkspace(is_main_workspace);
-      setDriftMessage(message || null);
 
       // Cache the result
       localStorage.setItem(cacheKey, JSON.stringify({
-        data: { drift: driftReport, is_main_workspace, message },
+        data: { drift: driftReport, is_main_workspace },
         timestamp: Date.now(),
       }));
     } catch (err) {
       console.error('Failed to load drift comparison:', err);
-      setDriftMessage('Failed to load drift comparison');
     } finally {
       setIsLoadingDrift(false);
     }
@@ -192,6 +237,100 @@ export function WorkspaceDetail() {
       setIsAnalyzing(false);
     }
   };
+
+  const handleDeploy = async () => {
+    if (!workspaceId || isDeploying) return;
+
+    // Check if there are any snapshots
+    if (snapshots.length === 0) {
+      setDeployError('No snapshots found. Save a snapshot before deploying.');
+      return;
+    }
+
+    setIsDeploying(true);
+    setDeployError(null);
+    setDeploymentLogs([]);
+
+    try {
+      const result = await api.deployWorkspace(workspaceId);
+
+      // Track the deployment
+      setCurrentDeployment({
+        id: result.deploymentId,
+        conversationId: result.conversation_id,
+        status: 'deploying',
+      });
+      setShowDeploymentLogs(true);
+
+      // Start polling for deployment logs
+      startDeploymentPolling(result.conversation_id, result.deploymentId);
+    } catch (err) {
+      console.error('Failed to deploy:', err);
+      setDeployError(err instanceof Error ? err.message : 'Failed to start deployment');
+      setIsDeploying(false);
+    }
+  };
+
+  const startDeploymentPolling = (conversationId: string, deploymentId: string) => {
+    // Clear any existing poll
+    if (deploymentPollRef.current) {
+      clearInterval(deploymentPollRef.current);
+    }
+
+    const pollDeployment = async () => {
+      try {
+        // Fetch both deployments (for status) and logs (for entries) in parallel
+        const [deploymentsRes, logsRes] = await Promise.all([
+          api.getDeployments(conversationId),
+          api.getDeploymentLogs(conversationId, deploymentId).catch(() => ({ log: null })),
+        ]);
+
+        // Update logs
+        if (logsRes.log) {
+          setDeploymentLogs(logsRes.log.entries || []);
+        }
+
+        // Find this deployment and check status
+        const deployment = deploymentsRes.deployments.find(d => d.id === deploymentId);
+        if (deployment) {
+          // Check if deployment is complete
+          if (deployment.status === 'success' || deployment.status === 'failed') {
+            setIsDeploying(false);
+            setCurrentDeployment(prev => prev ? {
+              ...prev,
+              status: deployment.status as 'success' | 'failed',
+              url: deployment.url,
+            } : null);
+
+            if (deployment.status === 'success' && deployment.url) {
+              setLatestDeploymentUrl(deployment.url);
+            }
+
+            // Stop polling
+            if (deploymentPollRef.current) {
+              clearInterval(deploymentPollRef.current);
+              deploymentPollRef.current = null;
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch deployment status:', err);
+      }
+    };
+
+    // Poll immediately and then every 2 seconds
+    pollDeployment();
+    deploymentPollRef.current = setInterval(pollDeployment, 2000);
+  };
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (deploymentPollRef.current) {
+        clearInterval(deploymentPollRef.current);
+      }
+    };
+  }, []);
 
   const handlePrepareSync = async () => {
     if (!workspaceId) return;
@@ -359,32 +498,130 @@ export function WorkspaceDetail() {
     <div className="h-full flex flex-col bg-surface-50">
       {/* Header */}
       <header className="flex-shrink-0 bg-white border-b border-surface-200 px-6 py-4">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate({ to: '/projects/$projectId', params: { projectId: workspace.project_id } })}
-            className="p-1 text-surface-500 hover:text-surface-700 rounded-md hover:bg-surface-100"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <div className="flex items-center gap-2 text-sm text-surface-500">
-              <Link
-                to="/projects/$projectId"
-                params={{ projectId: workspace.project_id }}
-                className="hover:text-accent-600"
-              >
-                {projectName}
-              </Link>
-              <span>/</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate({ to: '/projects/$projectId', params: { projectId: workspace.project_id } })}
+              className="p-1 text-surface-500 hover:text-surface-700 rounded-md hover:bg-surface-100"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div>
+              <div className="flex items-center gap-2 text-sm text-surface-500">
+                <Link
+                  to="/projects/$projectId"
+                  params={{ projectId: workspace.project_id }}
+                  className="hover:text-accent-600"
+                >
+                  {projectName}
+                </Link>
+                <span>/</span>
+              </div>
+              <h1 className="text-xl font-semibold text-surface-800 flex items-center gap-2">
+                {workspace.name}
+                {isMainWorkspace && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                    main
+                  </span>
+                )}
+              </h1>
             </div>
-            <h1 className="text-xl font-semibold text-surface-800 flex items-center gap-2">
-              {workspace.name}
-              {workspace.name === 'main' && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-                  prod
-                </span>
+          </div>
+
+          {/* Header right: metadata + actions */}
+          <div className="flex items-center gap-6">
+            {/* Metadata */}
+            <div className="flex items-center gap-4 text-xs text-surface-500">
+              <span title="Created">
+                Created {new Date(workspace.created_at).toLocaleDateString()}
+              </span>
+              <span className="text-surface-300">•</span>
+              <span title="Last active">
+                {workspace.last_seen_at ? `Active ${formatTimestamp(workspace.last_seen_at)}` : 'Never active'}
+              </span>
+              <span className="text-surface-300">•</span>
+              <span className="font-mono" title="Workspace ID">
+                {workspace.id.slice(0, 8)}
+              </span>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex items-center gap-2">
+              {/* Sync with Main button (for branch workspaces) */}
+              {!isMainWorkspace && (
+                <button
+                  onClick={handlePrepareSync}
+                  disabled={isPreparingSyn || isLoadingDrift}
+                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                    drift && drift.total_drift_files > 0
+                      ? 'bg-accent-500 text-white hover:bg-accent-600'
+                      : 'border border-surface-300 text-surface-600 hover:bg-surface-50'
+                  } disabled:opacity-50`}
+                >
+                  {isPreparingSyn ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Preparing...
+                    </>
+                  ) : (
+                    <>
+                      <GitBranch className="w-4 h-4" />
+                      Sync with Main
+                      {drift && drift.total_drift_files > 0 && (
+                        <span className="ml-1 px-1.5 py-0.5 bg-white/20 rounded text-xs">
+                          {drift.total_drift_files}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
               )}
-            </h1>
+
+              {/* Latest deployment URL */}
+              {latestDeploymentUrl && (
+                <a
+                  href={latestDeploymentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-xs text-accent-600 hover:text-accent-700 hover:underline truncate max-w-48"
+                  title={latestDeploymentUrl}
+                >
+                  <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="truncate">{latestDeploymentUrl.replace(/^https?:\/\//, '')}</span>
+                </a>
+              )}
+
+              {/* Deploy button */}
+              <button
+                onClick={handleDeploy}
+                disabled={isDeploying || snapshots.length === 0}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md border border-surface-300 text-surface-600 hover:bg-surface-50 disabled:opacity-50 transition-colors"
+                title={snapshots.length === 0 ? 'Save a snapshot before deploying' : 'Deploy from latest snapshot'}
+              >
+                {isDeploying ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Deploying...
+                  </>
+                ) : (
+                  <>
+                    <Rocket className="w-4 h-4" />
+                    Deploy
+                  </>
+                )}
+              </button>
+
+              {/* View logs button (when deployment exists) */}
+              {currentDeployment && (
+                <button
+                  onClick={() => setShowDeploymentLogs(true)}
+                  className="p-2 text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-md transition-colors"
+                  title="View deployment logs"
+                >
+                  <FileText className="w-4 h-4" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -392,449 +629,419 @@ export function WorkspaceDetail() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-4xl mx-auto space-y-6">
-          {/* Overview cards */}
-          <div className="grid grid-cols-3 gap-4">
-            {/* Conversations count */}
-            <div className="bg-white rounded-lg border border-surface-200 p-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-accent-100 flex items-center justify-center">
-                  <MessageSquare className="w-5 h-5 text-accent-600" />
-                </div>
-                <div>
-                  <div className="text-2xl font-semibold text-surface-800">
-                    {conversations.length}
-                  </div>
-                  <div className="text-sm text-surface-500">Conversations</div>
-                </div>
+          {/* Overview */}
+          <div className="bg-white rounded-md border border-surface-200 p-6">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <h2 className="text-sm font-medium text-surface-500 mb-1">Overview</h2>
+                {isMainWorkspace ? (
+                  <p className="text-surface-700">
+                    This is the main workspace for this project. All other workspaces sync against this one.
+                  </p>
+                ) : (
+                  <p className="text-surface-700">
+                    {drift && drift.total_drift_files > 0 ? (
+                      <>
+                        This workspace has <span className="font-medium">{drift.total_drift_files} file{drift.total_drift_files !== 1 ? 's' : ''}</span> different from main.
+                        {drift.main_only.length > 0 && ` ${drift.main_only.length} new in main.`}
+                        {drift.both_different.length > 0 && ` ${drift.both_different.length} modified.`}
+                        {drift.workspace_only.length > 0 && ` ${drift.workspace_only.length} only here.`}
+                      </>
+                    ) : isLoadingDrift ? (
+                      'Checking for differences from main...'
+                    ) : (
+                      'This workspace is in sync with main.'
+                    )}
+                  </p>
+                )}
               </div>
-            </div>
-
-            {/* Last active */}
-            <div className="bg-white rounded-lg border border-surface-200 p-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
-                  <Clock className="w-5 h-5 text-blue-600" />
-                </div>
-                <div>
-                  <div className="text-lg font-semibold text-surface-800">
-                    {workspace.last_seen_at
-                      ? formatTimestamp(workspace.last_seen_at)
-                      : 'Never'}
-                  </div>
-                  <div className="text-sm text-surface-500">Last active</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Drift status */}
-            <div className="bg-white rounded-lg border border-surface-200 p-4">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  isMainWorkspace ? 'bg-blue-100' : drift && drift.total_drift_files > 0 ? 'bg-yellow-100' : 'bg-green-100'
-                }`}>
-                  {isMainWorkspace ? (
-                    <GitBranch className="w-5 h-5 text-blue-600" />
-                  ) : drift && drift.total_drift_files > 0 ? (
-                    <AlertTriangle className="w-5 h-5 text-yellow-600" />
-                  ) : (
-                    <Check className="w-5 h-5 text-green-600" />
-                  )}
-                </div>
-                <div>
-                  <div className="text-lg font-semibold text-surface-800">
-                    {isMainWorkspace
-                      ? 'Main'
-                      : isLoadingDrift
-                      ? 'Checking...'
-                      : drift && drift.total_drift_files > 0
-                      ? `${drift.total_drift_files} differences`
-                      : 'Synced'}
-                  </div>
-                  <div className="text-sm text-surface-500">
-                    {isMainWorkspace ? 'Source of truth' : 'Sync status'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Workspace info */}
-          <div className="bg-white rounded-lg border border-surface-200 p-6">
-            <h2 className="text-lg font-medium text-surface-800 mb-4">Details</h2>
-            <dl className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <dt className="text-surface-500">Workspace ID</dt>
-                <dd className="font-mono text-surface-800 mt-1">{workspace.id}</dd>
-              </div>
-              <div>
-                <dt className="text-surface-500">Created</dt>
-                <dd className="text-surface-800 mt-1">
-                  {new Date(workspace.created_at).toLocaleDateString()}
-                </dd>
-              </div>
-              {workspace.local_path && (
-                <div className="col-span-2">
-                  <dt className="text-surface-500">Local path</dt>
-                  <dd className="font-mono text-surface-800 mt-1 flex items-center gap-2">
-                    <FolderOpen className="w-4 h-4 text-surface-400" />
-                    {workspace.local_path}
-                  </dd>
-                </div>
-              )}
-              {workspace.machine_id && (
-                <div>
-                  <dt className="text-surface-500">Machine ID</dt>
-                  <dd className="font-mono text-surface-800 mt-1 truncate">{workspace.machine_id}</dd>
-                </div>
-              )}
-            </dl>
-          </div>
-
-          {/* Drift panel - Sync with main */}
-          {!isMainWorkspace && (
-            <div className={`bg-white rounded-lg border p-6 ${
-              drift && drift.total_drift_files > 0 ? 'border-yellow-200' : 'border-surface-200'
-            }`}>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-medium text-surface-800 flex items-center gap-2">
-                  {drift && drift.total_drift_files > 0 ? (
-                    <AlertTriangle className="w-5 h-5 text-yellow-600" />
-                  ) : (
-                    <Check className="w-5 h-5 text-green-600" />
-                  )}
-                  Sync with Main
-                </h2>
+              {!isMainWorkspace && (
                 <button
                   onClick={handleRefreshDrift}
                   disabled={isLoadingDrift}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-surface-600 hover:text-surface-800 hover:bg-surface-100 rounded-md transition-colors disabled:opacity-50"
+                  className="p-1.5 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-md transition-colors disabled:opacity-50"
+                  title="Refresh"
                 >
                   <RefreshCw className={`w-4 h-4 ${isLoadingDrift ? 'animate-spin' : ''}`} />
-                  Refresh
+                </button>
+              )}
+            </div>
+
+            {/* Undo sync option */}
+            {undoInfo && (
+              <div className="mt-4 pt-4 border-t border-surface-100 flex items-center justify-between">
+                <span className="text-sm text-surface-500">
+                  Last sync: {undoInfo.filesAdded} added, {undoInfo.filesUpdated} updated
+                </span>
+                <button
+                  onClick={handleUndo}
+                  disabled={isUndoing}
+                  className="flex items-center gap-1.5 text-sm text-surface-600 hover:text-surface-800"
+                >
+                  {isUndoing ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Undo2 className="w-3.5 h-3.5" />
+                  )}
+                  Undo sync
                 </button>
               </div>
+            )}
+          </div>
 
-              {isLoadingDrift ? (
-                <div className="text-sm text-surface-500">Analyzing differences...</div>
-              ) : driftMessage && !drift ? (
-                <div className="text-sm text-surface-500">{driftMessage}</div>
-              ) : drift && drift.total_drift_files > 0 ? (
-                <div className="space-y-4">
-                  <p className="text-sm text-surface-600">
-                    This workspace has diverged from main. Review the differences below.
-                  </p>
+          {/* Differences from Main (for branch workspaces with differences) */}
+          {!isMainWorkspace && drift && drift.total_drift_files > 0 && (
+            <div className="bg-white rounded-md border border-yellow-200 p-6">
+              <h2 className="text-lg font-medium text-surface-800 flex items-center gap-2 mb-4">
+                <AlertTriangle className="w-5 h-5 text-yellow-600" />
+                Differences from Main
+              </h2>
 
-                  {/* Summary counts */}
-                  <div className="flex gap-4 text-sm">
-                    {drift.main_only.length > 0 && (
-                      <div className="flex items-center gap-1.5 text-blue-600">
-                        <FilePlus className="w-4 h-4" />
-                        <span>{drift.main_only.length} new in main</span>
-                      </div>
-                    )}
-                    {drift.both_different.length > 0 && (
-                      <div className="flex items-center gap-1.5 text-yellow-600">
-                        <FileWarning className="w-4 h-4" />
-                        <span>{drift.both_different.length} modified</span>
-                      </div>
-                    )}
-                    {drift.workspace_only.length > 0 && (
-                      <div className="flex items-center gap-1.5 text-surface-500">
-                        <FileText className="w-4 h-4" />
-                        <span>{drift.workspace_only.length} only in workspace</span>
-                      </div>
-                    )}
+              {/* Summary counts */}
+              <div className="flex gap-4 text-sm mb-4">
+                {drift.main_only.length > 0 && (
+                  <div className="flex items-center gap-1.5 text-blue-600">
+                    <FilePlus className="w-4 h-4" />
+                    <span>{drift.main_only.length} new in main</span>
                   </div>
+                )}
+                {drift.both_different.length > 0 && (
+                  <div className="flex items-center gap-1.5 text-yellow-600">
+                    <FileWarning className="w-4 h-4" />
+                    <span>{drift.both_different.length} modified</span>
+                  </div>
+                )}
+                {drift.workspace_only.length > 0 && (
+                  <div className="flex items-center gap-1.5 text-surface-500">
+                    <FileText className="w-4 h-4" />
+                    <span>{drift.workspace_only.length} only here</span>
+                  </div>
+                )}
+              </div>
 
-                  {/* Expandable file lists */}
+              {/* Expandable file lists */}
+              <div className="space-y-2">
+                {drift.main_only.length > 0 && (
+                  <FileListSection
+                    title="New in main"
+                    description="Files added to main that you don't have"
+                    files={drift.main_only}
+                    icon={<FilePlus className="w-4 h-4 text-blue-600" />}
+                    bgColor="bg-blue-50"
+                    textColor="text-blue-700"
+                    isExpanded={expandedDriftSection === 'main_only'}
+                    onToggle={() => setExpandedDriftSection(expandedDriftSection === 'main_only' ? null : 'main_only')}
+                  />
+                )}
+                {drift.both_different.length > 0 && (
+                  <FileListSection
+                    title="Modified"
+                    description="Files that differ between workspace and main"
+                    files={drift.both_different}
+                    icon={<FileWarning className="w-4 h-4 text-yellow-600" />}
+                    bgColor="bg-yellow-50"
+                    textColor="text-yellow-700"
+                    isExpanded={expandedDriftSection === 'both_different'}
+                    onToggle={() => setExpandedDriftSection(expandedDriftSection === 'both_different' ? null : 'both_different')}
+                  />
+                )}
+                {drift.workspace_only.length > 0 && (
+                  <FileListSection
+                    title="Only in workspace"
+                    description="Files you have that aren't in main"
+                    files={drift.workspace_only}
+                    icon={<FileText className="w-4 h-4 text-surface-500" />}
+                    bgColor="bg-surface-50"
+                    textColor="text-surface-600"
+                    isExpanded={expandedDriftSection === 'workspace_only'}
+                    onToggle={() => setExpandedDriftSection(expandedDriftSection === 'workspace_only' ? null : 'workspace_only')}
+                  />
+                )}
+              </div>
+
+              {/* AI Analysis section */}
+              <div className="pt-4 mt-4 border-t border-surface-200">
+                {!analysis && !isAnalyzing && !analysisError && (
+                  <button
+                    onClick={handleAnalyzeDrift}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white text-sm font-medium rounded-md hover:bg-purple-600 transition-colors"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Analyze with AI
+                  </button>
+                )}
+
+                {isAnalyzing && (
+                  <div className="flex items-center gap-2 text-sm text-surface-600">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Analyzing differences...
+                  </div>
+                )}
+
+                {analysisError && (
                   <div className="space-y-2">
-                    {drift.main_only.length > 0 && (
-                      <FileListSection
-                        title="New in main"
-                        description="Files added to main that you don't have"
-                        files={drift.main_only}
-                        icon={<FilePlus className="w-4 h-4 text-blue-600" />}
-                        bgColor="bg-blue-50"
-                        textColor="text-blue-700"
-                        isExpanded={expandedDriftSection === 'main_only'}
-                        onToggle={() => setExpandedDriftSection(expandedDriftSection === 'main_only' ? null : 'main_only')}
-                      />
-                    )}
-                    {drift.both_different.length > 0 && (
-                      <FileListSection
-                        title="Modified"
-                        description="Files that differ between workspace and main"
-                        files={drift.both_different}
-                        icon={<FileWarning className="w-4 h-4 text-yellow-600" />}
-                        bgColor="bg-yellow-50"
-                        textColor="text-yellow-700"
-                        isExpanded={expandedDriftSection === 'both_different'}
-                        onToggle={() => setExpandedDriftSection(expandedDriftSection === 'both_different' ? null : 'both_different')}
-                      />
-                    )}
-                    {drift.workspace_only.length > 0 && (
-                      <FileListSection
-                        title="Only in workspace"
-                        description="Files you have that aren't in main"
-                        files={drift.workspace_only}
-                        icon={<FileText className="w-4 h-4 text-surface-500" />}
-                        bgColor="bg-surface-50"
-                        textColor="text-surface-600"
-                        isExpanded={expandedDriftSection === 'workspace_only'}
-                        onToggle={() => setExpandedDriftSection(expandedDriftSection === 'workspace_only' ? null : 'workspace_only')}
-                      />
-                    )}
+                    <div className="text-sm text-red-600">{analysisError}</div>
+                    <button
+                      onClick={handleAnalyzeDrift}
+                      className="text-sm text-accent-600 hover:underline"
+                    >
+                      Try again
+                    </button>
                   </div>
+                )}
 
-                  {/* AI Analysis section */}
-                  <div className="pt-4 border-t border-surface-200">
-                    {!analysis && !isAnalyzing && !analysisError && (
-                      <button
-                        onClick={handleAnalyzeDrift}
-                        className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white text-sm font-medium rounded-lg hover:bg-purple-600 transition-colors"
-                      >
-                        <Sparkles className="w-4 h-4" />
-                        Analyze with AI
-                      </button>
-                    )}
-
-                    {isAnalyzing && (
-                      <div className="flex items-center gap-2 text-sm text-surface-600">
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        Analyzing drift with AI...
-                      </div>
-                    )}
-
-                    {analysisError && (
-                      <div className="space-y-2">
-                        <div className="text-sm text-red-600">{analysisError}</div>
-                        <button
-                          onClick={handleAnalyzeDrift}
-                          className="text-sm text-accent-600 hover:underline"
-                        >
-                          Try again
-                        </button>
-                      </div>
-                    )}
-
-                    {analysis && (
-                      <div className="space-y-4">
-                        {/* Risk level badge */}
-                        <div className="flex items-center gap-3">
-                          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium ${
-                            analysis.risk_level === 'low'
-                              ? 'bg-green-100 text-green-700'
-                              : analysis.risk_level === 'medium'
-                              ? 'bg-yellow-100 text-yellow-700'
-                              : 'bg-red-100 text-red-700'
-                          }`}>
-                            {analysis.risk_level === 'low' ? (
-                              <ShieldCheck className="w-4 h-4" />
-                            ) : analysis.risk_level === 'medium' ? (
-                              <Shield className="w-4 h-4" />
-                            ) : (
-                              <ShieldAlert className="w-4 h-4" />
-                            )}
-                            {analysis.risk_level.charAt(0).toUpperCase() + analysis.risk_level.slice(1)} Risk
-                          </div>
-                          {analysis.can_auto_sync && (
-                            <span className="text-xs text-green-600 flex items-center gap-1">
-                              <Check className="w-3 h-3" />
-                              Safe to auto-sync
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Summaries */}
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="p-3 bg-blue-50 rounded-lg">
-                            <div className="text-xs font-medium text-blue-700 mb-1">Changes in Main</div>
-                            <div className="text-sm text-surface-700">{analysis.main_changes_summary}</div>
-                          </div>
-                          <div className="p-3 bg-purple-50 rounded-lg">
-                            <div className="text-xs font-medium text-purple-700 mb-1">Changes in Workspace</div>
-                            <div className="text-sm text-surface-700">{analysis.workspace_changes_summary}</div>
-                          </div>
-                        </div>
-
-                        {/* Recommendation */}
-                        <div className="p-3 bg-surface-50 rounded-lg">
-                          <div className="text-xs font-medium text-surface-500 mb-1">Recommendation</div>
-                          <div className="text-sm text-surface-700">{analysis.recommendation}</div>
-                        </div>
-
-                        {/* Risk explanation if not low */}
-                        {analysis.risk_level !== 'low' && analysis.risk_explanation && (
-                          <div className="p-3 bg-yellow-50 rounded-lg">
-                            <div className="text-xs font-medium text-yellow-700 mb-1">Risk Details</div>
-                            <div className="text-sm text-surface-700">{analysis.risk_explanation}</div>
-                          </div>
-                        )}
-
-                        {/* Re-analyze button */}
-                        <button
-                          onClick={handleAnalyzeDrift}
-                          className="text-sm text-surface-500 hover:text-surface-700 flex items-center gap-1"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          Re-analyze
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Sync action */}
-                  <div className="pt-4 border-t border-surface-200">
+                {analysis && (
+                  <div className="space-y-4">
+                    {/* Risk level badge */}
                     <div className="flex items-center gap-3">
-                      <button
-                        onClick={handlePrepareSync}
-                        disabled={isPreparingSyn}
-                        className="flex items-center gap-2 px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-lg hover:bg-accent-600 disabled:opacity-50 transition-colors"
-                      >
-                        {isPreparingSyn ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            Preparing...
-                          </>
+                      <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium ${
+                        analysis.risk_level === 'low'
+                          ? 'bg-green-100 text-green-700'
+                          : analysis.risk_level === 'medium'
+                          ? 'bg-yellow-100 text-yellow-700'
+                          : 'bg-red-100 text-red-700'
+                      }`}>
+                        {analysis.risk_level === 'low' ? (
+                          <ShieldCheck className="w-4 h-4" />
+                        ) : analysis.risk_level === 'medium' ? (
+                          <Shield className="w-4 h-4" />
                         ) : (
-                          <>
-                            <GitBranch className="w-4 h-4" />
-                            Sync with Main
-                          </>
+                          <ShieldAlert className="w-4 h-4" />
                         )}
-                      </button>
-
-                      {/* Undo button - shows when undo is available */}
-                      {undoInfo && (
-                        <button
-                          onClick={handleUndo}
-                          disabled={isUndoing}
-                          className="flex items-center gap-2 px-4 py-2 bg-surface-100 text-surface-700 text-sm font-medium rounded-lg hover:bg-surface-200 disabled:opacity-50 transition-colors"
-                          title={`Undo last sync (${undoInfo.filesAdded} added, ${undoInfo.filesUpdated} updated)`}
-                        >
-                          {isUndoing ? (
-                            <>
-                              <RefreshCw className="w-4 h-4 animate-spin" />
-                              Undoing...
-                            </>
-                          ) : (
-                            <>
-                              <Undo2 className="w-4 h-4" />
-                              Undo Sync
-                            </>
-                          )}
-                        </button>
+                        {analysis.risk_level.charAt(0).toUpperCase() + analysis.risk_level.slice(1)} Risk
+                      </div>
+                      {analysis.can_auto_sync && (
+                        <span className="text-xs text-green-600 flex items-center gap-1">
+                          <Check className="w-3 h-3" />
+                          Safe to auto-sync
+                        </span>
                       )}
                     </div>
-                    {syncError && (
-                      <p className="text-xs text-red-600 mt-2">{syncError}</p>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2 text-sm text-green-600">
-                    <Check className="w-4 h-4" />
-                    This workspace is in sync with main
-                  </div>
 
-                  {/* Undo button when synced but undo available */}
-                  {undoInfo && (
+                    {/* Summaries */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-3 bg-blue-50 rounded-md">
+                        <div className="text-xs font-medium text-blue-700 mb-1">Changes in Main</div>
+                        <div className="text-sm text-surface-700">{analysis.main_changes_summary}</div>
+                      </div>
+                      <div className="p-3 bg-purple-50 rounded-md">
+                        <div className="text-xs font-medium text-purple-700 mb-1">Changes in Workspace</div>
+                        <div className="text-sm text-surface-700">{analysis.workspace_changes_summary}</div>
+                      </div>
+                    </div>
+
+                    {/* Recommendation */}
+                    <div className="p-3 bg-surface-50 rounded-md">
+                      <div className="text-xs font-medium text-surface-500 mb-1">Recommendation</div>
+                      <div className="text-sm text-surface-700">{analysis.recommendation}</div>
+                    </div>
+
+                    {/* Risk explanation if not low */}
+                    {analysis.risk_level !== 'low' && analysis.risk_explanation && (
+                      <div className="p-3 bg-yellow-50 rounded-md">
+                        <div className="text-xs font-medium text-yellow-700 mb-1">Risk Details</div>
+                        <div className="text-sm text-surface-700">{analysis.risk_explanation}</div>
+                      </div>
+                    )}
+
+                    {/* Re-analyze button */}
                     <button
-                      onClick={handleUndo}
-                      disabled={isUndoing}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-surface-100 text-surface-600 text-sm rounded-lg hover:bg-surface-200 disabled:opacity-50 transition-colors"
-                      title={`Undo last sync (${undoInfo.filesAdded} added, ${undoInfo.filesUpdated} updated)`}
+                      onClick={handleAnalyzeDrift}
+                      className="text-sm text-surface-500 hover:text-surface-700 flex items-center gap-1"
                     >
-                      {isUndoing ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          Undoing...
-                        </>
-                      ) : (
-                        <>
-                          <Undo2 className="w-4 h-4" />
-                          Undo last sync
-                        </>
-                      )}
+                      <RefreshCw className="w-3 h-3" />
+                      Re-analyze
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
+              </div>
+
+              {syncError && (
+                <p className="text-xs text-red-600 mt-4">{syncError}</p>
               )}
             </div>
           )}
 
-          {/* Main workspace indicator */}
-          {isMainWorkspace && (
-            <div className="bg-white rounded-lg border border-blue-200 p-6">
-              <h2 className="text-lg font-medium text-surface-800 flex items-center gap-2 mb-2">
-                <GitBranch className="w-5 h-5 text-blue-600" />
-                Main Workspace
-              </h2>
-              <p className="text-sm text-surface-600">
-                This is the main workspace for this project. Other workspaces sync against this one.
-              </p>
+          {/* Deploy error */}
+          {deployError && (
+            <div className="bg-red-50 border border-red-200 rounded-md p-4">
+              <p className="text-sm text-red-700">{deployError}</p>
+              <button
+                onClick={() => setDeployError(null)}
+                className="text-xs text-red-600 hover:text-red-800 mt-2"
+              >
+                Dismiss
+              </button>
             </div>
           )}
 
-          {/* Conversations */}
-          <div className="bg-white rounded-lg border border-surface-200">
-            <div className="px-6 py-4 border-b border-surface-200 flex items-center justify-between">
-              <h2 className="text-lg font-medium text-surface-800">Conversations</h2>
+          {/* Tabs: Conversations | Snapshots */}
+          <div className="bg-white rounded-md border border-surface-200">
+            {/* Tab headers */}
+            <div className="flex border-b border-surface-200">
               <button
-                onClick={handleCreateConversation}
-                disabled={isCreatingConversation}
-                className="flex items-center gap-2 px-3 py-1.5 bg-accent-500 text-white text-sm font-medium rounded-lg hover:bg-accent-600 disabled:opacity-50"
+                onClick={() => setActiveTab('conversations')}
+                className={`flex-1 px-6 py-3 text-sm font-medium transition-colors relative ${
+                  activeTab === 'conversations'
+                    ? 'text-surface-800'
+                    : 'text-surface-500 hover:text-surface-700'
+                }`}
               >
-                <Plus className="w-4 h-4" />
-                {isCreatingConversation ? 'Creating...' : 'New Conversation'}
+                <span className="flex items-center justify-center gap-2">
+                  <MessageSquare className="w-4 h-4" />
+                  Conversations
+                  <span className={`px-1.5 py-0.5 rounded text-xs ${
+                    activeTab === 'conversations' ? 'bg-surface-200 text-surface-700' : 'bg-surface-100 text-surface-500'
+                  }`}>
+                    {conversations.length}
+                  </span>
+                </span>
+                {activeTab === 'conversations' && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-surface-400" />
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab('snapshots')}
+                className={`flex-1 px-6 py-3 text-sm font-medium transition-colors relative ${
+                  activeTab === 'snapshots'
+                    ? 'text-surface-800'
+                    : 'text-surface-500 hover:text-surface-700'
+                }`}
+              >
+                <span className="flex items-center justify-center gap-2">
+                  <History className="w-4 h-4" />
+                  Snapshots
+                  <span className={`px-1.5 py-0.5 rounded text-xs ${
+                    activeTab === 'snapshots' ? 'bg-surface-200 text-surface-700' : 'bg-surface-100 text-surface-500'
+                  }`}>
+                    {snapshots.length}
+                  </span>
+                </span>
+                {activeTab === 'snapshots' && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-surface-400" />
+                )}
               </button>
             </div>
 
-            {conversations.length === 0 ? (
-              <div className="px-6 py-12 text-center">
-                <MessageSquare className="w-12 h-12 text-surface-300 mx-auto mb-3" />
-                <p className="text-surface-500 mb-4">No conversations yet</p>
-                <button
-                  onClick={handleCreateConversation}
-                  disabled={isCreatingConversation}
-                  className="text-accent-600 hover:underline"
-                >
-                  Start a new conversation
-                </button>
-              </div>
-            ) : (
-              <div className="divide-y divide-surface-100">
-                {conversations.map(conv => (
-                  <Link
-                    key={conv.id}
-                    to="/$conversationId"
-                    params={{ conversationId: conv.id }}
-                    className="flex items-center justify-between px-6 py-4 hover:bg-surface-50 transition-colors"
+            {/* Tab content */}
+            {activeTab === 'conversations' ? (
+              <>
+                {/* New conversation button */}
+                <div className="px-6 py-3 border-b border-surface-100 flex justify-end">
+                  <button
+                    onClick={handleCreateConversation}
+                    disabled={isCreatingConversation}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-surface-300 text-surface-600 text-sm font-medium rounded-md hover:bg-surface-50 hover:border-surface-400 disabled:opacity-50"
                   >
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-surface-800 truncate">
-                        {conv.title || 'Untitled conversation'}
+                    <Plus className="w-4 h-4" />
+                    {isCreatingConversation ? 'Creating...' : 'New'}
+                  </button>
+                </div>
+
+                {conversations.length === 0 ? (
+                  <div className="px-6 py-12 text-center">
+                    <MessageSquare className="w-10 h-10 text-surface-300 mx-auto mb-2" />
+                    <p className="text-surface-500 text-sm">No conversations yet</p>
+                    <button
+                      onClick={handleCreateConversation}
+                      disabled={isCreatingConversation}
+                      className="text-sm text-accent-600 hover:underline mt-2"
+                    >
+                      Start a new conversation
+                    </button>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-surface-100">
+                    {conversations.map(conv => (
+                      <Link
+                        key={conv.id}
+                        to="/$conversationId"
+                        params={{ conversationId: conv.id }}
+                        className="flex items-center justify-between px-6 py-4 hover:bg-surface-50 transition-colors"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-surface-800 truncate">
+                            {conv.title || 'Untitled conversation'}
+                          </div>
+                          {conv.last_message_preview && (
+                            <p className="text-sm text-surface-500 truncate mt-0.5">
+                              {conv.last_message_preview}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-4 ml-4">
+                          {conv.message_count !== undefined && (
+                            <span className="text-xs text-surface-400">
+                              {conv.message_count} messages
+                            </span>
+                          )}
+                          <span className="text-xs text-surface-400">
+                            {formatTimestamp(conv.updated_at)}
+                          </span>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              /* Snapshots tab */
+              <>
+                {isLoadingSnapshots ? (
+                  <div className="px-6 py-12 text-center text-surface-500">
+                    Loading snapshots...
+                  </div>
+                ) : snapshots.length === 0 ? (
+                  <div className="px-6 py-12 text-center">
+                    <History className="w-10 h-10 text-surface-300 mx-auto mb-2" />
+                    <p className="text-surface-500 text-sm">No snapshots yet</p>
+                    <p className="text-surface-400 text-xs mt-1">
+                      Snapshots are created when you save your work in a conversation
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-surface-100">
+                    {snapshots.map((snapshot, index) => (
+                      <div
+                        key={snapshot.id}
+                        className={`px-6 py-4 ${snapshot.is_current ? 'bg-accent-50/50' : ''}`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              {snapshot.is_current && (
+                                <span className="text-xs px-1.5 py-0.5 bg-accent-100 text-accent-700 rounded font-medium">
+                                  Current
+                                </span>
+                              )}
+                              {index === 0 && !snapshot.is_current && (
+                                <span className="text-xs px-1.5 py-0.5 bg-surface-100 text-surface-600 rounded">
+                                  Latest
+                                </span>
+                              )}
+                              <span className="text-xs text-surface-400">
+                                {formatTimestamp(snapshot.created_at)}
+                              </span>
+                            </div>
+                            {snapshot.summary ? (
+                              <p className="text-sm text-surface-700 mt-1">{snapshot.summary}</p>
+                            ) : (
+                              <p className="text-sm text-surface-400 mt-1 italic">
+                                {snapshot.source === 'system' ? 'Auto-saved' :
+                                 snapshot.source === 'web' ? 'Saved from web' :
+                                 snapshot.source === 'cli' ? 'Saved from CLI' : 'Snapshot'}
+                              </p>
+                            )}
+                          </div>
+                          <div className="text-xs font-mono text-surface-400 flex-shrink-0">
+                            {snapshot.manifest_hash.slice(0, 8)}
+                          </div>
+                        </div>
                       </div>
-                      {conv.last_message_preview && (
-                        <p className="text-sm text-surface-500 truncate mt-0.5">
-                          {conv.last_message_preview}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-4 ml-4">
-                      {conv.message_count !== undefined && (
-                        <span className="text-xs text-surface-400">
-                          {conv.message_count} messages
-                        </span>
-                      )}
-                      <span className="text-xs text-surface-400">
-                        {formatTimestamp(conv.updated_at)}
-                      </span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -858,9 +1065,45 @@ export function WorkspaceDetail() {
 
       {/* Sync Success Toast */}
       {syncResult?.success && (
-        <div className="fixed bottom-4 right-4 bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 z-50">
+        <div className="fixed bottom-4 right-4 bg-green-600 text-white px-4 py-3 rounded-md shadow-lg flex items-center gap-2 z-50">
           <Check className="w-5 h-5" />
           <span>Synced! {syncResult.filesAdded} added, {syncResult.filesUpdated} updated</span>
+        </div>
+      )}
+
+      {/* Deployment Success Banner */}
+      {currentDeployment?.status === 'success' && currentDeployment.url && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-status-success to-emerald-600 text-white px-6 py-3 rounded-md shadow-lg flex items-center gap-4 z-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-5 h-5" />
+            <span>Deployed successfully!</span>
+          </div>
+          <a
+            href={currentDeployment.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded text-sm font-medium transition-colors"
+          >
+            Open Site
+          </a>
+          <button
+            onClick={() => setCurrentDeployment(null)}
+            className="p-1 hover:bg-white/20 rounded transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Deployment Logs Panel */}
+      {showDeploymentLogs && currentDeployment && (
+        <div className="fixed inset-y-0 right-0 w-[500px] z-50 shadow-xl">
+          <DeploymentLogs
+            deploymentId={currentDeployment.id}
+            isStreaming={currentDeployment.status === 'deploying'}
+            entries={deploymentLogs}
+            onClose={() => setShowDeploymentLogs(false)}
+          />
         </div>
       )}
     </div>
@@ -903,7 +1146,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+      <div className="bg-white rounded-md shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-200">
           <h2 className="text-lg font-semibold text-surface-800 flex items-center gap-2">
@@ -922,7 +1165,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {/* Summary */}
-          <div className="p-4 bg-surface-50 rounded-lg">
+          <div className="p-4 bg-surface-50 rounded-md">
             <p className="text-sm text-surface-700">{preview.summary}</p>
           </div>
 
@@ -940,7 +1183,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
                     <Copy className="w-4 h-4 text-blue-600" />
                     Files to add from main ({copyActions.length})
                   </h3>
-                  <div className="bg-blue-50 rounded-lg p-3">
+                  <div className="bg-blue-50 rounded-md p-3">
                     <ul className="space-y-1">
                       {copyActions.map(action => (
                         <li key={action.path} className="text-sm text-surface-700 flex items-center gap-2">
@@ -960,7 +1203,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
                     <Merge className="w-4 h-4 text-purple-600" />
                     Files combined automatically ({combineActions.length})
                   </h3>
-                  <div className="bg-purple-50 rounded-lg p-3">
+                  <div className="bg-purple-50 rounded-md p-3">
                     <ul className="space-y-2">
                       {combineActions.map(action => (
                         <li key={action.path} className="text-sm">
@@ -987,7 +1230,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
                   </h3>
                   <div className="space-y-4">
                     {preview.decisions_needed.map(decision => (
-                      <div key={decision.path} className="bg-yellow-50 rounded-lg p-4">
+                      <div key={decision.path} className="bg-yellow-50 rounded-md p-4">
                         <div className="font-mono text-xs text-surface-700 mb-3 font-medium">{decision.path}</div>
 
                         {/* Intent comparison */}
@@ -1011,7 +1254,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
                           {decision.options.map(option => (
                             <label
                               key={option.id}
-                              className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                              className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
                                 decisions[decision.path] === option.id
                                   ? 'bg-accent-50 border-accent-300'
                                   : 'bg-white border-surface-200 hover:border-surface-300'
@@ -1023,7 +1266,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
                                 value={option.id}
                                 checked={decisions[decision.path] === option.id}
                                 onChange={() => handleDecisionChange(decision.path, option.id)}
-                                className="mt-0.5 text-accent-500 focus:ring-accent-500"
+                                className="mt-0.5 text-accent-500 focus:ring-surface-400"
                               />
                               <div className="flex-1">
                                 <div className="flex items-center gap-2">
@@ -1059,7 +1302,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
             <button
               onClick={onClose}
               disabled={isSyncing}
-              className="px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-100 rounded-lg transition-colors disabled:opacity-50"
+              className="px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-100 rounded-md transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
@@ -1067,7 +1310,7 @@ function SyncPreviewModal({ preview, onClose, onSync, isSyncing }: SyncPreviewMo
               <button
                 onClick={() => onSync(decisions)}
                 disabled={isSyncing || (hasDecisions && !allDecisionsMade)}
-                className="flex items-center gap-2 px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-lg hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-md hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 title={hasDecisions && !allDecisionsMade ? 'Select an option for each conflict' : 'Apply sync'}
               >
                 {isSyncing ? (
@@ -1116,7 +1359,7 @@ function FileListSection({
   const hasMore = files.length > 3;
 
   return (
-    <div className={`rounded-lg ${bgColor}`}>
+    <div className={`rounded-md ${bgColor}`}>
       <button
         onClick={onToggle}
         className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium ${textColor}`}

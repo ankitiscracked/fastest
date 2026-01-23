@@ -61,7 +61,7 @@ export function DeploymentLogs({
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-2 py-1 text-xs rounded transition-colors ${
+              className={`px-2 py-1 text-xs rounded-sm transition-colors ${
                 filter === f
                   ? 'bg-surface-700 text-white'
                   : 'text-surface-400 hover:text-white'
@@ -125,7 +125,7 @@ export function DeploymentLogs({
             type="checkbox"
             checked={autoScroll}
             onChange={(e) => setAutoScroll(e.target.checked)}
-            className="rounded border-surface-600 bg-surface-700 text-accent-500 focus:ring-accent-500"
+            className="rounded-sm border-surface-600 bg-surface-700 text-accent-500 focus:ring-surface-400"
           />
           Auto-scroll
         </label>

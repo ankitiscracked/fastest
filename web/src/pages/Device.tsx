@@ -213,7 +213,7 @@ export function Device() {
                 type="text"
                 value={userCode}
                 onChange={(e) => setUserCode(formatCode(e.target.value))}
-                className="mt-4 block w-full px-3 py-4 border border-surface-300 rounded-md shadow-sm placeholder-surface-400 focus:outline-none focus:ring-accent-500 focus:border-accent-500 text-center text-2xl tracking-widest font-mono"
+                className="mt-4 block w-full px-3 py-4 border border-surface-300 rounded-md shadow-sm placeholder-surface-400 focus:outline-none focus:border-surface-400 text-center text-2xl tracking-widest font-mono transition-colors"
                 placeholder="ABCD-1234"
                 maxLength={9}
                 autoFocus
@@ -224,7 +224,7 @@ export function Device() {
             <button
               type="submit"
               disabled={userCode.replace(/-/g, '').length < 8}
-              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-accent-500 hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-accent-500 hover:bg-accent-600 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Continue
             </button>
@@ -233,7 +233,7 @@ export function Device() {
 
         {step === 'authorize' && (
           <div className="mt-8 space-y-6">
-            <div className="bg-surface-100 rounded-lg p-4 text-center">
+            <div className="bg-surface-100 rounded-md p-4 text-center">
               <p className="text-sm text-surface-600">Authorizing device with code</p>
               <p className="text-xl font-mono font-bold text-surface-800">{userCode}</p>
             </div>
@@ -241,7 +241,7 @@ export function Device() {
             {isAuthenticated && user ? (
               // User is already logged in - show simple authorize button
               <div className="text-center space-y-4">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
                   <p className="text-sm text-blue-700">
                     Logged in as <strong>{user.email}</strong>
                   </p>
@@ -250,7 +250,7 @@ export function Device() {
                 <button
                   onClick={handleAuthorizeWithSession}
                   disabled={loading}
-                  className="w-full py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-accent-500 hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-500 disabled:opacity-50"
+                  className="w-full py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-accent-500 hover:bg-accent-600 focus:outline-none disabled:opacity-50"
                 >
                   {loading ? 'Authorizing...' : 'Authorize this device'}
                 </button>
@@ -286,7 +286,7 @@ export function Device() {
                   setStep('code');
                   setUserCode('');
                 }}
-                className="flex-1 py-2 px-4 border border-surface-300 rounded-md shadow-sm text-sm font-medium text-surface-700 bg-white hover:bg-surface-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-500"
+                className="flex-1 py-2 px-4 border border-surface-300 rounded-md shadow-sm text-sm font-medium text-surface-700 bg-white hover:bg-surface-50 focus:outline-none focus:border-surface-400 transition-colors"
               >
                 Back
               </button>
@@ -294,7 +294,7 @@ export function Device() {
                 type="button"
                 onClick={handleDeny}
                 disabled={loading}
-                className="flex-1 py-2 px-4 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+                className="flex-1 py-2 px-4 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:border-red-400 disabled:opacity-50 transition-colors"
               >
                 Deny
               </button>

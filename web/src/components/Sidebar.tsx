@@ -8,6 +8,8 @@ import {
   MessageSquare,
   AlertTriangle,
   Check,
+  PanelLeftClose,
+  PanelLeft,
 } from 'lucide-react';
 import type { Project, Workspace, ConversationWithContext } from '@fastest/shared';
 import { api } from '../api/client';
@@ -34,10 +36,10 @@ export function Sidebar() {
   // Data state
   const [projects, setProjects] = useState<ProjectWithWorkspaces[]>([]);
   const [recentConversations, setRecentConversations] = useState<ConversationWithContext[]>([]);
-  const [currentConversation, setCurrentConversation] = useState<ConversationWithContext | null>(null);
 
   // UI state
   const [loading, setLoading] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [createProjectName, setCreateProjectName] = useState('');
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
@@ -49,12 +51,10 @@ export function Sidebar() {
     loadData();
   }, []);
 
-  // Load current conversation when conversationId changes
+  // Load current conversation when conversationId changes (for auto-expanding project)
   useEffect(() => {
     if (conversationId) {
       loadCurrentConversation(conversationId);
-    } else {
-      setCurrentConversation(null);
     }
   }, [conversationId]);
 
@@ -78,7 +78,6 @@ export function Sidebar() {
   const loadCurrentConversation = async (convId: string) => {
     try {
       const { conversation } = await api.getConversation(convId);
-      setCurrentConversation(conversation);
 
       // Auto-expand the project containing this conversation
       const projectId = conversation.project_id;
@@ -245,160 +244,221 @@ export function Sidebar() {
     }
   };
 
-  const isWorkspaceActive = (workspaceId: string) => {
-    return currentConversation?.workspace_id === workspaceId;
-  };
-
   return (
-    <div className="w-60 h-full flex flex-col bg-surface-50 border-r border-surface-200">
+    <div className={`${collapsed ? 'w-14' : 'w-60'} h-full flex flex-col bg-surface-50 border-r border-surface-200 transition-all duration-200`}>
       {/* Header */}
-      <div className="flex-shrink-0 h-12 px-4 flex items-center justify-between border-b border-surface-200 bg-white">
-        <Link to="/" className="text-lg font-bold text-accent-600">
-          Fastest
-        </Link>
-        <div className="flex items-center gap-2">
-          {user?.picture ? (
-            <img
-              src={user.picture}
-              alt={user.name || user.email}
-              className="w-6 h-6 rounded-full"
-            />
-          ) : (
-            <div className="w-6 h-6 rounded-full bg-accent-100 flex items-center justify-center text-xs font-medium text-accent-700">
-              {(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
-            </div>
+      <div className={`flex-shrink-0 h-12 ${collapsed ? 'px-2' : 'px-4'} flex items-center justify-between border-b border-surface-200 bg-white`}>
+        {!collapsed && (
+          <Link to="/" className="text-lg font-bold text-accent-600">
+            Fastest
+          </Link>
+        )}
+        <div className={`flex items-center gap-2 ${collapsed ? 'w-full justify-center' : ''}`}>
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            className="p-1.5 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-md transition-colors"
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? <PanelLeft className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
+          {!collapsed && (
+            user?.picture ? (
+              <img
+                src={user.picture}
+                alt={user.name || user.email}
+                className="w-6 h-6 rounded-full"
+              />
+            ) : (
+              <div className="w-6 h-6 rounded-full bg-accent-100 flex items-center justify-center text-xs font-medium text-accent-700">
+                {(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
+              </div>
+            )
           )}
         </div>
       </div>
 
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Projects section */}
-        <div className="px-3 py-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-surface-500 uppercase tracking-wide">
-              Projects
-            </span>
+      {collapsed ? (
+        // Collapsed view - just icons
+        <div className="flex-1 overflow-y-auto py-3">
+          <div className="flex flex-col items-center gap-2">
+            <Link
+              to="/"
+              className="p-2 text-surface-500 hover:text-accent-600 hover:bg-surface-100 rounded-md transition-colors"
+              title="Home"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+              </svg>
+            </Link>
+            {recentConversations.slice(0, 5).map(conv => (
+              <Link
+                key={conv.id}
+                to="/$conversationId"
+                params={{ conversationId: conv.id }}
+                className={`p-2 rounded-md transition-colors ${
+                  conversationId === conv.id
+                    ? 'bg-surface-100 text-surface-700'
+                    : 'text-surface-500 hover:text-surface-700 hover:bg-surface-100'
+                }`}
+                title={conv.title || 'Untitled'}
+              >
+                <MessageSquare className="w-5 h-5" />
+              </Link>
+            ))}
           </div>
-
-          {loading ? (
-            <div className="text-sm text-surface-400 px-2 py-4">Loading...</div>
-          ) : projects.length === 0 ? (
-            <div className="text-sm text-surface-400 px-2 py-4">No projects yet</div>
-          ) : (
-            <div className="space-y-1">
-              {projects.map(project => (
-                <ProjectItem
-                  key={project.id}
-                  project={project}
-                  isActive={currentConversation?.project_id === project.id}
-                  isWorkspaceActive={isWorkspaceActive}
-                  onToggle={() => toggleProject(project.id)}
-                  onCreateWorkspace={() => {
-                    setCreatingWorkspaceFor(project.id);
-                  }}
-                  onCreateConversation={handleCreateConversation}
-                />
-              ))}
+        </div>
+      ) : (
+        // Expanded view - full content
+        <div className="flex-1 overflow-y-auto">
+          {/* Projects section */}
+          <div className="px-3 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-surface-500">
+                Projects
+              </span>
             </div>
-          )}
 
-          {/* New Project Button */}
-          <Popover open={createProjectOpen} onOpenChange={setCreateProjectOpen}>
-            <PopoverTrigger className="w-full mt-2 flex items-center gap-2 px-2 py-1.5 text-sm text-surface-600 hover:bg-surface-100 rounded-md transition-colors">
-              <Plus className="w-4 h-4" />
-              <span>New Project</span>
-            </PopoverTrigger>
-            <PopoverPopup className="w-56 p-3">
-              <input
-                type="text"
-                value={createProjectName}
-                onChange={e => setCreateProjectName(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') handleCreateProject();
-                  if (e.key === 'Escape') {
-                    setCreateProjectOpen(false);
-                    setCreateProjectName('');
-                  }
-                }}
-                placeholder="Project name..."
-                className="input"
-                autoFocus
-              />
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={handleCreateProject}
-                  disabled={!createProjectName.trim() || isCreatingProject}
-                  className="btn-primary flex-1"
-                >
-                  {isCreatingProject ? 'Creating...' : 'Create'}
-                </button>
-                <button
-                  onClick={() => {
-                    setCreateProjectOpen(false);
-                    setCreateProjectName('');
-                  }}
-                  className="btn-ghost"
-                >
-                  Cancel
-                </button>
+            {loading ? (
+              <div className="text-sm text-surface-400 px-2 py-4">Loading...</div>
+            ) : projects.length === 0 ? (
+              <div className="text-sm text-surface-400 px-2 py-4">No projects yet</div>
+            ) : (
+              <div className="space-y-1">
+                {projects.map(project => (
+                  <ProjectItem
+                    key={project.id}
+                    project={project}
+                    onToggle={() => toggleProject(project.id)}
+                    onCreateWorkspace={() => {
+                      setCreatingWorkspaceFor(project.id);
+                    }}
+                    onCreateConversation={handleCreateConversation}
+                  />
+                ))}
               </div>
-            </PopoverPopup>
-          </Popover>
-        </div>
+            )}
 
-        {/* Divider */}
-        <div className="mx-3 border-t border-surface-200" />
-
-        {/* Recent conversations section */}
-        <div className="px-3 py-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-surface-500 uppercase tracking-wide">
-              Recent
-            </span>
+            {/* New Project Button */}
+            <Popover open={createProjectOpen} onOpenChange={setCreateProjectOpen}>
+              <PopoverTrigger className="w-full mt-2 flex items-center gap-2 px-2 py-1.5 text-sm text-surface-600 hover:bg-surface-100 rounded-md transition-colors">
+                <Plus className="w-4 h-4" />
+                <span>New Project</span>
+              </PopoverTrigger>
+              <PopoverPopup className="w-56 p-3">
+                <input
+                  type="text"
+                  value={createProjectName}
+                  onChange={e => setCreateProjectName(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleCreateProject();
+                    if (e.key === 'Escape') {
+                      setCreateProjectOpen(false);
+                      setCreateProjectName('');
+                    }
+                  }}
+                  placeholder="Project name..."
+                  className="input"
+                  autoFocus
+                />
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={handleCreateProject}
+                    disabled={!createProjectName.trim() || isCreatingProject}
+                    className="btn-primary flex-1"
+                  >
+                    {isCreatingProject ? 'Creating...' : 'Create'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCreateProjectOpen(false);
+                      setCreateProjectName('');
+                    }}
+                    className="btn-ghost"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </PopoverPopup>
+            </Popover>
           </div>
 
-          {recentConversations.length === 0 ? (
-            <div className="text-sm text-surface-400 px-2 py-4">No conversations yet</div>
-          ) : (
-            <div className="space-y-1">
-              {recentConversations.map(conv => (
-                <Link
-                  key={conv.id}
-                  to="/$conversationId"
-                  params={{ conversationId: conv.id }}
-                  className={`flex items-center gap-2 px-2 py-1.5 text-sm rounded-md transition-colors ${
-                    conversationId === conv.id
-                      ? 'bg-accent-100 text-accent-700'
-                      : 'text-surface-700 hover:bg-surface-100'
-                  }`}
-                  title={conv.title || 'Untitled'}
-                >
-                  <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="truncate">{conv.title || 'Untitled'}</span>
-                </Link>
-              ))}
+          {/* Divider */}
+          <div className="mx-3 border-t border-surface-200" />
+
+          {/* Recent conversations section */}
+          <div className="px-3 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-surface-500">
+                Recent
+              </span>
             </div>
-          )}
+
+            {recentConversations.length === 0 ? (
+              <div className="text-sm text-surface-400 px-2 py-4">No conversations yet</div>
+            ) : (
+              <div className="space-y-1">
+                {recentConversations.map(conv => (
+                  <Link
+                    key={conv.id}
+                    to="/$conversationId"
+                    params={{ conversationId: conv.id }}
+                    className={`flex items-center gap-2 px-2 py-1.5 text-sm rounded-md transition-colors ${
+                      conversationId === conv.id
+                        ? 'bg-surface-100 text-surface-900'
+                        : 'text-surface-700 hover:bg-surface-100'
+                    }`}
+                    title={conv.title || 'Untitled'}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="truncate">{conv.title || 'Untitled'}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Footer */}
       <div className="flex-shrink-0 border-t border-surface-200 bg-white">
-        <Link
-          to="/settings"
-          className="flex items-center gap-2 px-4 py-3 text-sm text-surface-600 hover:bg-surface-50 transition-colors"
-        >
-          <Settings className="w-4 h-4" />
-          <span>Settings</span>
-        </Link>
-        <button
-          onClick={logout}
-          className="w-full flex items-center gap-2 px-4 py-3 text-sm text-surface-600 hover:bg-surface-50 transition-colors border-t border-surface-100"
-        >
-          <LogOut className="w-4 h-4" />
-          <span>Logout</span>
-        </button>
+        {collapsed ? (
+          // Collapsed footer - just icons
+          <div className="flex flex-col items-center py-2 gap-1">
+            <Link
+              to="/settings"
+              className="p-2 text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-md transition-colors"
+              title="Settings"
+            >
+              <Settings className="w-5 h-5" />
+            </Link>
+            <button
+              onClick={logout}
+              className="p-2 text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-md transition-colors"
+              title="Logout"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
+          </div>
+        ) : (
+          // Expanded footer
+          <>
+            <Link
+              to="/settings"
+              className="flex items-center gap-2 px-4 py-3 text-sm text-surface-600 hover:bg-surface-50 transition-colors"
+            >
+              <Settings className="w-4 h-4" />
+              <span>Settings</span>
+            </Link>
+            <button
+              onClick={logout}
+              className="w-full flex items-center gap-2 px-4 py-3 text-sm text-surface-600 hover:bg-surface-50 transition-colors border-t border-surface-100"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Logout</span>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Create Workspace Modal */}
@@ -411,7 +471,7 @@ export function Sidebar() {
               setCreateWorkspaceName('');
             }}
           />
-          <div className="relative bg-white rounded-lg shadow-xl w-80 p-4">
+          <div className="relative bg-white rounded-md shadow-xl w-80 p-4">
             <div className="text-sm font-medium text-surface-800 mb-3">New Workspace</div>
             <input
               type="text"
@@ -455,8 +515,6 @@ export function Sidebar() {
 
 interface ProjectItemProps {
   project: ProjectWithWorkspaces;
-  isActive: boolean;
-  isWorkspaceActive: (workspaceId: string) => boolean;
   onToggle: () => void;
   onCreateWorkspace: () => void;
   onCreateConversation: (workspaceId: string) => void;
@@ -464,8 +522,6 @@ interface ProjectItemProps {
 
 function ProjectItem({
   project,
-  isActive,
-  isWorkspaceActive,
   onToggle,
   onCreateWorkspace,
   onCreateConversation,
@@ -476,9 +532,7 @@ function ProjectItem({
     <div>
       {/* Project row */}
       <div
-        className={`group flex items-center gap-1 px-2 py-1.5 rounded-md transition-colors ${
-          isActive ? 'bg-accent-50' : 'hover:bg-surface-100'
-        }`}
+        className="group flex items-center gap-1 px-2 py-1.5 rounded-md transition-colors hover:bg-surface-100"
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
       >
@@ -494,9 +548,7 @@ function ProjectItem({
         <Link
           to="/projects/$projectId"
           params={{ projectId: project.id }}
-          className={`flex-1 text-sm font-medium truncate ${
-            isActive ? 'text-accent-700' : 'text-surface-700'
-          }`}
+          className="flex-1 text-sm font-medium truncate text-surface-700"
         >
           {project.name}
         </Link>
@@ -528,7 +580,6 @@ function ProjectItem({
               <WorkspaceItem
                 key={workspace.id}
                 workspace={workspace}
-                isActive={isWorkspaceActive(workspace.id)}
                 onCreateConversation={() => onCreateConversation(workspace.id)}
               />
             ))
@@ -541,11 +592,10 @@ function ProjectItem({
 
 interface WorkspaceItemProps {
   workspace: WorkspaceWithDrift;
-  isActive: boolean;
   onCreateConversation: () => void;
 }
 
-function WorkspaceItem({ workspace, isActive, onCreateConversation }: WorkspaceItemProps) {
+function WorkspaceItem({ workspace, onCreateConversation }: WorkspaceItemProps) {
   const [hovering, setHovering] = useState(false);
 
   const getDriftIndicator = () => {
@@ -573,16 +623,12 @@ function WorkspaceItem({ workspace, isActive, onCreateConversation }: WorkspaceI
 
   return (
     <div
-      className={`group flex items-center gap-1 px-2 py-1 rounded-md transition-colors ${
-        isActive ? 'bg-accent-100 text-accent-700' : 'hover:bg-surface-100 text-surface-600'
-      }`}
+      className="group flex items-center gap-1 px-2 py-1 rounded-md transition-colors hover:bg-surface-100 text-surface-600"
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
     >
       {/* Status indicator */}
-      <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${
-        isActive ? 'bg-accent-500' : 'bg-surface-300'
-      }`} />
+      <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-surface-300" />
 
       {/* Workspace name - links to workspace page */}
       <Link

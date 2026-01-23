@@ -123,6 +123,27 @@ const projectDocsRoute = createRoute({
   component: DocsPage,
 });
 
+// Settings route under conversation layout
+const settingsConversationRoute = createRoute({
+  getParentRoute: () => conversationLayoutRoute,
+  path: '/settings',
+  component: Settings,
+});
+
+// Project detail route under conversation layout
+const projectDetailConversationRoute = createRoute({
+  getParentRoute: () => conversationLayoutRoute,
+  path: '/projects/$projectId',
+  component: ProjectDetail,
+});
+
+// Project docs route under conversation layout
+const projectDocsConversationRoute = createRoute({
+  getParentRoute: () => conversationLayoutRoute,
+  path: '/projects/$projectId/docs',
+  component: DocsPage,
+});
+
 // Build route tree
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -131,6 +152,9 @@ const routeTree = rootRoute.addChildren([
     homeRoute,
     conversationRoute,
     workspaceDetailRoute,
+    settingsConversationRoute,
+    projectDetailConversationRoute,
+    projectDocsConversationRoute,
   ]),
   authenticatedRoute.addChildren([
     projectsRoute,

@@ -57,12 +57,12 @@ export function Workspaces() {
       )}
 
       {workspaces.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg border border-surface-200">
+        <div className="text-center py-12 bg-white rounded-md border border-surface-200">
           <h3 className="text-lg font-medium text-surface-800 mb-2">No workspaces</h3>
           <p className="text-surface-500 mb-4">
             Create a workspace to start working on this project
           </p>
-          <div className="bg-surface-100 rounded-lg p-4 inline-block text-left">
+          <div className="bg-surface-100 rounded-md p-4 inline-block text-left">
             <code className="text-sm">fst workspace create --name my-workspace</code>
           </div>
         </div>
@@ -72,7 +72,7 @@ export function Workspaces() {
             <Link
               key={workspace.id}
               to="/"
-              className="block bg-white rounded-lg border border-surface-200 p-4 hover:border-accent-300 hover:shadow-sm transition-all"
+              className="block bg-white rounded-md border border-surface-200 p-4 hover:border-accent-300 hover:shadow-sm transition-all"
             >
               <div className="flex items-start justify-between">
                 <div>

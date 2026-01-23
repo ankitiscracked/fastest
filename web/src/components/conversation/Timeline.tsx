@@ -34,7 +34,7 @@ export function Timeline({ items }: TimelineProps) {
       {/* Header with summary */}
       <div className="px-3 py-2 border-b border-surface-200 bg-surface-50">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-surface-500 uppercase tracking-wide">
+          <h3 className="text-xs font-semibold text-surface-500">
             Changes
           </h3>
           <div className="flex items-center gap-1.5 text-xs">
@@ -94,11 +94,8 @@ function TimelineEntry({ item, isLatest }: TimelineEntryProps) {
   const isPending = item.summaryStatus === 'pending';
 
   return (
-    <div
-      className={`relative pl-8 pr-3 py-3 transition-colors ${
-        isLatest ? 'bg-accent-50/50' : 'hover:bg-surface-50'
-      }`}
-    >
+    <div className="relative pl-8 pr-3 py-3 transition-colors hover:bg-surface-50">
+
       {/* Timeline dot */}
       <div
         className={`absolute left-[0.6875rem] w-3 h-3 rounded-full border-2 border-white shadow-sm ${
@@ -113,7 +110,7 @@ function TimelineEntry({ item, isLatest }: TimelineEntryProps) {
 
       {/* Latest indicator */}
       {isLatest && (
-        <span className="absolute right-3 top-3 text-[9px] font-semibold uppercase tracking-wider text-accent-600 bg-accent-100 px-1.5 py-0.5 rounded">
+        <span className="absolute right-3 top-3 text-[10px] font-medium text-surface-500 border border-surface-300 px-1.5 py-0.5 rounded">
           Latest
         </span>
       )}
@@ -211,7 +208,7 @@ function FileChangeRow({ file }: { file: FileChange }) {
   return (
     <div className="flex items-center gap-2 text-xs py-1 group">
       <span
-        className={`w-4 h-4 flex items-center justify-center rounded text-white text-[10px] font-semibold ${config.bg}`}
+        className={`w-4 h-4 flex items-center justify-center rounded-sm text-white text-[10px] font-semibold ${config.bg}`}
       >
         {config.label}
       </span>

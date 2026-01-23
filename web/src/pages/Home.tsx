@@ -20,7 +20,6 @@ export function Home() {
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
-  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -84,12 +83,6 @@ export function Home() {
     }
   };
 
-  const handleClearSelection = () => {
-    setCurrentProject(null);
-    setCurrentWorkspace(null);
-    setWorkspaces([]);
-  };
-
   const handleCreateProject = async (name: string) => {
     setIsCreatingProject(true);
     setError(null);
@@ -106,22 +99,6 @@ export function Home() {
       setError(err instanceof Error ? err.message : 'Failed to create project');
     } finally {
       setIsCreatingProject(false);
-    }
-  };
-
-  const handleCreateWorkspace = async (name: string) => {
-    if (!currentProject) return;
-
-    setIsCreatingWorkspace(true);
-    setError(null);
-    try {
-      const { workspace } = await api.createWorkspace(currentProject.id, name);
-      setWorkspaces((prev) => [...prev, workspace]);
-      setCurrentWorkspace(workspace);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create workspace');
-    } finally {
-      setIsCreatingWorkspace(false);
     }
   };
 
@@ -217,7 +194,7 @@ export function Home() {
           </div>
 
           {/* Prompt Input */}
-          <div className="bg-white rounded-xl shadow-sm border border-surface-200 p-4 mb-8">
+          <div className="bg-white rounded-md border border-surface-200 p-4 mb-8">
             <PromptInput
               onSubmit={handleSubmitPrompt}
               isRunning={isCreating}
@@ -229,13 +206,12 @@ export function Home() {
                 currentProject={currentProject}
                 workspaces={workspaces}
                 currentWorkspace={currentWorkspace}
+                mainWorkspaceId={currentProject?.main_workspace_id}
                 onProjectChange={handleProjectChange}
                 onWorkspaceChange={handleWorkspaceChange}
                 onCreateProject={handleCreateProject}
-                onCreateWorkspace={handleCreateWorkspace}
-                onClearSelection={handleClearSelection}
+                onBranch={async () => {}} // Branching happens in conversation view
                 isCreatingProject={isCreatingProject}
-                isCreatingWorkspace={isCreatingWorkspace}
               />
             </div>
           </div>
@@ -257,85 +233,45 @@ export function Home() {
                 // Navigate to workspace and trigger sync
                 navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
               }}
+              onApplyPrompt={async (workspaceId, prompt) => {
+                // Find or create a conversation for this workspace, then navigate with the prompt pre-filled
+                const conv = conversations.find((c) => c.workspace_id === workspaceId);
+                if (conv) {
+                  // Store the prompt in sessionStorage for the ConversationView to pick up
+                  sessionStorage.setItem('pendingPrompt', prompt);
+                  navigate({ to: '/$conversationId', params: { conversationId: conv.id } });
+                } else {
+                  // Create a new conversation for this workspace
+                  try {
+                    const { conversation } = await api.createConversation(workspaceId);
+                    sessionStorage.setItem('pendingPrompt', prompt);
+                    navigate({ to: '/$conversationId', params: { conversationId: conversation.id } });
+                  } catch (err) {
+                    console.error('Failed to create conversation:', err);
+                    // Fallback: navigate to workspace
+                    navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
+                  }
+                }
+              }}
             />
-          </div>
-
-          {/* Quick Next Steps */}
-          <div className="mb-8">
-            <h2 className="text-sm font-medium text-surface-500 uppercase tracking-wide mb-3">
-              Quick Actions
-            </h2>
-            <div className="grid grid-cols-3 gap-3">
-              <QuickActionCard
-                icon={
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                    />
-                  </svg>
-                }
-                title="New Project"
-                description="Start from scratch"
-                onClick={() => {
-                  // TODO: Implement new project flow
-                }}
-              />
-              <QuickActionCard
-                icon={
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                    />
-                  </svg>
-                }
-                title="Import Repository"
-                description="From GitHub or local"
-                onClick={() => {
-                  // TODO: Implement import flow
-                }}
-              />
-              <QuickActionCard
-                icon={
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                    />
-                  </svg>
-                }
-                title="Templates"
-                description="Start with a template"
-                onClick={() => {
-                  // TODO: Implement templates
-                }}
-              />
-            </div>
           </div>
 
           {/* Recent Conversations */}
           <div>
-            <h2 className="text-sm font-medium text-surface-500 uppercase tracking-wide mb-3">
-              Recent Conversations
+            <h2 className="text-sm font-medium text-surface-500 mb-3">
+              Recent conversations
             </h2>
             {conversations.length === 0 ? (
-              <div className="bg-white rounded-xl border border-surface-200 p-8 text-center">
+              <div className="bg-white rounded-md border border-surface-200 p-8 text-center">
                 <p className="text-surface-500">No conversations yet. Start one above!</p>
               </div>
             ) : (
-              <div className="bg-white rounded-xl border border-surface-200 divide-y divide-surface-100">
+              <div className="bg-white rounded-md border border-surface-200 divide-y divide-surface-100">
                 {conversations.map((conversation) => (
                   <button
                     key={conversation.id}
                     onClick={() => handleConversationClick(conversation.id)}
-                    className="w-full text-left px-4 py-3 hover:bg-surface-50 transition-colors first:rounded-t-xl last:rounded-b-xl"
+                    className="w-full text-left px-4 py-3 hover:bg-surface-50 transition-colors first:rounded-t-md last:rounded-b-md"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex-1 min-w-0">
@@ -387,24 +323,3 @@ export function Home() {
   );
 }
 
-interface QuickActionCardProps {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  onClick: () => void;
-}
-
-function QuickActionCard({ icon, title, description, onClick }: QuickActionCardProps) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex flex-col items-center p-4 bg-white rounded-xl border border-surface-200 hover:border-accent-300 hover:shadow-sm transition-all text-center group"
-    >
-      <div className="w-10 h-10 rounded-full bg-surface-100 group-hover:bg-accent-100 flex items-center justify-center text-surface-500 group-hover:text-accent-600 transition-colors mb-2">
-        {icon}
-      </div>
-      <span className="text-sm font-medium text-surface-800">{title}</span>
-      <span className="text-xs text-surface-500">{description}</span>
-    </button>
-  );
-}

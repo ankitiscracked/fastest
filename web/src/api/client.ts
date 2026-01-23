@@ -273,6 +273,26 @@ class ApiClient {
     );
   }
 
+  async getWorkspaceSnapshots(workspaceId: string, options?: { limit?: number }) {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    const query = params.toString() ? `?${params}` : '';
+
+    return this.request<{
+      snapshots: Array<{
+        id: string;
+        project_id: string;
+        manifest_hash: string;
+        parent_snapshot_id: string | null;
+        source: string;
+        summary: string | null;
+        created_at: string;
+        is_current: boolean;
+      }>;
+      current_snapshot_id: string | null;
+    }>('GET', `/workspaces/${workspaceId}/snapshots${query}`);
+  }
+
   // Conversations
 
   async createConversation(workspaceId: string, title?: string) {
@@ -308,6 +328,36 @@ class ApiClient {
       `/conversations/${conversationId}`,
       { title }
     );
+  }
+
+  async moveConversationToWorkspace(conversationId: string, workspaceId: string) {
+    return this.request<{ success: boolean }>(
+      'PATCH',
+      `/conversations/${conversationId}`,
+      { workspace_id: workspaceId }
+    );
+  }
+
+  /**
+   * Create a snapshot from the conversation's current file state.
+   * This captures any dirty files (modified but not yet in a snapshot).
+   *
+   * Options:
+   * - generateSummary: Generate an LLM summary of changes
+   */
+  async createConversationSnapshot(
+    conversationId: string,
+    options?: { generateSummary?: boolean }
+  ) {
+    return this.request<{
+      snapshot_id: string | null;
+      manifest_hash: string | null;
+      was_dirty: boolean;
+      summary: string | null;
+      file_changes: { added: number; modified: number; deleted: number } | null;
+    }>('POST', `/conversations/${conversationId}/snapshot`, {
+      generate_summary: options?.generateSummary ?? false,
+    });
   }
 
   async getMessages(conversationId: string, options?: { limit?: number; before?: string }) {
@@ -386,6 +436,18 @@ class ApiClient {
     return this.request<{ deploymentId: string; message: string }>(
       'POST',
       `/conversations/${conversationId}/deploy`
+    );
+  }
+
+  async deployWorkspace(workspaceId: string) {
+    return this.request<{
+      deploymentId: string;
+      message: string;
+      snapshot_id: string;
+      conversation_id: string;
+    }>(
+      'POST',
+      `/workspaces/${workspaceId}/deploy`
     );
   }
 

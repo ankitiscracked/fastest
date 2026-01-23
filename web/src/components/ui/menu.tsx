@@ -32,7 +32,7 @@ export function MenuPopup({
       <MenuPositioner side={side} align={align} sideOffset={sideOffset}>
         <BaseMenu.Popup
           className={`
-            z-50 min-w-[12rem] bg-white border border-surface-200 rounded-lg shadow-lg py-1
+            z-50 min-w-[12rem] bg-white border border-surface-200 rounded-md shadow-lg py-1
             animate-in fade-in-0 zoom-in-95
             data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95
             ${className}

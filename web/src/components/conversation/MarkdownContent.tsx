@@ -147,7 +147,7 @@ export function MarkdownContent({ content, mode = 'streaming' }: MarkdownContent
   if (!content.trim()) return null;
 
   return (
-    <div ref={containerRef} className="markdown-content">
+    <div ref={containerRef} className="markdown-content text-sm">
       <Streamdown mode={mode}>
         {content}
       </Streamdown>

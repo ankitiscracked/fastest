@@ -153,9 +153,11 @@ projectRoutes.get('/:projectId', async (c) => {
     .select({
       id: snapshots.id,
       project_id: snapshots.projectId,
+      workspace_id: snapshots.workspaceId,
       content_hash: snapshots.manifestHash,
       parent_snapshot_id: snapshots.parentSnapshotId,
       source: snapshots.source,
+      summary: snapshots.summary,
       created_at: snapshots.createdAt,
     })
     .from(snapshots)
@@ -445,6 +447,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
   const body = await c.req.json<{
     content_hash: string;
     parent_snapshot_id?: string;
+    workspace_id?: string;
     source?: 'cli' | 'web';
   }>();
   const db = createDb(c.env.DB);
@@ -479,9 +482,11 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
       .select({
         id: snapshots.id,
         project_id: snapshots.projectId,
+        workspace_id: snapshots.workspaceId,
         content_hash: snapshots.manifestHash,
         parent_snapshot_id: snapshots.parentSnapshotId,
         source: snapshots.source,
+        summary: snapshots.summary,
         created_at: snapshots.createdAt,
       })
       .from(snapshots)
@@ -498,6 +503,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
   await db.insert(snapshots).values({
     id: snapshotId,
     projectId,
+    workspaceId: body.workspace_id || null,
     manifestHash: body.content_hash,
     parentSnapshotId: body.parent_snapshot_id || null,
     source,
@@ -525,9 +531,11 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
   const snapshot: Snapshot = {
     id: snapshotId,
     project_id: projectId,
+    workspace_id: body.workspace_id || null,
     content_hash: body.content_hash,
     parent_snapshot_id: body.parent_snapshot_id || null,
     source,
+    summary: null,
     created_at: now
   };
 
@@ -560,9 +568,11 @@ projectRoutes.get('/:projectId/snapshots', async (c) => {
     .select({
       id: snapshots.id,
       project_id: snapshots.projectId,
+      workspace_id: snapshots.workspaceId,
       content_hash: snapshots.manifestHash,
       parent_snapshot_id: snapshots.parentSnapshotId,
       source: snapshots.source,
+      summary: snapshots.summary,
       created_at: snapshots.createdAt,
     })
     .from(snapshots)

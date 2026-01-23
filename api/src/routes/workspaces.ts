@@ -1115,6 +1115,7 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     await db.insert(snapshots).values({
       id: snapshotBeforeId,
       projectId: workspace.project_id,
+      workspaceId: workspaceId,
       manifestHash: currentSnapshot.manifest_hash,
       parentSnapshotId: currentSnapshotId,
       source: 'system',
@@ -1303,6 +1304,7 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
   await db.insert(snapshots).values({
     id: newSnapshotId,
     projectId: workspace.project_id,
+    workspaceId: workspaceId,
     manifestHash: newManifestHash,
     parentSnapshotId: currentSnapshotId,
     source: 'web',
@@ -1766,3 +1768,173 @@ function parseFileSyncResponse(
     recommended_option: 'use_main',
   };
 }
+
+// Get snapshots for a workspace (shows project snapshots)
+workspaceRoutes.get('/:workspaceId/snapshots', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 100);
+  const db = createDb(c.env.DB);
+
+  // Verify ownership and get project ID
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      base_snapshot_id: workspaces.baseSnapshotId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Get all snapshots for this project
+  const snapshotResults = await db
+    .select({
+      id: snapshots.id,
+      project_id: snapshots.projectId,
+      workspace_id: snapshots.workspaceId,
+      manifest_hash: snapshots.manifestHash,
+      parent_snapshot_id: snapshots.parentSnapshotId,
+      source: snapshots.source,
+      summary: snapshots.summary,
+      created_at: snapshots.createdAt,
+    })
+    .from(snapshots)
+    .where(eq(snapshots.projectId, workspace.project_id))
+    .orderBy(desc(snapshots.createdAt))
+    .limit(limit);
+
+  // Mark which snapshot is current for this workspace
+  const snapshotsWithStatus = snapshotResults.map(s => ({
+    ...s,
+    is_current: s.id === workspace.base_snapshot_id,
+  }));
+
+  return c.json({
+    snapshots: snapshotsWithStatus,
+    current_snapshot_id: workspace.base_snapshot_id,
+  });
+});
+
+/**
+ * Deploy workspace from latest snapshot
+ * POST /v1/workspaces/:workspaceId/deploy
+ *
+ * Deploys the workspace using its latest snapshot.
+ * Requires at least one snapshot to exist for the workspace.
+ */
+workspaceRoutes.post('/:workspaceId/deploy', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  // Verify ownership and get workspace
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  const workspace = workspaceResult[0];
+  if (!workspace) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  // Get the latest snapshot for this workspace
+  const snapshotResult = await db
+    .select({
+      id: snapshots.id,
+      manifest_hash: snapshots.manifestHash,
+    })
+    .from(snapshots)
+    .where(eq(snapshots.workspaceId, workspaceId))
+    .orderBy(desc(snapshots.createdAt))
+    .limit(1);
+
+  const latestSnapshot = snapshotResult[0];
+  if (!latestSnapshot) {
+    return c.json({
+      error: {
+        code: 'NO_SNAPSHOT',
+        message: 'No snapshots found for this workspace. Save a snapshot before deploying.'
+      }
+    }, 400);
+  }
+
+  // Get or create a conversation for deployment
+  // Use the most recent conversation for this workspace
+  const conversationResult = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(eq(conversations.workspaceId, workspaceId))
+    .orderBy(desc(conversations.updatedAt))
+    .limit(1);
+
+  let conversationId: string;
+
+  if (conversationResult[0]) {
+    conversationId = conversationResult[0].id;
+  } else {
+    // Create a new conversation for deployment
+    conversationId = generateULID();
+    await db.insert(conversations).values({
+      id: conversationId,
+      workspaceId: workspaceId,
+      title: 'Deployment',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  // Get the conversation DO and update its manifest to the snapshot's manifest
+  const doId = c.env.ConversationSession.idFromName(conversationId);
+  const stub = c.env.ConversationSession.get(doId);
+
+  // First, set the manifest hash to the snapshot's manifest
+  const setManifestResponse = await stub.fetch(new Request('http://do/set-manifest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manifestHash: latestSnapshot.manifest_hash }),
+  }));
+
+  if (!setManifestResponse.ok) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to set deployment manifest' } }, 500);
+  }
+
+  // Get API URL and token for the sandbox to call back
+  const apiUrl = new URL(c.req.url).origin;
+  const apiToken = c.req.header('Authorization')?.replace('Bearer ', '') || '';
+
+  // Trigger the deployment
+  const response = await stub.fetch(new Request('http://do/deploy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiUrl, apiToken }),
+  }));
+
+  const data = await response.json();
+
+  return c.json({
+    ...data,
+    snapshot_id: latestSnapshot.id,
+    conversation_id: conversationId,
+  });
+});

@@ -61,13 +61,16 @@ export const projects = sqliteTable('projects', {
 export const snapshots = sqliteTable('snapshots', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id),
+  workspaceId: text('workspace_id'), // References workspaces.id (no FK to avoid circular ref)
   manifestHash: text('manifest_hash').notNull(),
   parentSnapshotId: text('parent_snapshot_id'),
   source: text('source').notNull().default('cli'),
+  summary: text('summary'), // LLM-generated description of changes
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
 }, (table) => [
   uniqueIndex('idx_snapshots_project_manifest').on(table.projectId, table.manifestHash),
   index('idx_snapshots_project').on(table.projectId, table.createdAt),
+  index('idx_snapshots_workspace').on(table.workspaceId, table.createdAt),
 ]);
 
 // Workspaces
@@ -169,4 +172,22 @@ export const jobs = sqliteTable('jobs', {
   index('idx_jobs_workspace').on(table.workspaceId, table.createdAt),
   index('idx_jobs_project').on(table.projectId, table.createdAt),
   index('idx_jobs_status').on(table.status, table.createdAt),
+]);
+
+// Refactoring suggestions from background analysis
+export const refactoringSuggestions = sqliteTable('refactoring_suggestions', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  snapshotId: text('snapshot_id').references(() => snapshots.id),
+  type: text('type').notNull(), // 'security' | 'duplication' | 'performance' | 'naming' | 'structure'
+  severity: text('severity').notNull().default('info'), // 'info' | 'warning' | 'critical'
+  title: text('title').notNull(),
+  description: text('description'),
+  affectedFiles: text('affected_files'), // JSON array of file paths
+  suggestedPrompt: text('suggested_prompt'), // Pre-filled prompt to fix the issue
+  status: text('status').notNull().default('pending'), // 'pending' | 'applied' | 'dismissed'
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_refactoring_workspace').on(table.workspaceId, table.createdAt),
+  index('idx_refactoring_status').on(table.workspaceId, table.status),
 ]);

@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import type { ConversationWithContext, TimelineItem } from '@fastest/shared';
-import { api, type Message, type StreamEvent, type Deployment, type ProjectInfo, type DeploymentLogEntry, type ReconnectingWebSocket } from '../api/client';
+import { api, type Message, type StreamEvent, type ReconnectingWebSocket } from '../api/client';
 import type { OpenCodeEvent, OpenCodeGlobalEvent, OpenCodePart, OpenCodeQuestionRequest } from '../api/opencode';
 import {
   ConversationMessage,
   PromptInput,
   Timeline,
-  DeploymentLogs,
 } from '../components/conversation';
 
 // Utility: debounce function for scroll optimization
@@ -168,16 +167,18 @@ export function ConversationView() {
   const [opencodePartsByMessageId, setOpencodePartsByMessageId] = useState<Record<string, OpenCodePart[]>>({});
   const [opencodeQuestionsByMessageId, setOpencodeQuestionsByMessageId] = useState<Record<string, OpenCodeQuestionRequest[]>>({});
 
-  // Deployment state
-  const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
-  const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [isDeploying, setIsDeploying] = useState(false);
-  const [deploymentLogs, setDeploymentLogs] = useState<Record<string, DeploymentLogEntry[]>>({});
-  const [showingLogsFor, setShowingLogsFor] = useState<string | null>(null);
-  const [previewBanner, setPreviewBanner] = useState<{ url: string; deploymentId: string } | null>(null);
-
   // Context data
   const [currentWorkspace, setCurrentWorkspace] = useState<{ id: string; name: string } | null>(null);
+  const [currentProject, setCurrentProject] = useState<{ id: string; name: string; mainWorkspaceId: string | null } | null>(null);
+
+  // Branching state
+  const [isBranching, setIsBranching] = useState(false);
+  const [branchPopoverOpen, setBranchPopoverOpen] = useState(false);
+  const [branchName, setBranchName] = useState('');
+
+  // Snapshot state
+  const [isSavingSnapshot, setIsSavingSnapshot] = useState(false);
+  const [snapshotSaved, setSnapshotSaved] = useState(false);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -459,35 +460,6 @@ export function ConversationView() {
         ));
         break;
 
-      case 'project_info':
-        setProjectInfo(event.info);
-        break;
-
-      case 'deployment_started':
-        setIsDeploying(true);
-        setDeployments(prev => [...prev, event.deployment]);
-        setDeploymentLogs(prev => ({ ...prev, [event.deployment.id]: [] }));
-        setShowingLogsFor(event.deployment.id);
-        break;
-
-      case 'deployment_log':
-        setDeploymentLogs(prev => ({
-          ...prev,
-          [event.deploymentId]: [...(prev[event.deploymentId] || []), event.entry],
-        }));
-        break;
-
-      case 'deployment_complete':
-        setIsDeploying(false);
-        setDeployments(prev => prev.map(d =>
-          d.id === event.deployment.id ? event.deployment : d
-        ));
-        // Show preview banner on successful deployment
-        if (event.deployment.status === 'success' && event.deployment.url) {
-          setPreviewBanner({ url: event.deployment.url, deploymentId: event.deployment.id });
-        }
-        break;
-
       case 'error':
         setError(formatErrorMessage(event.error));
         setRunningMessageId(null);
@@ -554,18 +526,15 @@ export function ConversationView() {
       const { conversation: conv } = await api.getConversation(convId);
       setConversation(conv);
 
-      // Load messages, timeline, and deployments in parallel
-      const [messagesRes, timelineRes, deploymentsRes, openCodeRes] = await Promise.all([
+      // Load messages, timeline, and opencode messages in parallel
+      const [messagesRes, timelineRes, openCodeRes] = await Promise.all([
         api.getMessages(convId),
         api.getTimeline(convId).catch(() => ({ timeline: [] })),
-        api.getDeployments(convId).catch(() => ({ deployments: [], projectInfo: null })),
         api.getOpenCodeMessages(convId).catch(() => ({ messages: {} })),
       ]);
 
       setMessages(messagesRes.messages);
       setTimeline(timelineRes.timeline);
-      setDeployments(deploymentsRes.deployments);
-      setProjectInfo(deploymentsRes.projectInfo);
       setOpencodePartsByMessageId(
         Object.fromEntries(
           Object.entries(openCodeRes.messages || {}).map(([id, value]) => {
@@ -582,8 +551,22 @@ export function ConversationView() {
         setRunningMessageId(running.id);
       }
 
-      // Store current workspace info
+      // Store current workspace and project info
       setCurrentWorkspace({ id: conv.workspace_id, name: conv.workspace_name });
+
+      // Fetch project details to get main_workspace_id
+      try {
+        const { project } = await api.getProject(conv.project_id);
+        setCurrentProject({
+          id: project.id,
+          name: project.name,
+          mainWorkspaceId: project.main_workspace_id
+        });
+      } catch (projErr) {
+        console.error('Failed to load project:', projErr);
+        // Still set basic project info from conversation
+        setCurrentProject({ id: conv.project_id, name: conv.project_name, mainWorkspaceId: null });
+      }
     } catch (err) {
       console.error('Failed to load conversation:', err);
       setError(err instanceof Error ? err.message : 'Failed to load conversation');
@@ -662,6 +645,42 @@ export function ConversationView() {
     }
   };
 
+  const handleBranch = async (workspaceName: string) => {
+    if (!currentProject || !currentWorkspace || !conversationId) return;
+
+    setIsBranching(true);
+    setError(null);
+
+    try {
+      // First, create a snapshot from the conversation's current state.
+      // This captures any dirty files (modified but not yet in a snapshot).
+      const { snapshot_id: currentSnapshotId } = await api.createConversationSnapshot(conversationId);
+
+      // Create new workspace pointing to the current snapshot (includes dirty files)
+      const { workspace: newWorkspace } = await api.createWorkspace(
+        currentProject.id,
+        workspaceName,
+        currentSnapshotId || undefined
+      );
+
+      // Move current conversation to the new workspace
+      await api.moveConversationToWorkspace(conversationId, newWorkspace.id);
+
+      // Update local state - no navigation needed, we stay in the same conversation
+      setCurrentWorkspace({ id: newWorkspace.id, name: newWorkspace.name });
+      if (conversation) {
+        setConversation({ ...conversation, workspace_id: newWorkspace.id, workspace_name: newWorkspace.name });
+      }
+
+      setBranchName('');
+      setBranchPopoverOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create workspace');
+    } finally {
+      setIsBranching(false);
+    }
+  };
+
   const handleClearConversation = async () => {
     if (!conversationId) return;
 
@@ -679,31 +698,30 @@ export function ConversationView() {
     }
   };
 
-  const handleDeploy = async () => {
-    if (!conversationId || isDeploying) return;
+  const handleSaveSnapshot = async () => {
+    if (!conversationId || isSavingSnapshot) return;
 
+    setIsSavingSnapshot(true);
     setError(null);
-    setIsDeploying(true);
 
     try {
-      // First detect project type if not already done
-      if (!projectInfo) {
-        const { projectInfo: info } = await api.getProjectInfo(conversationId);
-        setProjectInfo(info);
+      const result = await api.createConversationSnapshot(conversationId, {
+        generateSummary: true,
+      });
 
-        if (info.type !== 'wrangler') {
-          setError('Only Wrangler projects are supported for deployment');
-          setIsDeploying(false);
-          return;
-        }
+      if (result.was_dirty) {
+        // Show success indicator briefly
+        setSnapshotSaved(true);
+        setTimeout(() => setSnapshotSaved(false), 3000);
+      } else {
+        // No changes to save
+        setError('No changes to save');
+        setTimeout(() => setError(null), 3000);
       }
-
-      // Trigger deployment
-      await api.deploy(conversationId);
-      // The actual result will come via WebSocket
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start deployment');
-      setIsDeploying(false);
+      setError(err instanceof Error ? err.message : 'Failed to save snapshot');
+    } finally {
+      setIsSavingSnapshot(false);
     }
   };
 
@@ -791,52 +809,135 @@ export function ConversationView() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
+              <span className="text-surface-500">{conversation.project_name}</span>
+              <span className="text-surface-300">/</span>
+              <span className="text-surface-500">{conversation.workspace_name}</span>
+
+              {/* Branch button - only show when on main workspace */}
+              {currentProject?.mainWorkspaceId === currentWorkspace?.id && (
+                <div className="relative ml-1">
+                  <button
+                    onClick={() => setBranchPopoverOpen(!branchPopoverOpen)}
+                    disabled={isBranching}
+                    className="flex items-center gap-1 px-2 py-0.5 text-xs text-surface-500 hover:text-surface-700 hover:bg-surface-100 rounded-md transition-colors border border-surface-200"
+                  >
+                    {isBranching ? (
+                      <>
+                        <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        <span>Creating...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                        </svg>
+                        <span>Branch</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Branch popover */}
+                  {branchPopoverOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-10"
+                        onClick={() => {
+                          setBranchPopoverOpen(false);
+                          setBranchName('');
+                        }}
+                      />
+                      <div className="absolute left-0 top-full mt-1 z-20 w-72 p-3 bg-white rounded-md border border-surface-200 shadow-lg">
+                        <div className="text-sm font-medium text-surface-800 mb-1">
+                          Create workspace
+                        </div>
+                        <p className="text-xs text-surface-500 mb-3">
+                          Files will be copied from the current state.
+                        </p>
+                        <input
+                          type="text"
+                          value={branchName}
+                          onChange={(e) => setBranchName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && branchName.trim()) {
+                              handleBranch(branchName.trim());
+                            }
+                            if (e.key === 'Escape') {
+                              setBranchPopoverOpen(false);
+                              setBranchName('');
+                            }
+                          }}
+                          placeholder="feature-name"
+                          className="input font-mono text-sm"
+                          autoFocus
+                        />
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={() => handleBranch(branchName.trim())}
+                            disabled={!branchName.trim() || isBranching}
+                            className="btn-primary flex-1 text-sm"
+                          >
+                            {isBranching ? 'Creating...' : 'Create'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setBranchPopoverOpen(false);
+                              setBranchName('');
+                            }}
+                            className="btn-ghost text-sm"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <span className="text-surface-300 mx-1">—</span>
               <span className="font-medium text-surface-800 truncate max-w-md">
                 {conversation.title || 'Untitled conversation'}
               </span>
-              <span className="text-surface-400">•</span>
-              <span className="text-surface-500">{conversation.workspace_name}</span>
             </div>
             <div className="flex items-center gap-2">
-              {/* Latest deployment URL */}
-              {deployments.length > 0 && deployments[deployments.length - 1].status === 'success' && (
-                <a
-                  href={deployments[deployments.length - 1].url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-accent-600 hover:text-accent-700 hover:underline truncate max-w-48"
-                  title={deployments[deployments.length - 1].url}
-                >
-                  {deployments[deployments.length - 1].url}
-                </a>
-              )}
-
-              {/* Deploy button */}
+              {/* Save snapshot button */}
               {messages.length > 0 && (
                 <button
-                  onClick={handleDeploy}
-                  disabled={isDeploying || !!runningMessageId}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
-                    isDeploying
-                      ? 'bg-status-running/10 text-status-running'
-                      : 'bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50'
+                  onClick={handleSaveSnapshot}
+                  disabled={isSavingSnapshot || !!runningMessageId}
+                  className={`h-7 px-3 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                    snapshotSaved
+                      ? 'border border-status-success text-status-success'
+                      : isSavingSnapshot
+                      ? 'border border-status-running text-status-running'
+                      : 'border border-surface-300 text-surface-600 hover:border-surface-400 hover:bg-surface-50 disabled:opacity-50'
                   }`}
-                  title={projectInfo?.type === 'wrangler' ? 'Deploy to Cloudflare Workers' : 'Deploy project'}
+                  title="Save a checkpoint of your current work"
                 >
-                  {isDeploying ? (
+                  {isSavingSnapshot ? (
                     <>
                       <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                       </svg>
-                      Deploying...
+                      Saving...
+                    </>
+                  ) : snapshotSaved ? (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Saved
                     </>
                   ) : (
                     <>
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
                       </svg>
-                      Deploy
+                      Save snapshot
                     </>
                   )}
                 </button>
@@ -845,12 +946,12 @@ export function ConversationView() {
               {/* Timeline toggle */}
               <button
                 onClick={() => setShowTimeline(!showTimeline)}
-                className={`p-2 rounded-md transition-colors ${
-                  showTimeline ? 'bg-accent-100 text-accent-600' : 'text-surface-400 hover:text-surface-600 hover:bg-surface-100'
+                className={`h-7 w-7 flex items-center justify-center rounded-md transition-colors ${
+                  showTimeline ? 'border border-accent-500 text-accent-600' : 'border border-surface-300 text-surface-400 hover:border-surface-400 hover:text-surface-600'
                 }`}
                 title={showTimeline ? 'Hide timeline' : 'Show timeline'}
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </button>
@@ -861,69 +962,6 @@ export function ConversationView() {
                 onNewConversation={handleNewConversation}
                 disabled={!!runningMessageId}
               />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Preview URL Banner */}
-      {previewBanner && (
-        <div className="bg-gradient-to-r from-status-success to-emerald-600 text-white px-4 py-3 shadow-lg">
-          <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="flex-shrink-0 w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <div>
-                <div className="font-medium">Deployment successful!</div>
-                <div className="text-sm text-white/80 font-mono truncate max-w-md">
-                  {previewBanner.url}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <a
-                href={previewBanner.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-4 py-2 bg-white text-status-success rounded-md font-medium text-sm hover:bg-status-success/10 transition-colors flex items-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-                Open Site
-              </a>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(previewBanner.url);
-                }}
-                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
-                title="Copy URL"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-              <button
-                onClick={() => setShowingLogsFor(previewBanner.deploymentId)}
-                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
-                title="View logs"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </button>
-              <button
-                onClick={() => setPreviewBanner(null)}
-                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
-                title="Dismiss"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
             </div>
           </div>
         </div>
@@ -990,19 +1028,6 @@ export function ConversationView() {
         onConfirm={handleClearConversation}
         onCancel={() => setShowClearConfirm(false)}
       />
-
-      {/* Deployment Logs Panel */}
-      {showingLogsFor && (
-        <div className="fixed inset-y-0 right-0 w-[500px] z-50 shadow-xl">
-          <DeploymentLogs
-            deploymentId={showingLogsFor}
-            isStreaming={isDeploying && deployments.find(d => d.id === showingLogsFor)?.status === 'deploying'}
-            entries={deploymentLogs[showingLogsFor] || []}
-            onClose={() => setShowingLogsFor(null)}
-          />
-        </div>
-      )}
-
     </div>
   );
 }

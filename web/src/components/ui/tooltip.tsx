@@ -27,7 +27,7 @@ export function TooltipPopup({
         <BaseTooltip.Popup
           className={`
             z-50 px-3 py-2 text-xs
-            bg-surface-800 text-white rounded-lg shadow-lg
+            bg-surface-800 text-white rounded-md shadow-lg
             max-w-64 leading-relaxed
             animate-in fade-in-0 zoom-in-95
             data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95

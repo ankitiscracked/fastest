@@ -100,7 +100,7 @@ function DocHeader({ selectedDoc, size }: DocHeaderProps) {
         {size > 0 && (
           <span className="text-xs text-surface-400">{formatSize(size)}</span>
         )}
-        <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs ${
+        <div className={`flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs ${
           isMain
             ? 'bg-accent-100 text-accent-700'
             : 'bg-surface-100 text-surface-600'

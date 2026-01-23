@@ -39,6 +39,11 @@ export class ConversationOpenCode {
     for (const [openCodeMessageId, record] of Object.entries(openCodeMessages)) {
       const conversationMessageId = idMap[openCodeMessageId];
       if (!conversationMessageId) continue;
+
+      // Skip user message parts - only include assistant message parts
+      const role = (record.info as { role?: string } | undefined)?.role;
+      if (role === 'user') continue;
+
       const parts = record.partsOrder.length > 0
         ? record.partsOrder.map(id => record.parts[id]).filter(Boolean)
         : Object.values(record.parts);
@@ -140,15 +145,48 @@ export class ConversationOpenCode {
    */
   private async getOrCreateOpenCodeSession(openCodeUrl: string, workDir?: string): Promise<string> {
     const state = await this.ensureState();
+    let sessionNeedsContextReplay = false;
 
     if (state.openCodeSessionId) {
       try {
         const response = await fetch(`${openCodeUrl}/session/${state.openCodeSessionId}${this.getOpenCodeDirQuery(workDir)}`);
         if (response.ok) {
-          return state.openCodeSessionId;
+          const sessionData = await response.json() as {
+            id: string;
+            messages?: unknown[];
+            status?: { type?: string };
+          };
+
+          // Check if session is stuck in a non-idle state
+          const sessionStatus = sessionData.status?.type;
+          if (sessionStatus && sessionStatus !== 'idle') {
+            console.log(`[OpenCode] Session ${state.openCodeSessionId} is in state: ${sessionStatus}, will create new session`);
+            // Clear the stored session ID so we create a new one
+            state.openCodeSessionId = undefined;
+            await this.ctx.storage.put('state', state);
+          } else {
+            // Session is usable - check if it needs context replay
+            const hasMessages = Array.isArray(sessionData.messages) && sessionData.messages.length > 0;
+            const conversationHasHistory = state.openCodeMessages && Object.keys(state.openCodeMessages).length > 0;
+
+            if (conversationHasHistory && !hasMessages) {
+              console.log(`[OpenCode] Session ${state.openCodeSessionId} exists but appears empty, will replay context`);
+              sessionNeedsContextReplay = true;
+            }
+
+            // Replay context if needed before returning
+            if (sessionNeedsContextReplay) {
+              await this.replayOpenCodeContext(openCodeUrl, state.openCodeSessionId, state, workDir);
+            }
+
+            return state.openCodeSessionId;
+          }
         }
-      } catch {
-        // Session doesn't exist, create a new one
+      } catch (err) {
+        console.log(`[OpenCode] Could not verify existing session: ${err instanceof Error ? err.message : String(err)}`);
+        // Session doesn't exist or error, clear it and create a new one
+        state.openCodeSessionId = undefined;
+        await this.ctx.storage.put('state', state);
       }
     }
 
@@ -384,7 +422,8 @@ export class ConversationOpenCode {
       throw new Error('Failed to connect to OpenCode event stream');
     }
 
-    console.log(`[OpenCode] Sending prompt async...`);
+    console.log(`[OpenCode] Sending prompt async to session ${sessionId}...`);
+    console.log(`[OpenCode] Prompt payload: provider=${provider}, model=${model}, prompt="${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
     let promptResponse: Response;
     try {
       promptResponse = await fetch(`${openCodeUrl}/session/${sessionId}/prompt_async${this.getOpenCodeDirQuery(openCodeDirectory)}`, {
@@ -525,13 +564,19 @@ export class ConversationOpenCode {
 
                   case 'session.status':
                     if (payload.properties?.status?.type === 'idle') {
-                      console.log(`[OpenCode] Session status idle - marking complete`);
+                      if (fullOutput.length === 0 && assistantMessageIds.size === 0) {
+                        console.warn(`[OpenCode] Session went idle without generating assistant response! Events: ${eventCount}`);
+                      }
+                      console.log(`[OpenCode] Session status idle - marking complete (output: ${fullOutput.length} chars, assistant msgs: ${assistantMessageIds.size})`);
                       messageComplete = true;
                     }
                     break;
 
                   case 'session.idle':
-                    console.log(`[OpenCode] Session idle - marking complete`);
+                    if (fullOutput.length === 0 && assistantMessageIds.size === 0) {
+                      console.warn(`[OpenCode] Session went idle without generating assistant response! Events: ${eventCount}`);
+                    }
+                    console.log(`[OpenCode] Session idle - marking complete (output: ${fullOutput.length} chars, assistant msgs: ${assistantMessageIds.size})`);
                     messageComplete = true;
                     break;
 

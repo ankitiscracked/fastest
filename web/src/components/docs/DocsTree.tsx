@@ -133,7 +133,7 @@ export function DocsTree({
 
       {/* Workspace filter */}
       <div className="border-t border-surface-200 p-3">
-        <div className="text-xs font-medium text-surface-500 uppercase mb-2">
+        <div className="text-xs font-medium text-surface-500 mb-2">
           Filter workspaces
         </div>
         <div className="space-y-1 max-h-32 overflow-y-auto">
@@ -146,7 +146,7 @@ export function DocsTree({
                 type="checkbox"
                 checked={visibleWorkspaces.has(ws.workspace_id)}
                 onChange={() => onToggleWorkspace(ws.workspace_id)}
-                className="rounded border-surface-300 text-accent-500 focus:ring-accent-500"
+                className="rounded-sm border-surface-300 text-accent-500 focus:ring-surface-400"
               />
               <span className="truncate">{ws.workspace_name}</span>
               <span className="text-surface-400 text-xs">({ws.files.length})</span>
@@ -186,7 +186,7 @@ function WorkspaceNode({
       {/* Workspace header */}
       <button
         onClick={onToggleExpand}
-        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
+        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
           isMain
             ? 'bg-accent-50 hover:bg-accent-100'
             : 'hover:bg-surface-100'
@@ -207,7 +207,7 @@ function WorkspaceNode({
           {workspace.workspace_name}
         </span>
         {isMain && (
-          <span className="text-xs bg-accent-100 text-accent-600 px-1.5 py-0.5 rounded">
+          <span className="text-xs bg-accent-100 text-accent-600 px-1.5 py-0.5 rounded-sm">
             main
           </span>
         )}
@@ -266,7 +266,7 @@ function TreeNodeComponent({
       <div>
         <button
           onClick={() => onToggleFolder(fullPath)}
-          className="w-full flex items-center gap-2 px-2 py-1 rounded text-left hover:bg-surface-100"
+          className="w-full flex items-center gap-2 px-2 py-1 rounded-sm text-left hover:bg-surface-100"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
           <svg

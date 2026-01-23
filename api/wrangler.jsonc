@@ -39,6 +39,11 @@
     }
   ],
 
+  // Development settings
+  "dev": {
+    "enable_containers": false
+  },
+
   // Durable Objects for managing sandbox instances
   "durable_objects": {
     "bindings": [
@@ -63,5 +68,10 @@
       "tag": "v2",
       "new_sqlite_classes": ["ConversationSession"]
     }
-  ]
+  ],
+
+  // Cron triggers for background jobs (auto-snapshots, drift calculation)
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  }
 }

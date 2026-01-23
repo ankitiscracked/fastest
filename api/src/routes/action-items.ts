@@ -3,7 +3,7 @@ import { eq, and, desc, ne, isNotNull, sql } from 'drizzle-orm';
 import type { Env } from '../index';
 import type { ActionItem } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
-import { createDb, workspaces, projects, driftReports } from '../db';
+import { createDb, workspaces, projects, driftReports, refactoringSuggestions } from '../db';
 
 export const actionItemRoutes = new Hono<{ Bindings: Env }>();
 
@@ -93,6 +93,78 @@ actionItemRoutes.get('/', async (c) => {
     });
   }
 
+  // Query pending refactoring suggestions
+  const refactoringResults = await db
+    .select({
+      id: refactoringSuggestions.id,
+      workspace_id: refactoringSuggestions.workspaceId,
+      type: refactoringSuggestions.type,
+      severity: refactoringSuggestions.severity,
+      title: refactoringSuggestions.title,
+      description: refactoringSuggestions.description,
+      affected_files: refactoringSuggestions.affectedFiles,
+      suggested_prompt: refactoringSuggestions.suggestedPrompt,
+      created_at: refactoringSuggestions.createdAt,
+      workspace_name: workspaces.name,
+      project_id: workspaces.projectId,
+      project_name: projects.name,
+    })
+    .from(refactoringSuggestions)
+    .innerJoin(workspaces, eq(refactoringSuggestions.workspaceId, workspaces.id))
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(
+      and(
+        eq(projects.ownerUserId, user.id),
+        eq(refactoringSuggestions.status, 'pending')
+      )
+    )
+    .orderBy(desc(refactoringSuggestions.createdAt))
+    .limit(20); // Limit to avoid overwhelming the UI
+
+  // Map refactoring type to action item type
+  const typeMapping: Record<string, ActionItem['type']> = {
+    security: 'security',
+    duplication: 'refactoring',
+    performance: 'refactoring',
+    naming: 'refactoring',
+    structure: 'refactoring',
+  };
+
+  // Map refactoring type to icons
+  const iconMapping: Record<string, string> = {
+    security: 'shield',
+    duplication: 'copy',
+    performance: 'zap',
+    naming: 'tag',
+    structure: 'layers',
+  };
+
+  for (const row of refactoringResults) {
+    const actionType = typeMapping[row.type] || 'refactoring';
+    const icon = iconMapping[row.type] || 'lightbulb';
+
+    items.push({
+      id: row.id,
+      type: actionType,
+      severity: (row.severity as ActionItem['severity']) || 'info',
+      workspace_id: row.workspace_id,
+      workspace_name: row.workspace_name,
+      project_id: row.project_id,
+      project_name: row.project_name,
+      title: row.title,
+      description: row.description || undefined,
+      icon,
+      action_label: 'Fix',
+      action_type: 'prompt',
+      action_data: {
+        suggested_prompt: row.suggested_prompt,
+        affected_files: row.affected_files ? JSON.parse(row.affected_files) : [],
+        suggestion_type: row.type,
+      },
+      created_at: row.created_at,
+    });
+  }
+
   // Sort by severity (critical first), then by drift count
   items.sort((a, b) => {
     const severityOrder = { critical: 0, warning: 1, info: 2 };
@@ -108,13 +180,28 @@ actionItemRoutes.get('/', async (c) => {
   return c.json({ items });
 });
 
-// Dismiss an action item (optional - for future use)
+// Dismiss an action item
 actionItemRoutes.post('/:itemId/dismiss', async (c) => {
   const user = await getAuthUser(c);
   if (!user) {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
   }
 
-  // For now, just acknowledge - we could store dismissed items in DB later
+  const itemId = c.req.param('itemId');
+  const db = createDb(c.env.DB);
+
+  // Check if it's a drift item (starts with "drift-") or a refactoring suggestion
+  if (itemId.startsWith('drift-')) {
+    // Drift items don't have persistent dismiss state yet
+    // Could add a dismissed_drift_reports table in the future
+    return c.json({ success: true });
+  }
+
+  // Mark refactoring suggestion as dismissed
+  await db
+    .update(refactoringSuggestions)
+    .set({ status: 'dismissed' })
+    .where(eq(refactoringSuggestions.id, itemId));
+
   return c.json({ success: true });
 });

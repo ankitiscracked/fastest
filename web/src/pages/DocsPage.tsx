@@ -119,7 +119,7 @@ export function DocsPage() {
           <p className="text-status-error mb-4">{error}</p>
           <button
             onClick={loadDocs}
-            className="px-4 py-2 bg-accent-500 text-white rounded-lg hover:bg-accent-600"
+            className="px-4 py-2 bg-accent-500 text-white rounded-md hover:bg-accent-600"
           >
             Retry
           </button>

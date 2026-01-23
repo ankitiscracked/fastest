@@ -151,17 +151,19 @@ async function startOpenCode(port: number): Promise<Subprocess | null> {
 const OPENCODE_PORT = 4096;
 
 async function main() {
-  // Check Docker is running (Docker Desktop)
-  if (!isDockerRunning()) {
-    log.error('Docker is not running. Please start Docker Desktop.');
-    process.exit(1);
+  // Check Docker is running (Docker Desktop) - optional, only needed for sandbox
+  const dockerAvailable = isDockerRunning();
+
+  if (!dockerAvailable) {
+    log.warn('Docker is not running. Sandbox features will be unavailable.');
+    log.warn('Start Docker Desktop if you need to run sandbox containers.');
+  } else {
+    const { cpus, memory } = getDockerResources();
+    log.info(`Docker ready with ${cpus} CPUs and ${memory}GB RAM`);
+
+    // Clean stale containers
+    cleanupStaleContainers();
   }
-
-  const { cpus, memory } = getDockerResources();
-  log.info(`Docker ready with ${cpus} CPUs and ${memory}GB RAM`);
-
-  // Clean stale containers
-  cleanupStaleContainers();
 
   // Start OpenCode server (for Apple Silicon local dev)
   const opencode = await startOpenCode(OPENCODE_PORT);
@@ -181,7 +183,9 @@ async function main() {
       log.info('Stopping OpenCode server...');
       opencode.kill();
     }
-    cleanupContainers();
+    if (dockerAvailable) {
+      cleanupContainers();
+    }
     log.info('Cleanup complete');
     process.exit(0);
   };
@@ -196,7 +200,9 @@ async function main() {
   if (opencode) {
     opencode.kill();
   }
-  cleanupContainers();
+  if (dockerAvailable) {
+    cleanupContainers();
+  }
   log.info('Cleanup complete');
   process.exit(exitCode);
 }

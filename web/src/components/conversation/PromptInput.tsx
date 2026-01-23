@@ -11,7 +11,7 @@ export function PromptInput({
   onSubmit,
   disabled = false,
   placeholder = 'What do you want to build?',
-  isRunning = false,
+  isRunning: _isRunning = false,
 }: PromptInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -41,7 +41,7 @@ export function PromptInput({
   };
 
   return (
-    <div className="flex items-center gap-2 bg-white border border-surface-200 rounded-md shadow-sm focus-within:border-surface-300 transition-all">
+    <div className="flex items-center gap-2 bg-white border border-surface-200 rounded-md focus-within:border-surface-400 transition-colors">
       <textarea
         ref={textareaRef}
         value={value}

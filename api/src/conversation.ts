@@ -181,6 +181,14 @@ export class ConversationSession extends DurableObject<Env> {
       return Response.json({ state });
     }
 
+    if (url.pathname === '/set-manifest' && request.method === 'POST') {
+      const { manifestHash } = await request.json() as { manifestHash: string };
+      const state = await this.ensureState();
+      state.lastManifestHash = manifestHash;
+      await this.ctx.storage.put('state', state);
+      return Response.json({ success: true, manifestHash });
+    }
+
     if (url.pathname === '/messages' && request.method === 'GET') {
       const limit = url.searchParams.get('limit');
       const before = url.searchParams.get('before');

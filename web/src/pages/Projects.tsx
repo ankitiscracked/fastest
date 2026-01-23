@@ -70,7 +70,7 @@ export function Projects() {
       {/* Create project modal */}
       {showCreate && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="bg-white rounded-md p-6 w-full max-w-md">
             <h2 className="text-lg font-semibold text-surface-800 mb-4">Create New Project</h2>
             <form onSubmit={handleCreateProject}>
               <input
@@ -103,7 +103,7 @@ export function Projects() {
 
       {/* Projects list */}
       {projects.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg border border-surface-200">
+        <div className="text-center py-12 bg-white rounded-md border border-surface-200">
           <h3 className="text-lg font-medium text-surface-800 mb-2">No projects yet</h3>
           <p className="text-surface-500 mb-4">Create your first project to get started</p>
           <p className="text-sm text-surface-400">
@@ -111,7 +111,7 @@ export function Projects() {
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-surface-200 overflow-hidden">
+        <div className="bg-white rounded-md border border-surface-200 overflow-hidden">
           <ul className="divide-y divide-surface-200">
             {projects.map((project) => (
               <li key={project.id}>

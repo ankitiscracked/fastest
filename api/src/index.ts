@@ -9,6 +9,7 @@ import { workspaceRoutes } from './routes/workspaces';
 import { blobRoutes } from './routes/blobs';
 import { conversationRoutes } from './routes/conversations';
 import { actionItemRoutes } from './routes/action-items';
+import { runBackgroundJobs } from './background-jobs';
 
 // Re-export Sandbox class for Durable Object binding (only when containers are enabled)
 export { Sandbox } from '@cloudflare/sandbox';
@@ -97,4 +98,10 @@ app.onError((err, c) => {
   }, 500);
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(runBackgroundJobs(env));
+  },
+};

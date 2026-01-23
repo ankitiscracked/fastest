@@ -50,7 +50,7 @@ export function OpenCodeQuestion({ request, onSubmit, onReject }: OpenCodeQuesti
   const renderQuestion = (question: OpenCodeQuestionInfo, index: number) => {
     return (
       <div key={`${request.id}-${index}`} className="space-y-2">
-        <div className="text-xs font-semibold text-surface-500 uppercase tracking-wide">{question.header}</div>
+        <div className="text-xs font-semibold text-surface-500">{question.header}</div>
         <p className="text-sm text-surface-800">{question.question}</p>
         <div className="space-y-2">
           {question.options.map((option) => {
@@ -60,7 +60,7 @@ export function OpenCodeQuestion({ request, onSubmit, onReject }: OpenCodeQuesti
                 key={option.label}
                 type="button"
                 onClick={() => toggleOption(index, option.label, question.multiple)}
-                className={`w-full text-left rounded-lg border px-3 py-2 transition ${
+                className={`w-full text-left rounded-md border px-3 py-2 transition ${
                   selectedForQuestion
                     ? 'border-accent-500 bg-accent-50 text-accent-700'
                     : 'border-surface-200 bg-white hover:border-surface-300'
@@ -77,8 +77,8 @@ export function OpenCodeQuestion({ request, onSubmit, onReject }: OpenCodeQuesti
   };
 
   return (
-    <div className="space-y-4 rounded-xl border border-surface-200 bg-white px-4 py-3 shadow-sm">
-      <div className="text-xs font-semibold text-surface-500 uppercase tracking-wide">Assistant Question</div>
+    <div className="space-y-4 rounded-md border border-surface-200 bg-white px-4 py-3 shadow-sm">
+      <div className="text-xs font-semibold text-surface-500">Assistant question</div>
       {questions.map(renderQuestion)}
       <div className="flex items-center gap-2">
         <button
