@@ -48,6 +48,7 @@ func newMergeCmd() *cobra.Command {
 	var dryRun bool
 	var dryRunSummary bool
 	var fromPath string
+	var mergeAll bool
 
 	cmd := &cobra.Command{
 		Use:   "merge [workspace]",
@@ -66,6 +67,7 @@ Non-conflicting changes are applied automatically. For conflicts:
 - Ours (--ours): Keep current version for all conflicts
 
 Use --dry-run to preview the merge and see line-level conflict details.
+Use --all to merge all workspaces in the project (non-conflicting first).
 
 Workspace lookup uses the local registry. Use --from for explicit path.`,
 		Args: cobra.MaximumNArgs(1),
@@ -97,6 +99,14 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 				mode = ConflictModeOurs
 			}
 
+			// Handle --all mode
+			if mergeAll {
+				if len(args) > 0 {
+					return fmt.Errorf("cannot specify workspace with --all")
+				}
+				return runMergeAll(mode, dryRun)
+			}
+
 			var workspaceName string
 			if len(args) > 0 {
 				workspaceName = args[0]
@@ -111,12 +121,13 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 	cmd.Flags().BoolVar(&useAgent, "agent", false, "Use coding agent for conflict resolution (default)")
 	cmd.Flags().BoolVar(&manual, "manual", false, "Create conflict markers for manual resolution")
 	cmd.Flags().BoolVar(&theirs, "theirs", false, "Take source version for all conflicts")
-	cmd.Flags().BoolVar(&ours, "ours", false, "Keep target version for all conflicts")
+	cmd.Flags().BoolVar(&ours, "ours", false, "Keep current version for all conflicts")
 	cmd.Flags().StringSliceVar(&cherryPick, "files", nil, "Only merge specific files")
 	cmd.Flags().StringSliceVar(&cherryPick, "cherry-pick", nil, "Only merge specific files (alias for --files)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview merge with line-level conflict details")
 	cmd.Flags().BoolVar(&dryRunSummary, "summary", false, "Generate LLM summary of conflicts (with --dry-run)")
 	cmd.Flags().StringVar(&fromPath, "from", "", "Source workspace path")
+	cmd.Flags().BoolVarP(&mergeAll, "all", "a", false, "Merge all workspaces in the project")
 
 	return cmd
 }
@@ -869,4 +880,235 @@ func buildConflictInfosFromReport(report *conflicts.Report) []agent.ConflictInfo
 	}
 
 	return infos
+}
+
+// runMergeAll merges all workspaces in the project into the current one
+func runMergeAll(mode ConflictMode, dryRun bool) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("not in a project directory - run 'fst init' first")
+	}
+
+	if _, err := config.FindProjectRoot(); err != nil {
+		return fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	// Load workspace registry
+	registry, err := LoadRegistry()
+	if err != nil {
+		return fmt.Errorf("failed to load workspace registry: %w", err)
+	}
+
+	// Find all other workspaces in this project
+	var otherWorkspaces []RegisteredWorkspace
+	for _, ws := range registry.Workspaces {
+		if ws.ProjectID == cfg.ProjectID && ws.Name != cfg.WorkspaceName {
+			// Check if workspace exists
+			if _, err := os.Stat(filepath.Join(ws.Path, ".fst")); err == nil {
+				otherWorkspaces = append(otherWorkspaces, ws)
+			}
+		}
+	}
+
+	if len(otherWorkspaces) == 0 {
+		fmt.Println("No other workspaces found to merge.")
+		return nil
+	}
+
+	// Analyze each workspace for changes and overlaps
+	type workspaceAnalysis struct {
+		ws           RegisteredWorkspace
+		hasChanges   bool
+		changedFiles map[string]bool
+		conflictsWith []string // names of workspaces it conflicts with
+	}
+
+	analyses := make([]workspaceAnalysis, len(otherWorkspaces))
+	allChangedFiles := make(map[string][]string) // file -> workspace names
+
+	fmt.Printf("Analyzing %d workspaces...\n", len(otherWorkspaces))
+
+	for i, ws := range otherWorkspaces {
+		analyses[i] = workspaceAnalysis{
+			ws:           ws,
+			changedFiles: make(map[string]bool),
+		}
+
+		changes, err := getWorkspaceChanges(ws)
+		if err != nil {
+			continue
+		}
+
+		hasChanges := len(changes.FilesAdded) > 0 || len(changes.FilesModified) > 0 || len(changes.FilesDeleted) > 0
+		analyses[i].hasChanges = hasChanges
+
+		if hasChanges {
+			for _, f := range changes.FilesAdded {
+				analyses[i].changedFiles[f] = true
+				allChangedFiles[f] = append(allChangedFiles[f], ws.Name)
+			}
+			for _, f := range changes.FilesModified {
+				analyses[i].changedFiles[f] = true
+				allChangedFiles[f] = append(allChangedFiles[f], ws.Name)
+			}
+			for _, f := range changes.FilesDeleted {
+				analyses[i].changedFiles[f] = true
+				allChangedFiles[f] = append(allChangedFiles[f], ws.Name)
+			}
+		}
+	}
+
+	// Determine which workspaces conflict with each other
+	for i := range analyses {
+		for file := range analyses[i].changedFiles {
+			if workspaces := allChangedFiles[file]; len(workspaces) > 1 {
+				for _, wsName := range workspaces {
+					if wsName != analyses[i].ws.Name {
+						// Check if already in list
+						found := false
+						for _, existing := range analyses[i].conflictsWith {
+							if existing == wsName {
+								found = true
+								break
+							}
+						}
+						if !found {
+							analyses[i].conflictsWith = append(analyses[i].conflictsWith, wsName)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Sort: workspaces without changes first, then without conflicts, then with conflicts
+	// This gives us optimal merge order
+	sortedAnalyses := make([]workspaceAnalysis, len(analyses))
+	copy(sortedAnalyses, analyses)
+
+	// Simple sorting: no changes < no conflicts < has conflicts
+	for i := 0; i < len(sortedAnalyses)-1; i++ {
+		for j := i + 1; j < len(sortedAnalyses); j++ {
+			swap := false
+			// Prioritize workspaces with no changes (skip them)
+			if !sortedAnalyses[i].hasChanges && sortedAnalyses[j].hasChanges {
+				continue
+			}
+			if sortedAnalyses[i].hasChanges && !sortedAnalyses[j].hasChanges {
+				swap = true
+			}
+			// Then prioritize no conflicts
+			if !swap && len(sortedAnalyses[i].conflictsWith) > len(sortedAnalyses[j].conflictsWith) {
+				swap = true
+			}
+			if swap {
+				sortedAnalyses[i], sortedAnalyses[j] = sortedAnalyses[j], sortedAnalyses[i]
+			}
+		}
+	}
+
+	// Filter to only workspaces with changes
+	var toMerge []workspaceAnalysis
+	for _, a := range sortedAnalyses {
+		if a.hasChanges {
+			toMerge = append(toMerge, a)
+		}
+	}
+
+	if len(toMerge) == 0 {
+		fmt.Println("No workspaces have changes to merge.")
+		return nil
+	}
+
+	// Show merge plan
+	fmt.Println()
+	fmt.Printf("Merge plan (%d workspaces with changes):\n", len(toMerge))
+	fmt.Println()
+
+	for i, a := range toMerge {
+		conflictInfo := ""
+		if len(a.conflictsWith) > 0 {
+			conflictInfo = fmt.Sprintf(" \033[33m(overlaps with: %s)\033[0m", strings.Join(a.conflictsWith, ", "))
+		}
+		fmt.Printf("  %d. %s (%d files)%s\n", i+1, a.ws.Name, len(a.changedFiles), conflictInfo)
+	}
+
+	if dryRun {
+		fmt.Println()
+		fmt.Println("(Dry run - no changes made)")
+		fmt.Println()
+		fmt.Println("To merge all:")
+		fmt.Println("  fst merge --all")
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Printf("Merging into: %s\n", cfg.WorkspaceName)
+	fmt.Println()
+
+	// Perform merges
+	type mergeOutcome struct {
+		workspace string
+		success   bool
+		applied   int
+		conflicts int
+		failed    int
+		err       error
+	}
+
+	var outcomes []mergeOutcome
+
+	for i, a := range toMerge {
+		fmt.Printf("[%d/%d] Merging %s...\n", i+1, len(toMerge), a.ws.Name)
+
+		// Run merge (reuse existing merge logic)
+		err := runMerge(a.ws.Name, "", mode, nil, false, false)
+
+		outcome := mergeOutcome{
+			workspace: a.ws.Name,
+		}
+
+		if err != nil {
+			outcome.success = false
+			outcome.err = err
+			fmt.Printf("  \033[31m✗ Failed: %v\033[0m\n", err)
+		} else {
+			outcome.success = true
+			fmt.Printf("  \033[32m✓ Merged successfully\033[0m\n")
+		}
+
+		outcomes = append(outcomes, outcome)
+		fmt.Println()
+	}
+
+	// Summary
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println("Merge All Complete")
+	fmt.Println()
+
+	successCount := 0
+	failCount := 0
+	for _, o := range outcomes {
+		if o.success {
+			successCount++
+			fmt.Printf("  \033[32m✓ %s\033[0m\n", o.workspace)
+		} else {
+			failCount++
+			fmt.Printf("  \033[31m✗ %s: %v\033[0m\n", o.workspace, o.err)
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("Merged: %d/%d workspaces\n", successCount, len(outcomes))
+
+	if failCount > 0 {
+		fmt.Println()
+		fmt.Println("Some merges failed. You can retry individual workspaces with:")
+		fmt.Println("  fst merge <workspace>")
+	} else if successCount > 0 {
+		fmt.Println()
+		fmt.Printf("Run 'fst snapshot -m \"Merged all workspaces\"' to save.\n")
+	}
+
+	return nil
 }
