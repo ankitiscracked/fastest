@@ -19,18 +19,19 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newSearchCmd())
+	rootCmd.AddCommand(newUICmd())
 }
 
-func newSearchCmd() *cobra.Command {
+func newUICmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "search",
-		Short: "Interactive search across projects and workspaces",
-		Long: `Open an interactive TUI to search and navigate across all projects and workspaces.
+		Use:   "ui",
+		Short: "Interactive workspace dashboard",
+		Long: `Open an interactive TUI to browse and manage all projects and workspaces.
 
 Features:
 - Fuzzy search by project or workspace name
 - Split view with preview pane showing drift status and file changes
+- Inline merge with result overlay
 - Quick actions: open, merge, open in editor
 
 Keyboard shortcuts:
@@ -40,7 +41,7 @@ Keyboard shortcuts:
   o             Open in editor
   q or Esc      Quit`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSearch()
+			return runUI()
 		},
 	}
 
@@ -89,7 +90,7 @@ type model struct {
 	cursor         int
 	currentProject string
 	currentWsName  string
-	inWorkspace    bool // true if fst search was run from inside a workspace
+	inWorkspace    bool // true if fst ui was run from inside a workspace
 	width          int
 	height         int
 	err            error
@@ -499,7 +500,7 @@ func (m model) View() string {
 func (m model) viewSingleColumn() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("fst search"))
+	b.WriteString(titleStyle.Render("fst ui"))
 	b.WriteString("\n\n")
 	b.WriteString(m.textInput.View())
 	b.WriteString("\n\n")
@@ -533,7 +534,7 @@ func (m model) buildLeftPane(width, listHeight int) string {
 	var b strings.Builder
 
 	// Title
-	b.WriteString(titleStyle.Render("fst search"))
+	b.WriteString(titleStyle.Render("fst ui"))
 	b.WriteString("\n\n")
 
 	// Search input
@@ -950,11 +951,11 @@ func (m model) renderStatusBar() string {
 	return statusBarStyle.Render(status)
 }
 
-func runSearch() error {
+func runUI() error {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
-		return fmt.Errorf("error running search: %w", err)
+		return fmt.Errorf("error running ui: %w", err)
 	}
 
 	m := finalModel.(model)
