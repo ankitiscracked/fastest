@@ -171,18 +171,13 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		workspaceID = generateWorkspaceID()
 	}
 
-	// Create .fst directory structure (main workspace)
-	fstDir := filepath.Join(cwd, ".fst")
-	if err := os.MkdirAll(fstDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .fst directory: %w", err)
+	// Create .fst directory structure using config.InitAt
+	if err := config.InitAt(cwd, projectID, workspaceID, workspaceName, ""); err != nil {
+		return fmt.Errorf("failed to initialize workspace: %w", err)
 	}
 
-	// Create subdirectories including workspaces/ for linked workspaces
-	for _, subdir := range []string{"cache", "cache/blobs", "cache/manifests", "workspaces"} {
-		if err := os.MkdirAll(filepath.Join(fstDir, subdir), 0755); err != nil {
-			return fmt.Errorf("failed to create %s: %w", subdir, err)
-		}
-	}
+	fstDir := filepath.Join(cwd, ".fst")
+	snapshotsDir := filepath.Join(fstDir, config.SnapshotsDirName)
 
 	// Create initial snapshot if not disabled
 	var snapshotID string
@@ -201,8 +196,11 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 
 		snapshotID = "snap-" + manifestHash[:16]
 
-		// Cache blobs
-		blobDir := filepath.Join(fstDir, "cache", "blobs")
+		// Cache blobs in global cache
+		blobDir, err := config.GetGlobalBlobDir()
+		if err != nil {
+			return fmt.Errorf("failed to get global blob directory: %w", err)
+		}
 		for _, f := range m.Files {
 			blobPath := filepath.Join(blobDir, f.Hash)
 			if _, err := os.Stat(blobPath); err == nil {
@@ -216,19 +214,19 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 			os.WriteFile(blobPath, content, 0644)
 		}
 
-		// Save snapshot
+		// Save snapshot to local snapshots directory
 		manifestJSON, err := m.ToJSON()
 		if err != nil {
 			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
 
-		manifestPath := filepath.Join(fstDir, "cache", "manifests", snapshotID+".json")
+		manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
 		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
 			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
 
 		// Save metadata
-		metadataPath := filepath.Join(fstDir, "cache", "manifests", snapshotID+".meta.json")
+		metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 		metadata := fmt.Sprintf(`{
   "id": "%s",
   "manifest_hash": "%s",
@@ -244,32 +242,15 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		}
 
 		fmt.Printf("Captured %d files.\n", m.FileCount())
-	}
 
-	// Write config (main workspace)
-	configData := fmt.Sprintf(`{
-  "project_id": "%s",
-  "workspace_id": "%s",
-  "workspace_name": "%s",
-  "base_snapshot_id": "%s",
-  "last_snapshot_id": "%s",
-  "mode": "%s",
-  "is_main": true
-}`, projectID, workspaceID, workspaceName, snapshotID, snapshotID, modeString(cloudSynced))
-
-	configPath := filepath.Join(fstDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(configData), 0644); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
-	}
-
-	// Create .gitignore for .fst
-	gitignore := `# Fastest local cache
-cache/
-workspaces/
-*.log
-`
-	if err := os.WriteFile(filepath.Join(fstDir, ".gitignore"), []byte(gitignore), 0644); err != nil {
-		return fmt.Errorf("failed to write .gitignore: %w", err)
+		// Update config with snapshot IDs
+		cfg, _ := config.LoadAt(cwd)
+		cfg.BaseSnapshotID = snapshotID
+		cfg.LastSnapshotID = snapshotID
+		cfg.Mode = modeString(cloudSynced)
+		if err := config.SaveAt(cwd, cfg); err != nil {
+			return fmt.Errorf("failed to update config: %w", err)
+		}
 	}
 
 	// Register workspace in global registry
@@ -288,7 +269,7 @@ workspaces/
 	fmt.Println("✓ Project initialized!")
 	fmt.Println()
 	fmt.Printf("  Project:   %s\n", projectName)
-	fmt.Printf("  Workspace: %s (main)\n", workspaceName)
+	fmt.Printf("  Workspace: %s\n", workspaceName)
 	fmt.Printf("  Directory: %s\n", cwd)
 	if snapshotID != "" {
 		fmt.Printf("  Snapshot:  %s\n", snapshotID)
@@ -298,8 +279,8 @@ workspaces/
 	}
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Println("  fst drift       # Check for changes")
-	fmt.Println("  fst copy -n feature -t ../feature  # Create linked workspace")
+	fmt.Println("  fst drift                       # Check for changes")
+	fmt.Println("  fst copy -n feature             # Create a workspace copy")
 
 	return nil
 }

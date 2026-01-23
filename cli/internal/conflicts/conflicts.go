@@ -44,19 +44,19 @@ type BlobAccessor interface {
 	Get(hash string) (string, error)
 }
 
-// FileBlobAccessor reads blobs from the local cache
+// FileBlobAccessor reads blobs from the global cache
 type FileBlobAccessor struct {
 	cacheDir string
 }
 
-// NewFileBlobAccessor creates a blob accessor for the cache
+// NewFileBlobAccessor creates a blob accessor for the global cache
 func NewFileBlobAccessor() (*FileBlobAccessor, error) {
-	configDir, err := config.GetConfigDir()
+	blobDir, err := config.GetGlobalBlobDir()
 	if err != nil {
 		return nil, err
 	}
 	return &FileBlobAccessor{
-		cacheDir: filepath.Join(configDir, "cache", "blobs"),
+		cacheDir: blobDir,
 	}, nil
 }
 
@@ -97,34 +97,34 @@ func (a *FileSystemAccessor) Get(hash string) (string, error) {
 }
 
 // Detect performs 3-way merge analysis to find git-style conflicts
-// between the current workspace and main workspace
-func Detect(root string, includeDirty bool) (*Report, error) {
+// between the current workspace and another workspace
+// Both workspaces must share a common base_snapshot_id for meaningful conflict detection
+func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("not in a project directory: %w", err)
 	}
 
-	if cfg.IsMain {
-		// Main workspace has no conflicts with itself
-		return &Report{
-			Conflicts:        nil,
-			OverlappingFiles: nil,
-			TrueConflicts:    0,
-		}, nil
-	}
-
-	mainPath, err := config.GetMainWorkspacePath()
+	otherCfg, err := config.LoadAt(otherRoot)
 	if err != nil {
-		return nil, fmt.Errorf("cannot find main workspace: %w", err)
+		return nil, fmt.Errorf("cannot load other workspace config: %w", err)
 	}
 
 	// Load base snapshot manifest (common ancestor)
+	// We use current workspace's base as the reference point
 	baseSnapshotID := cfg.BaseSnapshotID
 	if baseSnapshotID == "" {
 		return nil, fmt.Errorf("no base snapshot - cannot detect conflicts")
 	}
 
-	baseManifest, err := loadManifestFromCache(baseSnapshotID)
+	// Warn if bases don't match (they should for proper 3-way merge)
+	if otherCfg.BaseSnapshotID != baseSnapshotID {
+		// They might still share a common ancestor through the snapshot, but warn
+		fmt.Printf("Warning: workspaces have different base snapshots (%s vs %s)\n",
+			baseSnapshotID, otherCfg.BaseSnapshotID)
+	}
+
+	baseManifest, err := loadManifestFromSnapshots(root, baseSnapshotID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load base snapshot: %w", err)
 	}
@@ -135,36 +135,31 @@ func Detect(root string, includeDirty bool) (*Report, error) {
 		return nil, fmt.Errorf("failed to generate current manifest: %w", err)
 	}
 
-	// Get main workspace's manifest
-	var mainManifest *manifest.Manifest
-	var mainAccessor BlobAccessor
+	// Get other workspace's manifest
+	var otherManifest *manifest.Manifest
+	var otherAccessor BlobAccessor
 
 	if includeDirty {
-		mainManifest, err = manifest.Generate(mainPath, false)
+		otherManifest, err = manifest.Generate(otherRoot, false)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate main manifest: %w", err)
+			return nil, fmt.Errorf("failed to generate other workspace manifest: %w", err)
 		}
-		mainAccessor = NewFileSystemAccessor(mainPath, mainManifest)
+		otherAccessor = NewFileSystemAccessor(otherRoot, otherManifest)
 	} else {
-		mainCfg, err := loadMainConfig(mainPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load main config: %w", err)
-		}
-
-		snapshotID := mainCfg.LastSnapshotID
+		snapshotID := otherCfg.LastSnapshotID
 		if snapshotID == "" {
-			snapshotID = mainCfg.BaseSnapshotID
+			snapshotID = otherCfg.BaseSnapshotID
 		}
 
 		if snapshotID == "" {
-			return nil, fmt.Errorf("main workspace has no snapshots")
+			return nil, fmt.Errorf("other workspace has no snapshots")
 		}
 
-		mainManifest, err = loadManifestFromCache(snapshotID)
+		otherManifest, err = loadManifestFromSnapshots(otherRoot, snapshotID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load main snapshot: %w", err)
+			return nil, fmt.Errorf("failed to load other workspace snapshot: %w", err)
 		}
-		mainAccessor, err = NewFileBlobAccessor()
+		otherAccessor, err = NewFileBlobAccessor()
 		if err != nil {
 			return nil, err
 		}
@@ -179,29 +174,29 @@ func Detect(root string, includeDirty bool) (*Report, error) {
 
 	// Find files modified in both workspaces since base
 	currentChanges := getModifiedFiles(baseManifest, currentManifest)
-	mainChanges := getModifiedFiles(baseManifest, mainManifest)
+	otherChanges := getModifiedFiles(baseManifest, otherManifest)
 
 	// Find overlapping files (modified in both)
-	overlapping := findOverlappingFiles(currentChanges, mainChanges)
+	overlapping := findOverlappingFiles(currentChanges, otherChanges)
 
 	// For each overlapping file, perform 3-way diff to find conflicts
 	var conflicts []FileConflict
 	for _, path := range overlapping {
 		baseEntry := getFileEntry(baseManifest, path)
 		currentEntry := getFileEntry(currentManifest, path)
-		mainEntry := getFileEntry(mainManifest, path)
+		otherEntry := getFileEntry(otherManifest, path)
 
 		// Skip if any version is missing (deleted)
-		if baseEntry == nil || currentEntry == nil || mainEntry == nil {
+		if baseEntry == nil || currentEntry == nil || otherEntry == nil {
 			// Handle deletion conflicts
-			if currentEntry == nil && mainEntry != nil {
-				// Current deleted, main modified
+			if currentEntry == nil && otherEntry != nil {
+				// Current deleted, other modified
 				conflicts = append(conflicts, FileConflict{
 					Path:  path,
 					Hunks: []Hunk{{StartLine: 1, EndLine: 1}}, // Indicate conflict
 				})
-			} else if currentEntry != nil && mainEntry == nil {
-				// Current modified, main deleted
+			} else if currentEntry != nil && otherEntry == nil {
+				// Current modified, other deleted
 				conflicts = append(conflicts, FileConflict{
 					Path:  path,
 					Hunks: []Hunk{{StartLine: 1, EndLine: 1}},
@@ -210,8 +205,8 @@ func Detect(root string, includeDirty bool) (*Report, error) {
 			continue
 		}
 
-		// If hashes match in current and main, no conflict
-		if currentEntry.Hash == mainEntry.Hash {
+		// If hashes match in current and other, no conflict
+		if currentEntry.Hash == otherEntry.Hash {
 			continue
 		}
 
@@ -224,19 +219,19 @@ func Detect(root string, includeDirty bool) (*Report, error) {
 		if err != nil {
 			continue
 		}
-		mainContent, err := mainAccessor.Get(mainEntry.Hash)
+		otherContent, err := otherAccessor.Get(otherEntry.Hash)
 		if err != nil {
 			continue
 		}
 
 		// Check for overlapping hunks (true conflicts)
-		hunks := findConflictingHunks(baseContent, currentContent, mainContent)
+		hunks := findConflictingHunks(baseContent, currentContent, otherContent)
 		if len(hunks) > 0 {
 			conflicts = append(conflicts, FileConflict{
 				Path:          path,
 				BaseContent:   baseContent,
 				LocalContent:  currentContent,
-				RemoteContent: mainContent,
+				RemoteContent: otherContent,
 				Hunks:         hunks,
 			})
 		}
@@ -393,35 +388,14 @@ func getLinesFromDiff(base, modified string, r lineRange) []string {
 	return modifiedLines[r.start-1 : end]
 }
 
-// loadMainConfig loads the config from the main workspace
-func loadMainConfig(mainPath string) (*config.ProjectConfig, error) {
-	configPath := filepath.Join(mainPath, config.ConfigDirName, config.ConfigFileName)
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read main config: %w", err)
-	}
-
-	var cfg config.ProjectConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse main config: %w", err)
-	}
-
-	return &cfg, nil
-}
-
-// loadManifestFromCache loads a manifest from the cache by snapshot ID
-func loadManifestFromCache(snapshotID string) (*manifest.Manifest, error) {
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return nil, err
-	}
-
-	manifestPath := filepath.Join(configDir, "cache", "manifests", snapshotID+".json")
+// loadManifestFromSnapshots loads a manifest from a workspace's snapshots directory
+func loadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, error) {
+	snapshotsDir := config.GetSnapshotsDirAt(root)
+	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("manifest not found in cache: %w", err)
+		return nil, fmt.Errorf("manifest not found in snapshots: %w", err)
 	}
-
 	return manifest.FromJSON(data)
 }
 
@@ -442,7 +416,7 @@ func (r *Report) FormatSummary() string {
 			return fmt.Sprintf("No conflicts (%d files modified in both workspaces, but changes don't overlap)",
 				len(r.OverlappingFiles))
 		}
-		return "No conflicts with main workspace"
+		return "No conflicts"
 	}
 
 	totalHunks := 0

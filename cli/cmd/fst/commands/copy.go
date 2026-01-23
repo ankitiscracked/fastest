@@ -25,16 +25,18 @@ func newCopyCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "copy",
-		Short: "Create a linked workspace copy",
-		Long: `Create a new linked workspace by copying project files to a new directory.
+		Short: "Create a workspace copy",
+		Long: `Create a new independent workspace by copying project files to a new directory.
 
 This will:
 1. Copy all project files to the target directory (respecting .fstignore)
-2. Create a lightweight .fst link pointing to the main workspace
-3. Share the blob cache with the main workspace (no duplication)
+2. Create a full .fst/ directory with its own config and snapshots
+3. Set the new workspace's base_snapshot_id to the current workspace's last snapshot (fork point)
+4. Copy the fork-point snapshot to the new workspace
 
-The new workspace shares storage with the main workspace, making copies fast
-and storage-efficient even for large projects.
+The new workspace is fully independent and can be moved or deleted without
+affecting other workspaces. Blobs are stored in the global cache (~/.cache/fst/blobs/)
+so there is no storage duplication.
 
 If --to is not specified, creates a sibling directory of the project root
 named {project}-{workspace}. For example, if the project is at /code/myapp,
@@ -63,10 +65,14 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	// Get main workspace path (for linking)
-	mainPath, err := config.GetMainWorkspacePath()
-	if err != nil {
-		return fmt.Errorf("failed to find main workspace: %w", err)
+	// Determine the fork point snapshot
+	// Use the current workspace's last_snapshot_id if available, otherwise base_snapshot_id
+	forkSnapshotID := cfg.LastSnapshotID
+	if forkSnapshotID == "" {
+		forkSnapshotID = cfg.BaseSnapshotID
+	}
+	if forkSnapshotID == "" {
+		return fmt.Errorf("current workspace has no snapshots - run 'fst snapshot' first to create a fork point")
 	}
 
 	// Compute default target directory if not specified
@@ -89,7 +95,7 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("target directory already exists: %s", targetDir)
 	}
 
-	fmt.Printf("Creating linked workspace at %s...\n", targetDir)
+	fmt.Printf("Creating workspace at %s...\n", targetDir)
 
 	// Load ignore patterns
 	matcher, err := ignore.LoadFromDir(root)
@@ -193,22 +199,39 @@ func runCopy(name, targetDir string) error {
 	// Generate workspace ID
 	workspaceID := generateLocalID()
 
-	// Initialize linked workspace
-	// We need to cd to target dir temporarily to create the link
-	origDir, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	if err := os.Chdir(targetDir); err != nil {
-		return fmt.Errorf("failed to change to target directory: %w", err)
-	}
-
-	err = config.InitLinked(mainPath, workspaceID, name, cfg.BaseSnapshotID, cfg.ProjectID)
-	os.Chdir(origDir) // Restore original directory
-
-	if err != nil {
+	// Initialize the new workspace with its own .fst/ directory
+	// Set base_snapshot_id to the fork point (source's current/last snapshot)
+	if err := config.InitAt(targetDir, cfg.ProjectID, workspaceID, name, forkSnapshotID); err != nil {
 		os.RemoveAll(targetDir)
-		return fmt.Errorf("failed to initialize linked workspace: %w", err)
+		return fmt.Errorf("failed to initialize workspace: %w", err)
+	}
+
+	// Copy the fork-point snapshot to the new workspace's snapshots directory
+	sourceSnapshotsDir := config.GetSnapshotsDirAt(root)
+	targetSnapshotsDir := config.GetSnapshotsDirAt(targetDir)
+
+	// Copy snapshot manifest
+	snapshotManifestSrc := filepath.Join(sourceSnapshotsDir, forkSnapshotID+".json")
+	snapshotManifestDst := filepath.Join(targetSnapshotsDir, forkSnapshotID+".json")
+	if err := copyFile(snapshotManifestSrc, snapshotManifestDst, 0644); err != nil {
+		fmt.Printf("Warning: Could not copy snapshot manifest: %v\n", err)
+	}
+
+	// Copy snapshot metadata if it exists
+	snapshotMetaSrc := filepath.Join(sourceSnapshotsDir, forkSnapshotID+".meta.json")
+	snapshotMetaDst := filepath.Join(targetSnapshotsDir, forkSnapshotID+".meta.json")
+	if _, err := os.Stat(snapshotMetaSrc); err == nil {
+		if err := copyFile(snapshotMetaSrc, snapshotMetaDst, 0644); err != nil {
+			fmt.Printf("Warning: Could not copy snapshot metadata: %v\n", err)
+		}
+	}
+
+	// Update the new workspace config with last_snapshot_id
+	newCfg, err := config.LoadAt(targetDir)
+	if err == nil {
+		newCfg.LastSnapshotID = forkSnapshotID
+		newCfg.Mode = cfg.Mode
+		config.SaveAt(targetDir, newCfg)
 	}
 
 	// Register workspace in global registry
@@ -217,22 +240,21 @@ func runCopy(name, targetDir string) error {
 		ProjectID:      cfg.ProjectID,
 		Name:           name,
 		Path:           targetDir,
-		BaseSnapshotID: cfg.BaseSnapshotID,
+		BaseSnapshotID: forkSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)
 	}
 
 	fmt.Println()
-	fmt.Println("✓ Linked workspace created!")
+	fmt.Println("✓ Workspace created!")
 	fmt.Println()
 	fmt.Printf("  Name:      %s\n", name)
 	fmt.Printf("  Directory: %s\n", targetDir)
-	fmt.Printf("  Main:      %s\n", mainPath)
-	fmt.Printf("  Base:      %s\n", cfg.BaseSnapshotID)
+	fmt.Printf("  Fork from: %s\n", forkSnapshotID)
 	fmt.Printf("  ID:        %s\n", workspaceID)
 	fmt.Println()
-	fmt.Println("  (shares blob cache with main workspace - no storage duplication)")
+	fmt.Println("  (blobs shared in global cache - no storage duplication)")
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Printf("  cd %s\n", targetDir)
@@ -245,7 +267,7 @@ func runCopy(name, targetDir string) error {
 func generateLocalID() string {
 	bytes := make([]byte, 8)
 	rand.Read(bytes)
-	return "local-" + hex.EncodeToString(bytes)
+	return "ws-" + hex.EncodeToString(bytes)
 }
 
 // copyFile copies a single file

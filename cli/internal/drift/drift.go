@@ -32,45 +32,7 @@ func Compute(root string, baseManifest *manifest.Manifest) (*Report, error) {
 	added, modified, deleted := manifest.Diff(baseManifest, current)
 
 	// Calculate bytes changed
-	var bytesChanged int64
-	currentMap := make(map[string]manifest.FileEntry)
-	for _, f := range current.Files {
-		currentMap[f.Path] = f
-	}
-	baseMap := make(map[string]manifest.FileEntry)
-	for _, f := range baseManifest.Files {
-		baseMap[f.Path] = f
-	}
-
-	// Added files contribute their full size
-	for _, path := range added {
-		if f, ok := currentMap[path]; ok {
-			bytesChanged += f.Size
-		}
-	}
-
-	// Modified files contribute the delta (or full size if we can't compare)
-	for _, path := range modified {
-		current, currentOk := currentMap[path]
-		base, baseOk := baseMap[path]
-		if currentOk && baseOk {
-			// Use the larger of the two as an approximation
-			if current.Size > base.Size {
-				bytesChanged += current.Size - base.Size
-			} else {
-				bytesChanged += base.Size - current.Size
-			}
-		} else if currentOk {
-			bytesChanged += current.Size
-		}
-	}
-
-	// Deleted files contribute their original size
-	for _, path := range deleted {
-		if f, ok := baseMap[path]; ok {
-			bytesChanged += f.Size
-		}
-	}
+	bytesChanged := calculateBytesChanged(baseManifest, current, added, modified, deleted)
 
 	return &Report{
 		FilesAdded:    added,
@@ -81,6 +43,7 @@ func Compute(root string, baseManifest *manifest.Manifest) (*Report, error) {
 }
 
 // ComputeFromCache computes drift using the cached base manifest
+// Compares current working directory against the workspace's base_snapshot_id
 func ComputeFromCache(root string) (*Report, error) {
 	// Load config to get base snapshot ID
 	cfg, err := config.Load()
@@ -110,16 +73,16 @@ func ComputeFromCache(root string) (*Report, error) {
 		}, nil
 	}
 
-	// Load base manifest from cache
-	configDir, err := config.GetConfigDir()
+	// Load base manifest from local snapshots directory
+	snapshotsDir, err := config.GetSnapshotsDir()
 	if err != nil {
 		return nil, err
 	}
 
-	manifestPath := filepath.Join(configDir, "cache", "manifests", cfg.BaseSnapshotID+".json")
+	manifestPath := filepath.Join(snapshotsDir, cfg.BaseSnapshotID+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("base manifest not found in cache: %w", err)
+		return nil, fmt.Errorf("base manifest not found in snapshots: %w", err)
 	}
 
 	baseManifest, err := manifest.FromJSON(data)
@@ -134,6 +97,86 @@ func ComputeFromCache(root string) (*Report, error) {
 
 	report.BaseSnapshotID = cfg.BaseSnapshotID
 	return report, nil
+}
+
+// ComputeAgainstWorkspace compares current workspace against another workspace
+// otherRoot is the path to the other workspace
+// If includeDirty is true, compares against the other workspace's current files
+// Otherwise, compares against the other workspace's last snapshot
+func ComputeAgainstWorkspace(root, otherRoot string, includeDirty bool) (*Report, error) {
+	// Get other workspace's manifest
+	var otherManifest *manifest.Manifest
+	var referenceID string
+
+	if includeDirty {
+		// Generate manifest from other workspace's current files
+		var err error
+		otherManifest, err = manifest.Generate(otherRoot, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate other workspace manifest: %w", err)
+		}
+		referenceID = "workspace:dirty"
+	} else {
+		// Load other workspace's last snapshot manifest
+		otherCfg, err := config.LoadAt(otherRoot)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load other workspace config: %w", err)
+		}
+
+		// Use other's last snapshot, fall back to base
+		snapshotID := otherCfg.LastSnapshotID
+		if snapshotID == "" {
+			snapshotID = otherCfg.BaseSnapshotID
+		}
+
+		if snapshotID == "" {
+			return nil, fmt.Errorf("other workspace has no snapshots")
+		}
+
+		otherSnapshotsDir := config.GetSnapshotsDirAt(otherRoot)
+		manifestPath := filepath.Join(otherSnapshotsDir, snapshotID+".json")
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load other workspace's snapshot: %w", err)
+		}
+
+		otherManifest, err = manifest.FromJSON(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse other workspace's snapshot: %w", err)
+		}
+		referenceID = snapshotID
+	}
+
+	// Generate current workspace manifest
+	currentManifest, err := manifest.Generate(root, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate current manifest: %w", err)
+	}
+
+	// Compute diff: other → current (what's different in current vs other)
+	added, modified, deleted := manifest.Diff(otherManifest, currentManifest)
+
+	// Calculate bytes changed
+	bytesChanged := calculateBytesChanged(otherManifest, currentManifest, added, modified, deleted)
+
+	return &Report{
+		BaseSnapshotID: referenceID,
+		FilesAdded:     added,
+		FilesModified:  modified,
+		FilesDeleted:   deleted,
+		BytesChanged:   bytesChanged,
+	}, nil
+}
+
+// LoadManifestFromSnapshots loads a manifest from a workspace's snapshots directory
+func LoadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, error) {
+	snapshotsDir := config.GetSnapshotsDirAt(root)
+	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("manifest not found in snapshots: %w", err)
+	}
+	return manifest.FromJSON(data)
 }
 
 // HasChanges returns true if there are any changes
@@ -180,115 +223,6 @@ func formatBytes(bytes int64) string {
 		return fmt.Sprintf("%d %s", bytes, sizes[i])
 	}
 	return fmt.Sprintf("%.1f %s", fb, sizes[i])
-}
-
-// ComputeAgainstMain compares current workspace against main workspace
-// For main workspaces, falls back to base comparison (no main to compare against)
-// For linked workspaces, compares against main's last snapshot
-// If includeDirty is true, compares against main's current file state instead
-func ComputeAgainstMain(root string, includeDirty bool) (*Report, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, fmt.Errorf("not in a project directory: %w", err)
-	}
-
-	// Main workspace: compare against base (like current behavior)
-	if cfg.IsMain {
-		return ComputeFromCache(root)
-	}
-
-	// Get main workspace path
-	mainPath, err := config.GetMainWorkspacePath()
-	if err != nil {
-		return nil, fmt.Errorf("cannot find main workspace: %w", err)
-	}
-
-	// Get main workspace's manifest
-	var mainManifest *manifest.Manifest
-	var referenceID string
-
-	if includeDirty {
-		// Generate manifest from main's current files
-		mainManifest, err = manifest.Generate(mainPath, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate main workspace manifest: %w", err)
-		}
-		referenceID = "main:dirty"
-	} else {
-		// Load main's last snapshot manifest
-		mainCfg, err := loadMainConfig(mainPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load main workspace config: %w", err)
-		}
-
-		// Use main's last snapshot, fall back to base
-		snapshotID := mainCfg.LastSnapshotID
-		if snapshotID == "" {
-			snapshotID = mainCfg.BaseSnapshotID
-		}
-
-		if snapshotID == "" {
-			return nil, fmt.Errorf("main workspace has no snapshots")
-		}
-
-		mainManifest, err = loadManifestFromCache(snapshotID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load main's snapshot: %w", err)
-		}
-		referenceID = snapshotID
-	}
-
-	// Generate current workspace manifest
-	currentManifest, err := manifest.Generate(root, false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate current manifest: %w", err)
-	}
-
-	// Compute diff: main → current (what's different in current vs main)
-	added, modified, deleted := manifest.Diff(mainManifest, currentManifest)
-
-	// Calculate bytes changed
-	bytesChanged := calculateBytesChanged(mainManifest, currentManifest, added, modified, deleted)
-
-	return &Report{
-		BaseSnapshotID: referenceID,
-		FilesAdded:     added,
-		FilesModified:  modified,
-		FilesDeleted:   deleted,
-		BytesChanged:   bytesChanged,
-	}, nil
-}
-
-// loadMainConfig loads the config from the main workspace
-func loadMainConfig(mainPath string) (*config.ProjectConfig, error) {
-	configPath := filepath.Join(mainPath, config.ConfigDirName, config.ConfigFileName)
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read main config: %w", err)
-	}
-
-	var cfg config.ProjectConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse main config: %w", err)
-	}
-
-	return &cfg, nil
-}
-
-// loadManifestFromCache loads a manifest from the cache by snapshot ID
-func loadManifestFromCache(snapshotID string) (*manifest.Manifest, error) {
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return nil, err
-	}
-
-	manifestPath := filepath.Join(configDir, "cache", "manifests", snapshotID+".json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("manifest not found in cache: %w", err)
-	}
-
-	return manifest.FromJSON(data)
 }
 
 // calculateBytesChanged calculates the total bytes changed between manifests

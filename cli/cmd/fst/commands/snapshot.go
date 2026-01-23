@@ -79,18 +79,13 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 	// Create snapshot ID from hash (use first 16 chars for readability)
 	snapshotID := "snap-" + manifestHash[:16]
 
-	// Check if this exact snapshot already exists
-	configDir, err := config.GetConfigDir()
+	// Check if this exact snapshot already exists in local snapshots dir
+	snapshotsDir, err := config.GetSnapshotsDir()
 	if err != nil {
-		return fmt.Errorf("failed to get config directory: %w", err)
+		return fmt.Errorf("failed to get snapshots directory: %w", err)
 	}
 
-	manifestDir := filepath.Join(configDir, "cache", "manifests")
-	if err := os.MkdirAll(manifestDir, 0755); err != nil {
-		return fmt.Errorf("failed to create snapshot cache: %w", err)
-	}
-
-	manifestPath := filepath.Join(manifestDir, snapshotID+".json")
+	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
 	alreadyExists := false
 	if _, err := os.Stat(manifestPath); err == nil {
 		alreadyExists = true
@@ -107,10 +102,10 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 		}
 	}
 
-	// Cache blobs (file contents) for rollback support
-	blobDir := filepath.Join(configDir, "cache", "blobs")
-	if err := os.MkdirAll(blobDir, 0755); err != nil {
-		return fmt.Errorf("failed to create blob cache: %w", err)
+	// Cache blobs (file contents) in global cache for rollback support
+	blobDir, err := config.GetGlobalBlobDir()
+	if err != nil {
+		return fmt.Errorf("failed to get global blob directory: %w", err)
 	}
 
 	blobsCached := 0
@@ -153,7 +148,7 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 	}
 
 	// Save snapshot metadata
-	metadataPath := filepath.Join(manifestDir, snapshotID+".meta.json")
+	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	if !alreadyExists || message != "" {
 		metadata := fmt.Sprintf(`{
   "id": "%s",

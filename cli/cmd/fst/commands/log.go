@@ -57,15 +57,13 @@ func runLog(limit int, showAll bool) error {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
 	}
 
-	configDir, err := config.GetConfigDir()
+	snapshotsDir, err := config.GetSnapshotsDir()
 	if err != nil {
-		return fmt.Errorf("failed to get config directory: %w", err)
+		return fmt.Errorf("failed to get snapshots directory: %w", err)
 	}
 
-	manifestDir := filepath.Join(configDir, "cache", "manifests")
-
 	// Load all snapshot metadata
-	snapshots, err := loadAllSnapshots(manifestDir)
+	snapshots, err := loadAllSnapshots(snapshotsDir)
 	if err != nil {
 		return fmt.Errorf("failed to load snapshots: %w", err)
 	}

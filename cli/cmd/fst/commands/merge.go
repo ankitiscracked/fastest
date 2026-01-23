@@ -571,11 +571,14 @@ func resolveConflictWithAgent(localRoot, sourceRoot string, action mergeAction, 
 		return fmt.Errorf("failed to read source: %w", err)
 	}
 
-	// Try to get base content (may not exist)
+	// Try to get base content from global blob cache
 	var baseContent []byte
 	if action.baseHash != "" {
-		// In a full implementation, we'd fetch this from the cache
-		// For now, we'll work without it
+		blobDir, err := config.GetGlobalBlobDir()
+		if err == nil {
+			blobPath := filepath.Join(blobDir, action.baseHash)
+			baseContent, _ = os.ReadFile(blobPath) // Ignore error, may not exist
+		}
 	}
 
 	// Invoke agent to merge
@@ -659,15 +662,15 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 		return nil, fmt.Errorf("no base snapshot")
 	}
 
-	configDir, err := config.GetConfigDir()
+	snapshotsDir, err := config.GetSnapshotsDir()
 	if err != nil {
 		return nil, err
 	}
 
-	manifestPath := filepath.Join(configDir, "cache", "manifests", cfg.BaseSnapshotID+".json")
+	manifestPath := filepath.Join(snapshotsDir, cfg.BaseSnapshotID+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("snapshot not in cache: %w", err)
+		return nil, fmt.Errorf("snapshot not in local snapshots: %w", err)
 	}
 
 	return manifest.FromJSON(data)

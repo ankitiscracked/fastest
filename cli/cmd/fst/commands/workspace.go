@@ -36,11 +36,11 @@ type RegisteredWorkspace struct {
 
 // GetRegistryPath returns the path to the workspace registry
 func GetRegistryPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
+	configDir, err := config.GetGlobalConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(homeDir, ".config", "fst", "workspaces.json"), nil
+	return filepath.Join(configDir, "workspaces.json"), nil
 }
 
 // LoadRegistry loads the workspace registry
@@ -123,6 +123,52 @@ func UnregisterWorkspace(path string) error {
 
 	registry.Workspaces = filtered
 	return SaveRegistry(registry)
+}
+
+// GetProjectWorkspaces returns all workspaces for a given project
+func GetProjectWorkspaces(projectID string) ([]RegisteredWorkspace, error) {
+	registry, err := LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+
+	var result []RegisteredWorkspace
+	for _, ws := range registry.Workspaces {
+		if ws.ProjectID == projectID {
+			result = append(result, ws)
+		}
+	}
+	return result, nil
+}
+
+// FindWorkspaceByName finds a workspace by name within a project
+func FindWorkspaceByName(projectID, name string) (*RegisteredWorkspace, error) {
+	registry, err := LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, ws := range registry.Workspaces {
+		if ws.ProjectID == projectID && ws.Name == name {
+			return &ws, nil
+		}
+	}
+	return nil, fmt.Errorf("workspace '%s' not found in project", name)
+}
+
+// FindWorkspaceByPath finds a workspace by its path
+func FindWorkspaceByPath(path string) (*RegisteredWorkspace, error) {
+	registry, err := LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, ws := range registry.Workspaces {
+		if ws.Path == path {
+			return &ws, nil
+		}
+	}
+	return nil, fmt.Errorf("workspace not found at path: %s", path)
 }
 
 func newWorkspacesCmd() *cobra.Command {

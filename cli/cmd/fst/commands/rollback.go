@@ -64,9 +64,9 @@ func runRollback(files []string, toSnapshot string, all bool, dryRun bool, force
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	configDir, err := config.GetConfigDir()
+	snapshotsDir, err := config.GetSnapshotsDir()
 	if err != nil {
-		return fmt.Errorf("failed to get config directory: %w", err)
+		return fmt.Errorf("failed to get snapshots directory: %w", err)
 	}
 
 	// Determine target snapshot
@@ -78,8 +78,8 @@ func runRollback(files []string, toSnapshot string, all bool, dryRun bool, force
 		return fmt.Errorf("no base snapshot set - create one with 'fst snapshot --set-base'")
 	}
 
-	// Load target manifest
-	manifestPath := filepath.Join(configDir, "cache", "manifests", targetSnapshotID+".json")
+	// Load target manifest from local snapshots directory
+	manifestPath := filepath.Join(snapshotsDir, targetSnapshotID+".json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return fmt.Errorf("snapshot not found: %s", targetSnapshotID)
@@ -148,8 +148,11 @@ func runRollback(files []string, toSnapshot string, all bool, dryRun bool, force
 	})
 	sort.Strings(toDelete)
 
-	// Check blob availability
-	blobDir := filepath.Join(configDir, "cache", "blobs")
+	// Check blob availability in global cache
+	blobDir, err := config.GetGlobalBlobDir()
+	if err != nil {
+		return fmt.Errorf("failed to get global blob directory: %w", err)
+	}
 	missingBlobs := []string{}
 	for _, f := range toRestore {
 		blobPath := filepath.Join(blobDir, f.Hash)

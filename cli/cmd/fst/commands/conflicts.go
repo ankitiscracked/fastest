@@ -2,6 +2,8 @@ package commands
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -21,37 +23,43 @@ func newConflictsCmd() *cobra.Command {
 	var summary bool
 
 	cmd := &cobra.Command{
-		Use:   "conflicts",
-		Short: "Show git-style conflicts with main workspace",
-		Long: `Detect git-style conflicts with the main workspace.
+		Use:   "conflicts <workspace-path>",
+		Short: "Show git-style conflicts with another workspace",
+		Long: `Detect git-style conflicts with another workspace.
 
 A conflict occurs when the same lines/regions of a file have been modified
-in both your workspace and the main workspace since your common base snapshot.
+in both your workspace and the other workspace since your common base snapshot.
 
 This performs a 3-way comparison:
 1. Your changes: base → current workspace
-2. Main's changes: base → main workspace
+2. Other's changes: base → other workspace
 3. Conflicts: overlapping line modifications
 
 Files modified in both workspaces but in different regions are NOT conflicts
 and can be auto-merged.
 
-Use --all to also show files modified in both workspaces that don't conflict.
-Use --summary to generate an LLM summary of conflicts.`,
+Both workspaces must share a common base_snapshot_id (i.e., one was forked
+from the other) for meaningful conflict detection.
+
+Examples:
+  fst conflicts ../feature-workspace
+  fst conflicts --all ../other       # Also show non-conflicting overlaps
+  fst conflicts --summary ../other   # Generate AI summary of conflicts`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runConflicts(showAll, includeDirty, jsonOutput, summary)
+			return runConflicts(args[0], showAll, includeDirty, jsonOutput, summary)
 		},
 	}
 
 	cmd.Flags().BoolVarP(&showAll, "all", "a", false, "Show all overlapping files, not just conflicts")
-	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include main's uncommitted changes in comparison")
+	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include other workspace's uncommitted changes in comparison")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	cmd.Flags().BoolVar(&summary, "summary", false, "Generate LLM summary of conflicts (requires configured agent)")
 
 	return cmd
 }
 
-func runConflicts(showAll, includeDirty, jsonOutput, generateSummary bool) error {
+func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, generateSummary bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -62,8 +70,23 @@ func runConflicts(showAll, includeDirty, jsonOutput, generateSummary bool) error
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
+	// Resolve other workspace path
+	otherRoot := otherWorkspace
+	if !filepath.IsAbs(otherRoot) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		otherRoot = filepath.Join(cwd, otherRoot)
+	}
+
+	// Verify the other workspace exists
+	if _, err := os.Stat(filepath.Join(otherRoot, ".fst")); os.IsNotExist(err) {
+		return fmt.Errorf("not a workspace: %s", otherRoot)
+	}
+
 	// Detect git-style conflicts
-	report, err := conflicts.Detect(root, includeDirty)
+	report, err := conflicts.Detect(root, otherRoot, includeDirty)
 	if err != nil {
 		return fmt.Errorf("failed to detect conflicts: %w", err)
 	}
@@ -100,10 +123,7 @@ func runConflicts(showAll, includeDirty, jsonOutput, generateSummary bool) error
 
 	// Human-readable output
 	fmt.Printf("Workspace: %s\n", cfg.WorkspaceName)
-	if cfg.IsMain {
-		fmt.Println("(main workspace - no conflicts possible)")
-		return nil
-	}
+	fmt.Printf("Comparing against: %s\n", otherRoot)
 	fmt.Println()
 
 	// Summary
@@ -122,7 +142,7 @@ func runConflicts(showAll, includeDirty, jsonOutput, generateSummary bool) error
 				}
 			}
 		} else {
-			fmt.Println("✓ No conflicts with main workspace")
+			fmt.Println("✓ No conflicts with the other workspace")
 		}
 		return nil
 	}
@@ -161,8 +181,8 @@ func runConflicts(showAll, includeDirty, jsonOutput, generateSummary bool) error
 
 	fmt.Println()
 	fmt.Println("To resolve conflicts:")
-	fmt.Println("  fst merge main --agent   # Let AI resolve conflicts")
-	fmt.Println("  fst merge main --manual  # Create conflict markers for manual resolution")
+	fmt.Printf("  fst merge %s --agent   # Let AI resolve conflicts\n", otherWorkspace)
+	fmt.Printf("  fst merge %s --manual  # Create conflict markers for manual resolution\n", otherWorkspace)
 
 	return nil
 }

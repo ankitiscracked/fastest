@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -21,31 +22,39 @@ func newDriftCmd() *cobra.Command {
 	var jsonOutput bool
 	var summary bool
 	var sync bool
+	var workspace string
 	var includeDirty bool
 
 	cmd := &cobra.Command{
 		Use:   "drift",
-		Short: "Show changes from main workspace",
-		Long: `Show the drift (changes) from the main workspace.
+		Short: "Show changes from base snapshot or another workspace",
+		Long: `Show the drift (changes) from the base snapshot or another workspace.
 
-For linked workspaces, this compares your current working directory against
-the main workspace and shows which files have been added, modified, or deleted.
+By default, compares your current working directory against the workspace's
+base_snapshot_id and shows which files have been added, modified, or deleted.
 
-For main workspaces, this compares against the base snapshot.`,
+Use --workspace to compare against another workspace's current state.
+
+Examples:
+  fst drift                        # Compare against base snapshot
+  fst drift --workspace ../feature # Compare against another workspace
+  fst drift --json                 # Output as JSON
+  fst drift --summary              # Generate AI summary of changes`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDrift(jsonOutput, summary, sync, includeDirty)
+			return runDrift(jsonOutput, summary, sync, workspace, includeDirty)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	cmd.Flags().BoolVar(&summary, "summary", false, "Generate LLM summary of changes (requires configured agent)")
 	cmd.Flags().BoolVar(&sync, "sync", false, "Sync drift report to cloud")
-	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include main workspace's uncommitted changes in comparison")
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Compare against another workspace (path)")
+	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include other workspace's uncommitted changes in comparison")
 
 	return cmd
 }
 
-func runDrift(jsonOutput, generateSummary, syncToCloud, includeDirty bool) error {
+func runDrift(jsonOutput, generateSummary, syncToCloud bool, otherWorkspace string, includeDirty bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -56,10 +65,34 @@ func runDrift(jsonOutput, generateSummary, syncToCloud, includeDirty bool) error
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	// Compute drift against main workspace (or base for main workspaces)
-	report, err := drift.ComputeAgainstMain(root, includeDirty)
-	if err != nil {
-		return fmt.Errorf("failed to compute drift: %w", err)
+	var report *drift.Report
+
+	if otherWorkspace != "" {
+		// Compare against another workspace
+		otherRoot := otherWorkspace
+		if !filepath.IsAbs(otherRoot) {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			otherRoot = filepath.Join(cwd, otherRoot)
+		}
+
+		// Verify the other workspace exists
+		if _, err := os.Stat(filepath.Join(otherRoot, ".fst")); os.IsNotExist(err) {
+			return fmt.Errorf("not a workspace: %s", otherRoot)
+		}
+
+		report, err = drift.ComputeAgainstWorkspace(root, otherRoot, includeDirty)
+		if err != nil {
+			return fmt.Errorf("failed to compute drift: %w", err)
+		}
+	} else {
+		// Compare against base snapshot
+		report, err = drift.ComputeFromCache(root)
+		if err != nil {
+			return fmt.Errorf("failed to compute drift: %w", err)
+		}
 	}
 
 	// Generate summary if requested
@@ -141,18 +174,18 @@ func runDrift(jsonOutput, generateSummary, syncToCloud, includeDirty bool) error
 
 	// Human-readable output
 	if !report.HasChanges() {
-		if cfg.IsMain {
-			fmt.Println("No changes from base snapshot")
+		if otherWorkspace != "" {
+			fmt.Println("No differences from the other workspace")
 		} else {
-			fmt.Println("No differences from main workspace")
+			fmt.Println("No changes from base snapshot")
 		}
 		return nil
 	}
 
-	if cfg.IsMain {
-		fmt.Printf("Drift from base: %s\n", report.FormatSummary())
+	if otherWorkspace != "" {
+		fmt.Printf("Differences from workspace: %s\n", report.FormatSummary())
 	} else {
-		fmt.Printf("Differences from main: %s\n", report.FormatSummary())
+		fmt.Printf("Drift from base: %s\n", report.FormatSummary())
 	}
 	fmt.Println()
 
