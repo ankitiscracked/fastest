@@ -222,7 +222,10 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 	if report.HasCommonAncestor {
 		fmt.Printf("Common ancestor: %s\n", report.CommonAncestorID)
 	} else {
-		fmt.Println("(no common ancestor - showing simple diff)")
+		fmt.Println()
+		fmt.Println("\033[33m⚠ No common ancestor found.\033[0m")
+		fmt.Println("  Cannot determine who changed what - showing file differences only.")
+		fmt.Println("  Merge may require manual conflict resolution.")
 	}
 	fmt.Println()
 
@@ -235,24 +238,33 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 		return nil
 	}
 
-	// Show our changes
-	if ourHasChanges {
-		fmt.Printf("Our changes (since %s):\n", report.CommonAncestorID)
-		printChanges(report.OurChanges)
-		fmt.Println()
-	} else {
-		fmt.Println("We have no changes.")
-		fmt.Println()
-	}
+	if report.HasCommonAncestor {
+		// Show our changes
+		if ourHasChanges {
+			fmt.Printf("Our changes (since %s):\n", report.CommonAncestorID)
+			printChanges(report.OurChanges)
+			fmt.Println()
+		} else {
+			fmt.Println("We have no changes.")
+			fmt.Println()
+		}
 
-	// Show their changes
-	if theirHasChanges {
-		fmt.Printf("Their changes (since %s):\n", report.CommonAncestorID)
-		printChanges(report.TheirChanges)
-		fmt.Println()
-	} else if report.HasCommonAncestor {
-		fmt.Println("They have no changes.")
-		fmt.Println()
+		// Show their changes
+		if theirHasChanges {
+			fmt.Printf("Their changes (since %s):\n", report.CommonAncestorID)
+			printChanges(report.TheirChanges)
+			fmt.Println()
+		} else {
+			fmt.Println("They have no changes.")
+			fmt.Println()
+		}
+	} else {
+		// No common ancestor - show simple diff
+		if ourHasChanges {
+			fmt.Println("Files different between workspaces:")
+			printChanges(report.OurChanges)
+			fmt.Println()
+		}
 	}
 
 	// Highlight overlapping files
