@@ -189,12 +189,8 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		}
 	}
 
-	// Track previous base for parent display
-	previousBase := cfg.BaseSnapshotID
-
-	// Update both last and base snapshot IDs
+	// Update last snapshot ID (base stays as fork point)
 	cfg.LastSnapshotID = snapshotID
-	cfg.BaseSnapshotID = snapshotID
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("failed to update config: %w", err)
 	}
@@ -217,8 +213,8 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	if message != "" {
 		fmt.Printf("  Message:  %s\n", message)
 	}
-	if previousBase != "" && previousBase != snapshotID {
-		fmt.Printf("  Parent:   %s\n", previousBase)
+	if cfg.BaseSnapshotID != "" {
+		fmt.Printf("  Base:     %s\n", cfg.BaseSnapshotID)
 	}
 	if !cloudSynced && token == "" {
 		fmt.Println("  (local only - not synced to cloud)")
