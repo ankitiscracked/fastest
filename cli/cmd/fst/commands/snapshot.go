@@ -23,7 +23,6 @@ func init() {
 func newSnapshotCmd() *cobra.Command {
 	var message string
 	var autoSummary bool
-	var setBase bool
 	var agentName string
 
 	cmd := &cobra.Command{
@@ -35,24 +34,23 @@ This will:
 1. Scan all files (respecting .fstignore)
 2. Save the snapshot locally for rollback support
 3. Optionally sync to cloud if authenticated
+4. Set this as the new base for drift calculations
 
 Use --summary to auto-generate a description using your coding agent.
-Use --set-base to update this workspace's base snapshot to the new one.
 Use --agent to record which AI agent made these changes.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSnapshot(message, autoSummary, setBase, agentName)
+			return runSnapshot(message, autoSummary, agentName)
 		},
 	}
 
 	cmd.Flags().StringVarP(&message, "message", "m", "", "Description for this snapshot")
 	cmd.Flags().BoolVar(&autoSummary, "summary", false, "Auto-generate description using coding agent")
-	cmd.Flags().BoolVar(&setBase, "set-base", false, "Update workspace base to this snapshot")
 	cmd.Flags().StringVar(&agentName, "agent", "", "Name of the AI agent (auto-detected if not specified)")
 
 	return cmd
 }
 
-func runSnapshot(message string, autoSummary bool, setBase bool, agentName string) error {
+func runSnapshot(message string, autoSummary bool, agentName string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -191,11 +189,12 @@ func runSnapshot(message string, autoSummary bool, setBase bool, agentName strin
 		}
 	}
 
-	// Always update last snapshot ID, optionally update base
+	// Track previous base for parent display
+	previousBase := cfg.BaseSnapshotID
+
+	// Update both last and base snapshot IDs
 	cfg.LastSnapshotID = snapshotID
-	if setBase {
-		cfg.BaseSnapshotID = snapshotID
-	}
+	cfg.BaseSnapshotID = snapshotID
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("failed to update config: %w", err)
 	}
@@ -218,11 +217,8 @@ func runSnapshot(message string, autoSummary bool, setBase bool, agentName strin
 	if message != "" {
 		fmt.Printf("  Message:  %s\n", message)
 	}
-	if cfg.BaseSnapshotID != "" && cfg.BaseSnapshotID != snapshotID {
-		fmt.Printf("  Parent:   %s\n", cfg.BaseSnapshotID)
-	}
-	if setBase {
-		fmt.Printf("  (base updated to this snapshot)\n")
+	if previousBase != "" && previousBase != snapshotID {
+		fmt.Printf("  Parent:   %s\n", previousBase)
 	}
 	if !cloudSynced && token == "" {
 		fmt.Println("  (local only - not synced to cloud)")
