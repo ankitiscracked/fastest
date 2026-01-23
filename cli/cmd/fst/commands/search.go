@@ -30,15 +30,13 @@ func newSearchCmd() *cobra.Command {
 
 Features:
 - Fuzzy search by project or workspace name
-- See drift status, agent, and last activity at a glance
-- Quick actions: open, merge, status, diff
+- Split view with preview pane showing drift status and file changes
+- Quick actions: open, merge, open in editor
 
 Keyboard shortcuts:
   ↑/↓ or j/k    Navigate list
   Enter         Open workspace (prints cd command)
   m             Merge into current workspace (same project only)
-  s             Show detailed status
-  d             Show diff
   o             Open in editor
   q or Esc      Quit`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -59,6 +57,9 @@ type workspaceItem struct {
 	Added         int
 	Modified      int
 	Deleted       int
+	AddedFiles    []string
+	ModifiedFiles []string
+	DeletedFiles  []string
 	Agent         string
 	LastActivity  time.Time
 	IsCurrent     bool
@@ -195,6 +196,9 @@ func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 			item.Added = len(changes.FilesAdded)
 			item.Modified = len(changes.FilesModified)
 			item.Deleted = len(changes.FilesDeleted)
+			item.AddedFiles = changes.FilesAdded
+			item.ModifiedFiles = changes.FilesModified
+			item.DeletedFiles = changes.FilesDeleted
 		}
 
 		// Get agent and last activity from most recent snapshot
@@ -297,20 +301,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "s":
-			if len(m.filtered) > 0 {
-				m.action = "status"
-				m.actionTarget = &m.filtered[m.cursor]
-				return m, tea.Quit
-			}
-
-		case "d":
-			if len(m.filtered) > 0 {
-				m.action = "diff"
-				m.actionTarget = &m.filtered[m.cursor]
-				return m, tea.Quit
-			}
-
 		case "o":
 			if len(m.filtered) > 0 {
 				m.action = "editor"
@@ -361,6 +351,105 @@ func (m *model) filterItems() {
 }
 
 func (m model) View() string {
+	// Calculate layout dimensions
+	leftWidth := 45
+	rightWidth := m.width - leftWidth - 3 // 3 for border
+	if rightWidth < 30 {
+		rightWidth = 30
+	}
+	if m.width < 80 {
+		// Fallback to single column on narrow terminals
+		return m.viewSingleColumn()
+	}
+
+	listHeight := m.height - 8 // Reserve space for header, input, footer
+	if listHeight < 5 {
+		listHeight = 5
+	}
+
+	// Build left pane (search + list)
+	leftPane := m.buildLeftPane(leftWidth, listHeight)
+
+	// Build right pane (preview)
+	rightPane := m.buildPreviewPane(rightWidth, listHeight)
+
+	// Join panes side by side
+	leftLines := strings.Split(leftPane, "\n")
+	rightLines := strings.Split(rightPane, "\n")
+
+	// Ensure same number of lines
+	maxLines := max(len(leftLines), len(rightLines))
+	for len(leftLines) < maxLines {
+		leftLines = append(leftLines, strings.Repeat(" ", leftWidth))
+	}
+	for len(rightLines) < maxLines {
+		rightLines = append(rightLines, "")
+	}
+
+	var b strings.Builder
+	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	border := borderStyle.Render("│")
+
+	for i := 0; i < maxLines; i++ {
+		left := leftLines[i]
+		right := rightLines[i]
+
+		// Pad left to fixed width
+		leftRunes := []rune(stripAnsi(left))
+		if len(leftRunes) < leftWidth {
+			left += strings.Repeat(" ", leftWidth-len(leftRunes))
+		}
+
+		b.WriteString(left)
+		b.WriteString(" ")
+		b.WriteString(border)
+		b.WriteString(" ")
+		b.WriteString(right)
+		b.WriteString("\n")
+	}
+
+	// Help bar
+	b.WriteString("\n")
+	helpLine := helpStyle.Render("↑↓ navigate  enter open  m merge  o editor  q quit")
+	b.WriteString(helpLine)
+
+	return b.String()
+}
+
+func (m model) viewSingleColumn() string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("fst search"))
+	b.WriteString("\n\n")
+	b.WriteString(m.textInput.View())
+	b.WriteString("\n\n")
+
+	listHeight := m.height - 8
+	if listHeight < 5 {
+		listHeight = 5
+	}
+
+	start := 0
+	if m.cursor >= listHeight {
+		start = m.cursor - listHeight + 1
+	}
+	end := start + listHeight
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+
+	for i := start; i < end; i++ {
+		b.WriteString(m.renderItem(m.filtered[i], i == m.cursor))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("↑↓ nav  enter open  m merge  q quit"))
+
+	return b.String()
+}
+
+func (m model) buildLeftPane(width, listHeight int) string {
 	var b strings.Builder
 
 	// Title
@@ -371,35 +460,23 @@ func (m model) View() string {
 	b.WriteString(m.textInput.View())
 	b.WriteString("\n\n")
 
-	// Current workspace indicator
-	if m.currentWsName != "" {
-		b.WriteString(fmt.Sprintf("Current: %s\n\n", currentStyle.Render(m.currentWsName)))
-	}
-
-	// List items
-	listHeight := m.height - 12 // Reserve space for header, input, footer
-	if listHeight < 5 {
-		listHeight = 5
-	}
-
+	// List
 	start := 0
 	if m.cursor >= listHeight {
 		start = m.cursor - listHeight + 1
 	}
-
 	end := start + listHeight
 	if end > len(m.filtered) {
 		end = len(m.filtered)
 	}
 
 	if len(m.filtered) == 0 {
-		b.WriteString(helpStyle.Render("  No workspaces found\n"))
+		b.WriteString(helpStyle.Render("  No workspaces found"))
+		b.WriteString("\n")
 	}
 
 	for i := start; i < end; i++ {
-		item := m.filtered[i]
-		line := m.renderItem(item, i == m.cursor)
-		b.WriteString(line)
+		b.WriteString(m.renderItemCompact(m.filtered[i], i == m.cursor))
 		b.WriteString("\n")
 	}
 
@@ -409,16 +486,208 @@ func (m model) View() string {
 	}
 
 	// Status bar
-	b.WriteString("\n")
-	statusLine := m.renderStatusBar()
-	b.WriteString(statusLine)
-
-	// Help
-	b.WriteString("\n")
-	helpLine := helpStyle.Render("↑↓ navigate  enter open  m merge  s status  d diff  o editor  q quit")
-	b.WriteString(helpLine)
+	b.WriteString(m.renderStatusBar())
 
 	return b.String()
+}
+
+func (m model) buildPreviewPane(width, height int) string {
+	var b strings.Builder
+
+	previewTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("255")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 1).
+		Width(width)
+
+	sectionTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("81"))
+
+	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
+		b.WriteString(previewTitle.Render("Preview"))
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render("  Select a workspace to see details"))
+		return b.String()
+	}
+
+	item := m.filtered[m.cursor]
+
+	// Header
+	b.WriteString(previewTitle.Render(item.WorkspaceName))
+	b.WriteString("\n\n")
+
+	// Path
+	b.WriteString(sectionTitle.Render("Path"))
+	b.WriteString("\n")
+	path := item.Path
+	if len(path) > width-2 {
+		path = "..." + path[len(path)-width+5:]
+	}
+	b.WriteString(helpStyle.Render("  " + path))
+	b.WriteString("\n\n")
+
+	// Status
+	b.WriteString(sectionTitle.Render("Status"))
+	b.WriteString("\n")
+	if item.Added == 0 && item.Modified == 0 && item.Deleted == 0 {
+		b.WriteString(currentStyle.Render("  ✓ Clean (no changes)"))
+		b.WriteString("\n")
+	} else {
+		total := item.Added + item.Modified + item.Deleted
+		b.WriteString(fmt.Sprintf("  %s files changed\n", modifiedStyle.Render(fmt.Sprintf("%d", total))))
+	}
+	b.WriteString("\n")
+
+	// Files changed
+	linesUsed := 8
+	maxFileLines := height - linesUsed - 4
+
+	if item.Added > 0 || item.Modified > 0 || item.Deleted > 0 {
+		b.WriteString(sectionTitle.Render("Changes"))
+		b.WriteString("\n")
+
+		fileLines := 0
+
+		// Added files
+		for i, f := range item.AddedFiles {
+			if fileLines >= maxFileLines {
+				remaining := (len(item.AddedFiles) - i) + len(item.ModifiedFiles) + len(item.DeletedFiles)
+				b.WriteString(helpStyle.Render(fmt.Sprintf("  ... and %d more\n", remaining)))
+				break
+			}
+			fname := f
+			if len(fname) > width-6 {
+				fname = "..." + fname[len(fname)-width+9:]
+			}
+			b.WriteString(addedStyle.Render("  + " + fname))
+			b.WriteString("\n")
+			fileLines++
+		}
+
+		// Modified files
+		if fileLines < maxFileLines {
+			for i, f := range item.ModifiedFiles {
+				if fileLines >= maxFileLines {
+					remaining := (len(item.ModifiedFiles) - i) + len(item.DeletedFiles)
+					b.WriteString(helpStyle.Render(fmt.Sprintf("  ... and %d more\n", remaining)))
+					break
+				}
+				fname := f
+				if len(fname) > width-6 {
+					fname = "..." + fname[len(fname)-width+9:]
+				}
+				b.WriteString(modifiedStyle.Render("  ~ " + fname))
+				b.WriteString("\n")
+				fileLines++
+			}
+		}
+
+		// Deleted files
+		if fileLines < maxFileLines {
+			for i, f := range item.DeletedFiles {
+				if fileLines >= maxFileLines {
+					remaining := len(item.DeletedFiles) - i
+					b.WriteString(helpStyle.Render(fmt.Sprintf("  ... and %d more\n", remaining)))
+					break
+				}
+				fname := f
+				if len(fname) > width-6 {
+					fname = "..." + fname[len(fname)-width+9:]
+				}
+				b.WriteString(deletedStyle.Render("  - " + fname))
+				b.WriteString("\n")
+				fileLines++
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// Agent & Activity
+	if item.Agent != "" || !item.LastActivity.IsZero() {
+		b.WriteString(sectionTitle.Render("Info"))
+		b.WriteString("\n")
+		if item.Agent != "" {
+			b.WriteString(fmt.Sprintf("  Agent: %s\n", agentStyle.Render(item.Agent)))
+		}
+		if !item.LastActivity.IsZero() {
+			b.WriteString(fmt.Sprintf("  Last activity: %s\n", timeStyle.Render(formatTimeAgo(item.LastActivity))))
+		}
+		b.WriteString("\n")
+	}
+
+	// Merge hint
+	if item.SameProject && !item.IsCurrent {
+		b.WriteString(mergeableStyle.Render("  ● Press 'm' to merge into current"))
+		b.WriteString("\n")
+	} else if !item.SameProject {
+		b.WriteString(helpStyle.Render("  Different project (merge disabled)"))
+		b.WriteString("\n")
+	} else if item.IsCurrent {
+		b.WriteString(currentStyle.Render("  ▸ Current workspace"))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func (m model) renderItemCompact(item workspaceItem, selected bool) string {
+	// Compact view for left pane
+	indicator := "  "
+	if item.IsCurrent {
+		indicator = "▸ "
+	} else if selected {
+		indicator = "> "
+	}
+
+	// Project / Workspace (truncated)
+	name := fmt.Sprintf("%s/%s", item.ProjectName, item.WorkspaceName)
+	if len(name) > 25 {
+		name = name[:22] + "..."
+	}
+
+	// Drift summary
+	drift := ""
+	if item.Added > 0 || item.Modified > 0 || item.Deleted > 0 {
+		drift = fmt.Sprintf("+%d ~%d -%d", item.Added, item.Modified, item.Deleted)
+	} else {
+		drift = "clean"
+	}
+
+	// Mergeable indicator
+	mergeInd := " "
+	if item.SameProject && !item.IsCurrent {
+		mergeInd = "●"
+	}
+
+	line := fmt.Sprintf("%s%-25s %s %s", indicator, name, drift, mergeInd)
+
+	if selected {
+		line = selectedStyle.Render(line)
+	}
+
+	return line
+}
+
+// stripAnsi removes ANSI escape codes for length calculation
+func stripAnsi(s string) string {
+	var result strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == '\033' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
 }
 
 func (m model) renderItem(item workspaceItem, selected bool) string {
@@ -530,26 +799,6 @@ func runSearch() error {
 		case "merge":
 			fmt.Printf("Merging %s...\n\n", m.actionTarget.WorkspaceName)
 			return runMerge(m.actionTarget.WorkspaceName, "", ConflictModeAgent, nil, false, false, false)
-
-		case "status":
-			// Change to workspace dir and run status
-			originalDir, _ := os.Getwd()
-			if err := os.Chdir(m.actionTarget.Path); err != nil {
-				return fmt.Errorf("failed to change to workspace: %w", err)
-			}
-			err := runStatus(false)
-			os.Chdir(originalDir)
-			return err
-
-		case "diff":
-			// Show drift for the workspace
-			originalDir, _ := os.Getwd()
-			if err := os.Chdir(m.actionTarget.Path); err != nil {
-				return fmt.Errorf("failed to change to workspace: %w", err)
-			}
-			err := runDrift("", false, false, false, false)
-			os.Chdir(originalDir)
-			return err
 
 		case "editor":
 			// Try to open in editor
