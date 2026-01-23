@@ -192,14 +192,14 @@ func ComputeAgainstWorkspace(root, otherRoot string, includeDirty bool) (*Report
 		}
 		referenceID = "workspace:dirty"
 	} else {
-		// Load other workspace's last snapshot manifest
+		// Load other workspace's most recent snapshot manifest
 		otherCfg, err := config.LoadAt(otherRoot)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load other workspace config: %w", err)
 		}
 
-		// Use other's last snapshot, fall back to base
-		snapshotID := otherCfg.LastSnapshotID
+		// Use other's most recent snapshot, fall back to base
+		snapshotID, _ := config.GetLatestSnapshotIDAt(otherRoot)
 		if snapshotID == "" {
 			snapshotID = otherCfg.BaseSnapshotID
 		}
@@ -303,7 +303,7 @@ func ComputeDivergence(ourRoot, theirRoot string, includeDirty bool) (*Divergenc
 					return nil, fmt.Errorf("failed to generate their manifest: %w", err)
 				}
 			} else {
-				theirSnapshotID := theirCfg.LastSnapshotID
+				theirSnapshotID, _ := config.GetLatestSnapshotIDAt(theirRoot)
 				if theirSnapshotID == "" {
 					theirSnapshotID = theirCfg.BaseSnapshotID
 				}

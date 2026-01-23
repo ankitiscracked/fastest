@@ -245,10 +245,9 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 
 		fmt.Printf("Captured %d files.\n", m.FileCount())
 
-		// Update config with snapshot IDs
+		// Update config with base snapshot ID (fork point)
 		cfg, _ := config.LoadAt(cwd)
 		cfg.BaseSnapshotID = snapshotID
-		cfg.LastSnapshotID = snapshotID
 		cfg.Mode = modeString(cloudSynced)
 		if err := config.SaveAt(cwd, cfg); err != nil {
 			return fmt.Errorf("failed to update config: %w", err)

@@ -66,8 +66,8 @@ func runCopy(name, targetDir string) error {
 	}
 
 	// Determine the fork point snapshot
-	// Use the current workspace's last_snapshot_id if available, otherwise base_snapshot_id
-	forkSnapshotID := cfg.LastSnapshotID
+	// Use the most recent snapshot if available, otherwise base_snapshot_id
+	forkSnapshotID, _ := config.GetLatestSnapshotIDAt(root)
 	if forkSnapshotID == "" {
 		forkSnapshotID = cfg.BaseSnapshotID
 	}
@@ -226,10 +226,9 @@ func runCopy(name, targetDir string) error {
 		}
 	}
 
-	// Update the new workspace config with last_snapshot_id
+	// Update the new workspace config mode
 	newCfg, err := config.LoadAt(targetDir)
 	if err == nil {
-		newCfg.LastSnapshotID = forkSnapshotID
 		newCfg.Mode = cfg.Mode
 		config.SaveAt(targetDir, newCfg)
 	}

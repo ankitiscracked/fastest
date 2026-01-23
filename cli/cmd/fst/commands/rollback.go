@@ -76,7 +76,7 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 		return fmt.Errorf("failed to get snapshots directory: %w", err)
 	}
 
-	// Determine target snapshot (default to last snapshot, not base)
+	// Determine target snapshot (default to most recent snapshot)
 	targetSnapshotID := toSnapshot
 	if targetSnapshotID == "" {
 		if toBase {
@@ -86,9 +86,13 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 				return fmt.Errorf("no base snapshot set")
 			}
 		} else {
-			// Default: prefer last snapshot (most recent save point) over base (fork point)
-			if cfg.LastSnapshotID != "" {
-				targetSnapshotID = cfg.LastSnapshotID
+			// Default: find most recent snapshot from snapshots directory
+			latestID, err := config.GetLatestSnapshotID()
+			if err != nil {
+				return fmt.Errorf("failed to find snapshots: %w", err)
+			}
+			if latestID != "" {
+				targetSnapshotID = latestID
 			} else {
 				targetSnapshotID = cfg.BaseSnapshotID
 			}

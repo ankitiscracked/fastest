@@ -189,8 +189,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		}
 	}
 
-	// Update last snapshot ID (base stays as fork point)
-	cfg.LastSnapshotID = snapshotID
+	// Save config (no need to track last snapshot - it's derived from snapshots dir)
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("failed to update config: %w", err)
 	}
@@ -313,11 +312,7 @@ func CreateAutoSnapshot(message string) (string, error) {
 		return "", fmt.Errorf("failed to save metadata: %w", err)
 	}
 
-	// Update config
-	cfg.LastSnapshotID = snapshotID
-	if err := config.Save(cfg); err != nil {
-		return "", fmt.Errorf("failed to update config: %w", err)
-	}
+	// Config doesn't need updating - last snapshot is derived from snapshots dir
 
 	return snapshotID, nil
 }

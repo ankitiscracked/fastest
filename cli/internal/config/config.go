@@ -83,6 +83,62 @@ func GetSnapshotsDirAt(root string) string {
 	return filepath.Join(root, ConfigDirName, SnapshotsDirName)
 }
 
+// SnapshotMeta represents snapshot metadata
+type SnapshotMeta struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+}
+
+// GetLatestSnapshotID returns the most recent snapshot ID for the current workspace
+func GetLatestSnapshotID() (string, error) {
+	root, err := FindProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	return GetLatestSnapshotIDAt(root)
+}
+
+// GetLatestSnapshotIDAt returns the most recent snapshot ID for a specific workspace
+func GetLatestSnapshotIDAt(root string) (string, error) {
+	snapshotsDir := GetSnapshotsDirAt(root)
+
+	entries, err := os.ReadDir(snapshotsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	var latestID string
+	var latestTime string
+
+	for _, entry := range entries {
+		name := entry.Name()
+		// Look for metadata files (snap-xxx.meta.json)
+		if !entry.IsDir() && len(name) > 10 && name[len(name)-10:] == ".meta.json" {
+			metaPath := filepath.Join(snapshotsDir, name)
+			data, err := os.ReadFile(metaPath)
+			if err != nil {
+				continue
+			}
+
+			var meta SnapshotMeta
+			if err := json.Unmarshal(data, &meta); err != nil {
+				continue
+			}
+
+			// Compare timestamps (RFC3339 format sorts lexicographically)
+			if meta.CreatedAt > latestTime {
+				latestTime = meta.CreatedAt
+				latestID = meta.ID
+			}
+		}
+	}
+
+	return latestID, nil
+}
+
 // ProjectConfig represents the local project configuration stored in .fst/config.json
 // All workspaces are peers - there is no main/linked distinction
 type ProjectConfig struct {
@@ -90,7 +146,6 @@ type ProjectConfig struct {
 	WorkspaceID    string `json:"workspace_id,omitempty"`
 	WorkspaceName  string `json:"workspace_name,omitempty"`
 	BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
-	LastSnapshotID string `json:"last_snapshot_id,omitempty"`
 	APIURL         string `json:"api_url,omitempty"`
 	Mode           string `json:"mode,omitempty"` // "cloud" or "local"
 }

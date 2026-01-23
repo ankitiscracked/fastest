@@ -146,7 +146,7 @@ func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 		}
 		otherAccessor = NewFileSystemAccessor(otherRoot, otherManifest)
 	} else {
-		snapshotID := otherCfg.LastSnapshotID
+		snapshotID, _ := config.GetLatestSnapshotIDAt(otherRoot)
 		if snapshotID == "" {
 			snapshotID = otherCfg.BaseSnapshotID
 		}
