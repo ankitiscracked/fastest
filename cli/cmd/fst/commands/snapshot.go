@@ -152,13 +152,15 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 	if !alreadyExists || message != "" {
 		metadata := fmt.Sprintf(`{
   "id": "%s",
+  "workspace_id": "%s",
+  "workspace_name": "%s",
   "manifest_hash": "%s",
   "parent_snapshot_id": "%s",
   "message": "%s",
   "created_at": "%s",
   "files": %d,
   "size": %d
-}`, snapshotID, manifestHash, cfg.BaseSnapshotID, escapeJSON(message),
+}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, cfg.BaseSnapshotID, escapeJSON(message),
 			time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
 		if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {

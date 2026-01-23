@@ -229,13 +229,15 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 		metadata := fmt.Sprintf(`{
   "id": "%s",
+  "workspace_id": "%s",
+  "workspace_name": "%s",
   "manifest_hash": "%s",
   "parent_snapshot_id": "",
   "message": "Initial snapshot",
   "created_at": "%s",
   "files": %d,
   "size": %d
-}`, snapshotID, manifestHash, time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+}`, snapshotID, workspaceID, workspaceName, manifestHash, time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
 		if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 			return fmt.Errorf("failed to save metadata: %w", err)

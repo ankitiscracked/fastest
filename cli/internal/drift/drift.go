@@ -20,6 +20,81 @@ type Report struct {
 	Summary        string   `json:"summary,omitempty"`
 }
 
+// DivergenceReport represents how two workspaces have diverged from a common ancestor
+type DivergenceReport struct {
+	CommonAncestorID string `json:"common_ancestor_id,omitempty"`
+	HasCommonAncestor bool  `json:"has_common_ancestor"`
+
+	// Changes in "our" workspace (current) since common ancestor
+	OurChanges *Report `json:"our_changes"`
+
+	// Changes in "their" workspace since common ancestor
+	TheirChanges *Report `json:"their_changes"`
+
+	// Files modified in both workspaces (potential conflicts)
+	OverlappingFiles []string `json:"overlapping_files"`
+
+	// Summary for display
+	Summary string `json:"summary,omitempty"`
+}
+
+// SnapshotMeta represents snapshot metadata
+type SnapshotMeta struct {
+	ID               string `json:"id"`
+	WorkspaceID      string `json:"workspace_id"`
+	WorkspaceName    string `json:"workspace_name"`
+	ManifestHash     string `json:"manifest_hash"`
+	ParentSnapshotID string `json:"parent_snapshot_id"`
+	Message          string `json:"message"`
+	CreatedAt        string `json:"created_at"`
+	Files            int    `json:"files"`
+	Size             int64  `json:"size"`
+}
+
+// LoadSnapshotMeta loads snapshot metadata from a workspace's snapshots directory
+func LoadSnapshotMeta(root, snapshotID string) (*SnapshotMeta, error) {
+	snapshotsDir := config.GetSnapshotsDirAt(root)
+	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot metadata not found: %w", err)
+	}
+
+	var meta SnapshotMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("failed to parse snapshot metadata: %w", err)
+	}
+	return &meta, nil
+}
+
+// GetUpstreamWorkspace finds the workspace that created the base snapshot
+// Returns the workspace path and name, or empty strings if not found
+func GetUpstreamWorkspace(root string) (path string, name string, err error) {
+	cfg, err := config.LoadAt(root)
+	if err != nil {
+		return "", "", err
+	}
+
+	if cfg.BaseSnapshotID == "" {
+		return "", "", fmt.Errorf("no base snapshot set")
+	}
+
+	// Load the base snapshot metadata to find its source workspace
+	meta, err := LoadSnapshotMeta(root, cfg.BaseSnapshotID)
+	if err != nil {
+		return "", "", err
+	}
+
+	// If the snapshot was created by this workspace, there's no upstream
+	if meta.WorkspaceID == cfg.WorkspaceID {
+		return "", "", fmt.Errorf("base snapshot was created by this workspace")
+	}
+
+	// The snapshot metadata tells us which workspace created it
+	// Now we need to find that workspace's path from the registry
+	return meta.WorkspaceID, meta.WorkspaceName, nil
+}
+
 // Compute calculates drift between the base manifest and current state
 func Compute(root string, baseManifest *manifest.Manifest) (*Report, error) {
 	// Generate current manifest
@@ -166,6 +241,166 @@ func ComputeAgainstWorkspace(root, otherRoot string, includeDirty bool) (*Report
 		FilesDeleted:   deleted,
 		BytesChanged:   bytesChanged,
 	}, nil
+}
+
+// ComputeDivergence computes how two workspaces have diverged from their common ancestor
+// This is useful for understanding potential merge conflicts before they happen
+func ComputeDivergence(ourRoot, theirRoot string, includeDirty bool) (*DivergenceReport, error) {
+	ourCfg, err := config.LoadAt(ourRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load our config: %w", err)
+	}
+
+	theirCfg, err := config.LoadAt(theirRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load their config: %w", err)
+	}
+
+	// Find common ancestor
+	// For now, use our base_snapshot_id as the common ancestor
+	// This works when "their" workspace is upstream (created our base snapshot)
+	// or when both forked from the same point
+	commonAncestorID := ourCfg.BaseSnapshotID
+	hasCommonAncestor := commonAncestorID != ""
+
+	// If their base is the same as ours, we definitely share an ancestor
+	if theirCfg.BaseSnapshotID == ourCfg.BaseSnapshotID && commonAncestorID != "" {
+		hasCommonAncestor = true
+	}
+
+	report := &DivergenceReport{
+		CommonAncestorID:  commonAncestorID,
+		HasCommonAncestor: hasCommonAncestor,
+	}
+
+	if hasCommonAncestor {
+		// Load common ancestor manifest
+		ancestorManifest, err := LoadManifestFromSnapshots(ourRoot, commonAncestorID)
+		if err != nil {
+			// Try loading from their workspace
+			ancestorManifest, err = LoadManifestFromSnapshots(theirRoot, commonAncestorID)
+			if err != nil {
+				// Fall back to 2-way comparison
+				hasCommonAncestor = false
+				report.HasCommonAncestor = false
+			}
+		}
+
+		if hasCommonAncestor && ancestorManifest != nil {
+			// Compute our changes from ancestor
+			ourReport, err := Compute(ourRoot, ancestorManifest)
+			if err != nil {
+				return nil, fmt.Errorf("failed to compute our changes: %w", err)
+			}
+			ourReport.BaseSnapshotID = commonAncestorID
+			report.OurChanges = ourReport
+
+			// Compute their changes from ancestor
+			var theirManifest *manifest.Manifest
+			if includeDirty {
+				theirManifest, err = manifest.Generate(theirRoot, false)
+				if err != nil {
+					return nil, fmt.Errorf("failed to generate their manifest: %w", err)
+				}
+			} else {
+				theirSnapshotID := theirCfg.LastSnapshotID
+				if theirSnapshotID == "" {
+					theirSnapshotID = theirCfg.BaseSnapshotID
+				}
+				if theirSnapshotID != "" {
+					theirManifest, err = LoadManifestFromSnapshots(theirRoot, theirSnapshotID)
+					if err != nil {
+						// Fall back to generating
+						theirManifest, err = manifest.Generate(theirRoot, false)
+						if err != nil {
+							return nil, fmt.Errorf("failed to get their manifest: %w", err)
+						}
+					}
+				} else {
+					theirManifest, err = manifest.Generate(theirRoot, false)
+					if err != nil {
+						return nil, fmt.Errorf("failed to generate their manifest: %w", err)
+					}
+				}
+			}
+
+			theirAdded, theirModified, theirDeleted := manifest.Diff(ancestorManifest, theirManifest)
+			theirBytesChanged := calculateBytesChanged(ancestorManifest, theirManifest, theirAdded, theirModified, theirDeleted)
+			report.TheirChanges = &Report{
+				BaseSnapshotID: commonAncestorID,
+				FilesAdded:     theirAdded,
+				FilesModified:  theirModified,
+				FilesDeleted:   theirDeleted,
+				BytesChanged:   theirBytesChanged,
+			}
+
+			// Find overlapping files (modified in both)
+			ourModifiedSet := make(map[string]bool)
+			for _, f := range ourReport.FilesModified {
+				ourModifiedSet[f] = true
+			}
+			for _, f := range ourReport.FilesAdded {
+				ourModifiedSet[f] = true
+			}
+
+			for _, f := range theirModified {
+				if ourModifiedSet[f] {
+					report.OverlappingFiles = append(report.OverlappingFiles, f)
+				}
+			}
+			for _, f := range theirAdded {
+				if ourModifiedSet[f] {
+					report.OverlappingFiles = append(report.OverlappingFiles, f)
+				}
+			}
+
+			return report, nil
+		}
+	}
+
+	// No common ancestor - fall back to simple 2-way comparison
+	simpleReport, err := ComputeAgainstWorkspace(ourRoot, theirRoot, includeDirty)
+	if err != nil {
+		return nil, err
+	}
+
+	report.OurChanges = simpleReport
+	report.TheirChanges = &Report{} // Empty - we don't know their changes without ancestor
+	return report, nil
+}
+
+// HasOverlap returns true if there are overlapping changes
+func (r *DivergenceReport) HasOverlap() bool {
+	return len(r.OverlappingFiles) > 0
+}
+
+// FormatSummary returns a human-readable summary of divergence
+func (r *DivergenceReport) FormatSummary() string {
+	if r.OurChanges == nil || !r.OurChanges.HasChanges() {
+		if r.TheirChanges == nil || !r.TheirChanges.HasChanges() {
+			return "Workspaces are in sync"
+		}
+		return fmt.Sprintf("They changed: %s", r.TheirChanges.FormatSummary())
+	}
+
+	if r.TheirChanges == nil || !r.TheirChanges.HasChanges() {
+		return fmt.Sprintf("We changed: %s", r.OurChanges.FormatSummary())
+	}
+
+	overlap := ""
+	if len(r.OverlappingFiles) > 0 {
+		overlap = fmt.Sprintf(", %d overlapping", len(r.OverlappingFiles))
+	}
+
+	return fmt.Sprintf("We: %s | They: %s%s",
+		r.OurChanges.FormatSummary(),
+		r.TheirChanges.FormatSummary(),
+		overlap)
+}
+
+// ToJSON converts the divergence report to JSON
+func (r *DivergenceReport) ToJSON() ([]byte, error) {
+	return json.MarshalIndent(r, "", "  ")
 }
 
 // LoadManifestFromSnapshots loads a manifest from a workspace's snapshots directory

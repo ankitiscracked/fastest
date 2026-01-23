@@ -43,6 +43,8 @@ Each entry shows the snapshot ID, timestamp, file count, and description.`,
 // SnapshotMeta represents snapshot metadata
 type SnapshotMeta struct {
 	ID               string `json:"id"`
+	WorkspaceID      string `json:"workspace_id"`
+	WorkspaceName    string `json:"workspace_name"`
 	ManifestHash     string `json:"manifest_hash"`
 	ParentSnapshotID string `json:"parent_snapshot_id"`
 	Message          string `json:"message"`

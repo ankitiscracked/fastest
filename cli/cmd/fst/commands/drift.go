@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,39 +23,52 @@ func newDriftCmd() *cobra.Command {
 	var jsonOutput bool
 	var summary bool
 	var sync bool
-	var workspace string
 	var includeDirty bool
 
 	cmd := &cobra.Command{
-		Use:   "drift",
-		Short: "Show changes from base snapshot or another workspace",
-		Long: `Show the drift (changes) from the base snapshot or another workspace.
+		Use:   "drift [workspace]",
+		Short: "Show divergence from upstream or another workspace",
+		Long: `Show how this workspace has diverged from its upstream or another workspace.
 
-By default, compares your current working directory against the workspace's
-base_snapshot_id and shows which files have been added, modified, or deleted.
+Without arguments, shows divergence from the upstream workspace (the workspace
+that created this workspace's base snapshot).
 
-Use --workspace to compare against another workspace's current state.
+With a workspace argument, shows divergence from that workspace:
+  - If the argument contains '/' or starts with '.', it's treated as a path
+  - Otherwise, it's treated as a workspace name (looked up in the registry)
+
+When comparing workspaces that share a common ancestor, shows:
+  - What we changed since the common base
+  - What they changed since the common base
+  - Which files overlap (potential merge conflicts)
+
+This helps you merge early to avoid complex conflicts in agentic workflows.
 
 Examples:
-  fst drift                        # Compare against base snapshot
-  fst drift --workspace ../feature # Compare against another workspace
-  fst drift --json                 # Output as JSON
-  fst drift --summary              # Generate AI summary of changes`,
+  fst drift                    # Divergence from upstream workspace
+  fst drift main               # Divergence from workspace named "main"
+  fst drift ../other-project   # Divergence from workspace at path
+  fst drift --json             # Output as JSON
+  fst drift --summary          # Generate AI summary of divergence`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDrift(jsonOutput, summary, sync, workspace, includeDirty)
+			var target string
+			if len(args) > 0 {
+				target = args[0]
+			}
+			return runDrift(target, jsonOutput, summary, sync, includeDirty)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
-	cmd.Flags().BoolVar(&summary, "summary", false, "Generate LLM summary of changes (requires configured agent)")
+	cmd.Flags().BoolVar(&summary, "summary", false, "Generate LLM summary of divergence (requires configured agent)")
 	cmd.Flags().BoolVar(&sync, "sync", false, "Sync drift report to cloud")
-	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Compare against another workspace (path)")
-	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include other workspace's uncommitted changes in comparison")
+	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include uncommitted changes in comparison")
 
 	return cmd
 }
 
-func runDrift(jsonOutput, generateSummary, syncToCloud bool, otherWorkspace string, includeDirty bool) error {
+func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDirty bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -65,34 +79,207 @@ func runDrift(jsonOutput, generateSummary, syncToCloud bool, otherWorkspace stri
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	var report *drift.Report
+	var otherRoot string
+	var otherName string
 
-	if otherWorkspace != "" {
-		// Compare against another workspace
-		otherRoot := otherWorkspace
-		if !filepath.IsAbs(otherRoot) {
-			cwd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			otherRoot = filepath.Join(cwd, otherRoot)
-		}
-
-		// Verify the other workspace exists
-		if _, err := os.Stat(filepath.Join(otherRoot, ".fst")); os.IsNotExist(err) {
-			return fmt.Errorf("not a workspace: %s", otherRoot)
-		}
-
-		report, err = drift.ComputeAgainstWorkspace(root, otherRoot, includeDirty)
+	if target == "" {
+		// No target specified - find upstream workspace
+		upstreamID, upstreamName, err := drift.GetUpstreamWorkspace(root)
 		if err != nil {
-			return fmt.Errorf("failed to compute drift: %w", err)
+			// No upstream - fall back to showing drift from base snapshot
+			return runDriftFromBase(root, cfg, jsonOutput, generateSummary, syncToCloud)
+		}
+
+		// Look up upstream workspace path from registry
+		registry, err := LoadRegistry()
+		if err != nil {
+			return fmt.Errorf("failed to load workspace registry: %w", err)
+		}
+
+		found := false
+		for _, ws := range registry.Workspaces {
+			if ws.ID == upstreamID || ws.Name == upstreamName {
+				otherRoot = ws.Path
+				otherName = ws.Name
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			// Upstream workspace not in registry - show drift from base instead
+			fmt.Printf("Upstream workspace '%s' not found in registry.\n", upstreamName)
+			fmt.Println("Showing drift from base snapshot instead.")
+			fmt.Println()
+			return runDriftFromBase(root, cfg, jsonOutput, generateSummary, syncToCloud)
 		}
 	} else {
-		// Compare against base snapshot
-		report, err = drift.ComputeFromCache(root)
-		if err != nil {
-			return fmt.Errorf("failed to compute drift: %w", err)
+		// Target specified - determine if it's a path or name
+		if isPath(target) {
+			// Treat as path
+			if !filepath.IsAbs(target) {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return err
+				}
+				otherRoot = filepath.Join(cwd, target)
+			} else {
+				otherRoot = target
+			}
+			otherName = filepath.Base(otherRoot)
+
+			// Verify it's a workspace
+			if _, err := os.Stat(filepath.Join(otherRoot, ".fst")); os.IsNotExist(err) {
+				return fmt.Errorf("not a workspace: %s", otherRoot)
+			}
+		} else {
+			// Treat as workspace name - look up in registry
+			registry, err := LoadRegistry()
+			if err != nil {
+				return fmt.Errorf("failed to load workspace registry: %w", err)
+			}
+
+			found := false
+			for _, ws := range registry.Workspaces {
+				if ws.Name == target && ws.ProjectID == cfg.ProjectID {
+					otherRoot = ws.Path
+					otherName = ws.Name
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("workspace '%s' not found in project\nUse a path (e.g., ../workspace) or run 'fst workspaces' to see available workspaces", target)
+			}
 		}
+	}
+
+	// Verify other workspace still exists
+	if _, err := os.Stat(filepath.Join(otherRoot, ".fst")); os.IsNotExist(err) {
+		return fmt.Errorf("workspace no longer exists: %s", otherRoot)
+	}
+
+	// Compute divergence
+	report, err := drift.ComputeDivergence(root, otherRoot, includeDirty)
+	if err != nil {
+		return fmt.Errorf("failed to compute divergence: %w", err)
+	}
+
+	// Generate summary if requested
+	if generateSummary && (report.OurChanges.HasChanges() || (report.TheirChanges != nil && report.TheirChanges.HasChanges())) {
+		preferredAgent, err := agent.GetPreferredAgent()
+		if err != nil {
+			fmt.Printf("Warning: %v\n", err)
+		} else {
+			fmt.Printf("Generating summary with %s...\n", preferredAgent.Name)
+			summary, err := generateDivergenceSummary(root, report, preferredAgent)
+			if err != nil {
+				fmt.Printf("Warning: Failed to generate summary: %v\n", err)
+			} else {
+				report.Summary = summary
+			}
+		}
+	}
+
+	// Sync to cloud if requested
+	if syncToCloud && report.OurChanges != nil {
+		token, err := auth.GetToken()
+		if err != nil || token == "" {
+			return fmt.Errorf("not logged in - run 'fst login' first")
+		}
+
+		client := api.NewClient(token)
+		err = client.ReportDrift(
+			cfg.WorkspaceID,
+			len(report.OurChanges.FilesAdded),
+			len(report.OurChanges.FilesModified),
+			len(report.OurChanges.FilesDeleted),
+			report.OurChanges.BytesChanged,
+			report.Summary,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to sync drift: %w", err)
+		}
+		if !jsonOutput {
+			fmt.Println("Synced to cloud.")
+			fmt.Println()
+		}
+	}
+
+	// JSON output
+	if jsonOutput {
+		data, err := report.ToJSON()
+		if err != nil {
+			return fmt.Errorf("failed to serialize report: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	// Human-readable output
+	fmt.Printf("Comparing: %s <-> %s\n", cfg.WorkspaceName, otherName)
+	if report.HasCommonAncestor {
+		fmt.Printf("Common ancestor: %s\n", report.CommonAncestorID)
+	} else {
+		fmt.Println("(no common ancestor - showing simple diff)")
+	}
+	fmt.Println()
+
+	// Check if in sync
+	ourHasChanges := report.OurChanges != nil && report.OurChanges.HasChanges()
+	theirHasChanges := report.TheirChanges != nil && report.TheirChanges.HasChanges()
+
+	if !ourHasChanges && !theirHasChanges {
+		fmt.Println("Workspaces are in sync.")
+		return nil
+	}
+
+	// Show our changes
+	if ourHasChanges {
+		fmt.Printf("Our changes (since %s):\n", report.CommonAncestorID)
+		printChanges(report.OurChanges)
+		fmt.Println()
+	} else {
+		fmt.Println("We have no changes.")
+		fmt.Println()
+	}
+
+	// Show their changes
+	if theirHasChanges {
+		fmt.Printf("Their changes (since %s):\n", report.CommonAncestorID)
+		printChanges(report.TheirChanges)
+		fmt.Println()
+	} else if report.HasCommonAncestor {
+		fmt.Println("They have no changes.")
+		fmt.Println()
+	}
+
+	// Highlight overlapping files
+	if len(report.OverlappingFiles) > 0 {
+		fmt.Printf("⚠ Overlapping files (%d) - potential merge conflicts:\n", len(report.OverlappingFiles))
+		for _, f := range report.OverlappingFiles {
+			fmt.Printf("  \033[31m! %s\033[0m\n", f)
+		}
+		fmt.Println()
+		fmt.Println("Consider merging soon to avoid complex conflicts:")
+		fmt.Printf("  fst merge %s\n", target)
+	}
+
+	// Show summary if generated
+	if report.Summary != "" {
+		fmt.Println()
+		fmt.Printf("Summary:\n  %s\n", report.Summary)
+	}
+
+	return nil
+}
+
+// runDriftFromBase shows drift from base snapshot (when no upstream is available)
+func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, generateSummary, syncToCloud bool) error {
+	report, err := drift.ComputeFromCache(root)
+	if err != nil {
+		return fmt.Errorf("failed to compute drift: %w", err)
 	}
 
 	// Generate summary if requested
@@ -100,12 +287,9 @@ func runDrift(jsonOutput, generateSummary, syncToCloud bool, otherWorkspace stri
 		preferredAgent, err := agent.GetPreferredAgent()
 		if err != nil {
 			fmt.Printf("Warning: %v\n", err)
-			fmt.Println("Falling back to basic summary...")
-			report.Summary = generateBasicSummary(report)
 		} else {
 			fmt.Printf("Generating summary with %s...\n", preferredAgent.Name)
 
-			// Build diff context with file contents
 			fileContents := make(map[string]string)
 			for _, f := range report.FilesAdded {
 				content, err := agent.ReadFileContent(filepath.Join(root, f), 4000)
@@ -130,7 +314,6 @@ func runDrift(jsonOutput, generateSummary, syncToCloud bool, otherWorkspace stri
 			summary, err := agent.InvokeSummary(preferredAgent, diffContext)
 			if err != nil {
 				fmt.Printf("Warning: Failed to generate summary: %v\n", err)
-				report.Summary = generateBasicSummary(report)
 			} else {
 				report.Summary = summary
 			}
@@ -157,12 +340,12 @@ func runDrift(jsonOutput, generateSummary, syncToCloud bool, otherWorkspace stri
 			return fmt.Errorf("failed to sync drift: %w", err)
 		}
 		if !jsonOutput {
-			fmt.Println("✓ Drift synced to cloud")
+			fmt.Println("Synced to cloud.")
 			fmt.Println()
 		}
 	}
 
-	// Output
+	// JSON output
 	if jsonOutput {
 		data, err := report.ToJSON()
 		if err != nil {
@@ -174,91 +357,91 @@ func runDrift(jsonOutput, generateSummary, syncToCloud bool, otherWorkspace stri
 
 	// Human-readable output
 	if !report.HasChanges() {
-		if otherWorkspace != "" {
-			fmt.Println("No differences from the other workspace")
-		} else {
-			fmt.Println("No changes from base snapshot")
-		}
+		fmt.Println("No changes from base snapshot.")
 		return nil
 	}
 
-	if otherWorkspace != "" {
-		fmt.Printf("Differences from workspace: %s\n", report.FormatSummary())
-	} else {
-		fmt.Printf("Drift from base: %s\n", report.FormatSummary())
-	}
+	fmt.Printf("Drift from base snapshot (%s):\n", report.BaseSnapshotID)
 	fmt.Println()
-
-	if len(report.FilesAdded) > 0 {
-		fmt.Printf("Added (%d):\n", len(report.FilesAdded))
-		for _, f := range report.FilesAdded {
-			fmt.Printf("  \033[32m+ %s\033[0m\n", f)
-		}
-		fmt.Println()
-	}
-
-	if len(report.FilesModified) > 0 {
-		fmt.Printf("Modified (%d):\n", len(report.FilesModified))
-		for _, f := range report.FilesModified {
-			fmt.Printf("  \033[33m~ %s\033[0m\n", f)
-		}
-		fmt.Println()
-	}
-
-	if len(report.FilesDeleted) > 0 {
-		fmt.Printf("Deleted (%d):\n", len(report.FilesDeleted))
-		for _, f := range report.FilesDeleted {
-			fmt.Printf("  \033[31m- %s\033[0m\n", f)
-		}
-		fmt.Println()
-	}
+	printChanges(report)
 
 	if report.Summary != "" {
+		fmt.Println()
 		fmt.Printf("Summary:\n  %s\n", report.Summary)
 	}
 
 	return nil
 }
 
-func generateBasicSummary(report *drift.Report) string {
-	parts := []string{}
+// isPath determines if a string looks like a file path
+func isPath(s string) bool {
+	return strings.Contains(s, "/") || strings.HasPrefix(s, ".")
+}
 
+// printChanges prints the changes in a report
+func printChanges(report *drift.Report) {
 	if len(report.FilesAdded) > 0 {
-		if len(report.FilesAdded) == 1 {
-			parts = append(parts, fmt.Sprintf("Added %s", report.FilesAdded[0]))
-		} else {
-			parts = append(parts, fmt.Sprintf("Added %d files", len(report.FilesAdded)))
+		fmt.Printf("  Added (%d):\n", len(report.FilesAdded))
+		for _, f := range report.FilesAdded {
+			fmt.Printf("    \033[32m+ %s\033[0m\n", f)
 		}
 	}
 
 	if len(report.FilesModified) > 0 {
-		if len(report.FilesModified) == 1 {
-			parts = append(parts, fmt.Sprintf("Modified %s", report.FilesModified[0]))
-		} else {
-			parts = append(parts, fmt.Sprintf("Modified %d files", len(report.FilesModified)))
+		fmt.Printf("  Modified (%d):\n", len(report.FilesModified))
+		for _, f := range report.FilesModified {
+			fmt.Printf("    \033[33m~ %s\033[0m\n", f)
 		}
 	}
 
 	if len(report.FilesDeleted) > 0 {
-		if len(report.FilesDeleted) == 1 {
-			parts = append(parts, fmt.Sprintf("Deleted %s", report.FilesDeleted[0]))
-		} else {
-			parts = append(parts, fmt.Sprintf("Deleted %d files", len(report.FilesDeleted)))
+		fmt.Printf("  Deleted (%d):\n", len(report.FilesDeleted))
+		for _, f := range report.FilesDeleted {
+			fmt.Printf("    \033[31m- %s\033[0m\n", f)
+		}
+	}
+}
+
+// generateDivergenceSummary uses the coding agent to summarize divergence
+func generateDivergenceSummary(root string, report *drift.DivergenceReport, ag *agent.Agent) (string, error) {
+	// Build context describing the divergence
+	var context strings.Builder
+	context.WriteString("Two workspaces have diverged from a common ancestor.\n\n")
+
+	if report.OurChanges != nil && report.OurChanges.HasChanges() {
+		context.WriteString("Our changes:\n")
+		for _, f := range report.OurChanges.FilesAdded {
+			context.WriteString(fmt.Sprintf("  + %s\n", f))
+		}
+		for _, f := range report.OurChanges.FilesModified {
+			context.WriteString(fmt.Sprintf("  ~ %s\n", f))
+		}
+		for _, f := range report.OurChanges.FilesDeleted {
+			context.WriteString(fmt.Sprintf("  - %s\n", f))
+		}
+		context.WriteString("\n")
+	}
+
+	if report.TheirChanges != nil && report.TheirChanges.HasChanges() {
+		context.WriteString("Their changes:\n")
+		for _, f := range report.TheirChanges.FilesAdded {
+			context.WriteString(fmt.Sprintf("  + %s\n", f))
+		}
+		for _, f := range report.TheirChanges.FilesModified {
+			context.WriteString(fmt.Sprintf("  ~ %s\n", f))
+		}
+		for _, f := range report.TheirChanges.FilesDeleted {
+			context.WriteString(fmt.Sprintf("  - %s\n", f))
+		}
+		context.WriteString("\n")
+	}
+
+	if len(report.OverlappingFiles) > 0 {
+		context.WriteString("Overlapping files (both modified):\n")
+		for _, f := range report.OverlappingFiles {
+			context.WriteString(fmt.Sprintf("  ! %s\n", f))
 		}
 	}
 
-	if len(parts) == 0 {
-		return "No changes"
-	}
-
-	result := parts[0]
-	for i := 1; i < len(parts); i++ {
-		if i == len(parts)-1 {
-			result += " and " + parts[i]
-		} else {
-			result += ", " + parts[i]
-		}
-	}
-
-	return result + "."
+	return agent.InvokeSummary(ag, context.String())
 }
