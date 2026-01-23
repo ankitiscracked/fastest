@@ -23,9 +23,12 @@ func newConflictsCmd() *cobra.Command {
 	var summary bool
 
 	cmd := &cobra.Command{
-		Use:   "conflicts <workspace-path>",
-		Short: "Show git-style conflicts with another workspace",
-		Long: `Detect git-style conflicts with another workspace.
+		Use:        "conflicts <workspace-path>",
+		Short:      "Show git-style conflicts with another workspace (deprecated: use 'fst merge --dry-run')",
+		Deprecated: "Use 'fst merge --dry-run' instead for conflict detection",
+		Long: `DEPRECATED: This command is deprecated. Use 'fst merge --dry-run' instead.
+
+Detect git-style conflicts with another workspace.
 
 A conflict occurs when the same lines/regions of a file have been modified
 in both your workspace and the other workspace since your common base snapshot.
@@ -42,11 +45,12 @@ Both workspaces must share a common base_snapshot_id (i.e., one was forked
 from the other) for meaningful conflict detection.
 
 Examples:
-  fst conflicts ../feature-workspace
-  fst conflicts --all ../other       # Also show non-conflicting overlaps
-  fst conflicts --summary ../other   # Generate AI summary of conflicts`,
+  fst merge --dry-run ../feature-workspace   # Preferred way
+  fst conflicts ../feature-workspace         # Deprecated`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println("\033[33mNote: 'fst conflicts' is deprecated. Use 'fst merge --dry-run' instead.\033[0m")
+			fmt.Println()
 			return runConflicts(args[0], showAll, includeDirty, jsonOutput, summary)
 		},
 	}

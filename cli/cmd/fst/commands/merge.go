@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/conflicts"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -45,6 +46,7 @@ func newMergeCmd() *cobra.Command {
 	var ours bool
 	var cherryPick []string
 	var dryRun bool
+	var dryRunSummary bool
 	var fromPath string
 
 	cmd := &cobra.Command{
@@ -62,6 +64,8 @@ Non-conflicting changes are applied automatically. For conflicts:
 - Manual (--manual): Creates conflict markers for you to resolve
 - Theirs (--theirs): Take source version for all conflicts
 - Ours (--ours): Keep target version for all conflicts
+
+Use --dry-run to preview the merge and see line-level conflict details.
 
 Workspace lookup uses the local registry. Use --from for explicit path.`,
 		Args: cobra.MaximumNArgs(1),
@@ -100,7 +104,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 			if workspaceName == "" && fromPath == "" {
 				return fmt.Errorf("must specify workspace name or --from path")
 			}
-			return runMerge(workspaceName, fromPath, mode, cherryPick, dryRun)
+			return runMerge(workspaceName, fromPath, mode, cherryPick, dryRun, dryRunSummary)
 		},
 	}
 
@@ -110,7 +114,8 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 	cmd.Flags().BoolVar(&ours, "ours", false, "Keep target version for all conflicts")
 	cmd.Flags().StringSliceVar(&cherryPick, "files", nil, "Only merge specific files")
 	cmd.Flags().StringSliceVar(&cherryPick, "cherry-pick", nil, "Only merge specific files (alias for --files)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be merged without making changes")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview merge with line-level conflict details")
+	cmd.Flags().BoolVar(&dryRunSummary, "summary", false, "Generate LLM summary of conflicts (with --dry-run)")
 	cmd.Flags().StringVar(&fromPath, "from", "", "Source workspace path")
 
 	return cmd
@@ -126,7 +131,7 @@ type MergeResult struct {
 	ManualMode bool
 }
 
-func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool) error {
+func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -259,8 +264,83 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 
 	if dryRun {
 		printMergePlan(mergeActions)
+
+		// Show line-level conflict details if there are conflicts
+		if len(mergeActions.conflicts) > 0 {
+			fmt.Println()
+			fmt.Println("Conflict details:")
+			conflictReport, err := conflicts.Detect(localRoot, sourceRoot, true)
+			if err != nil {
+				fmt.Printf("  (Could not analyze conflicts: %v)\n", err)
+			} else if conflictReport.TrueConflicts > 0 {
+				for _, c := range conflictReport.Conflicts {
+					fmt.Printf("\n  \033[31m%s\033[0m (%d conflicting regions)\n", c.Path, len(c.Hunks))
+					for i, h := range c.Hunks {
+						if h.EndLine > h.StartLine {
+							fmt.Printf("    Region %d: lines %d-%d\n", i+1, h.StartLine, h.EndLine)
+						} else {
+							fmt.Printf("    Region %d: line %d\n", i+1, h.StartLine)
+						}
+						// Show previews of conflicting content
+						if len(h.LocalLines) > 0 {
+							fmt.Printf("      Local:  %s", truncatePreview(h.LocalLines[0], 60))
+							if len(h.LocalLines) > 1 {
+								fmt.Printf(" (+%d more lines)", len(h.LocalLines)-1)
+							}
+							fmt.Println()
+						}
+						if len(h.RemoteLines) > 0 {
+							fmt.Printf("      Remote: %s", truncatePreview(h.RemoteLines[0], 60))
+							if len(h.RemoteLines) > 1 {
+								fmt.Printf(" (+%d more lines)", len(h.RemoteLines)-1)
+							}
+							fmt.Println()
+						}
+					}
+				}
+
+				// Show auto-mergeable files
+				autoMergeCount := len(conflictReport.OverlappingFiles) - conflictReport.TrueConflicts
+				if autoMergeCount > 0 {
+					fmt.Println()
+					fmt.Printf("Files modified in both (auto-mergeable): %d\n", autoMergeCount)
+				}
+
+				// Generate LLM summary if requested
+				if dryRunSummary {
+					preferredAgent, err := agent.GetPreferredAgent()
+					if err != nil {
+						fmt.Printf("\nWarning: %v\n", err)
+					} else {
+						fmt.Printf("\nGenerating summary with %s...\n", preferredAgent.Name)
+						conflictInfos := buildConflictInfosFromReport(conflictReport)
+						conflictContext := agent.BuildConflictContext(conflictInfos)
+						summaryText, err := agent.InvokeConflictSummary(preferredAgent, conflictContext)
+						if err != nil {
+							fmt.Printf("Warning: Failed to generate summary: %v\n", err)
+						} else {
+							fmt.Printf("\nSummary:\n  %s\n", summaryText)
+						}
+					}
+				}
+			} else {
+				fmt.Println("  Files are modified in both workspaces but changes don't overlap.")
+				fmt.Println("  These can be auto-merged.")
+			}
+		}
+
 		fmt.Println()
 		fmt.Println("(Dry run - no changes made)")
+		fmt.Println()
+		fmt.Println("To merge:")
+		if len(mergeActions.conflicts) > 0 {
+			fmt.Printf("  fst merge %s --agent   # Let AI resolve conflicts\n", sourceName)
+			fmt.Printf("  fst merge %s --manual  # Create conflict markers\n", sourceName)
+			fmt.Printf("  fst merge %s --theirs  # Take their version for conflicts\n", sourceName)
+			fmt.Printf("  fst merge %s --ours    # Keep your version for conflicts\n", sourceName)
+		} else {
+			fmt.Printf("  fst merge %s\n", sourceName)
+		}
 		return nil
 	}
 
@@ -674,4 +754,54 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 	}
 
 	return manifest.FromJSON(data)
+}
+
+// truncatePreview shortens a string for preview display
+func truncatePreview(s string, maxLen int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxLen {
+		return s[:maxLen-3] + "..."
+	}
+	return s
+}
+
+// buildConflictInfosFromReport converts conflicts.Report to agent.ConflictInfo slice
+func buildConflictInfosFromReport(report *conflicts.Report) []agent.ConflictInfo {
+	var infos []agent.ConflictInfo
+
+	for _, c := range report.Conflicts {
+		info := agent.ConflictInfo{
+			Path:      c.Path,
+			HunkCount: len(c.Hunks),
+		}
+
+		for _, h := range c.Hunks {
+			hunkInfo := agent.HunkInfo{
+				StartLine: h.StartLine,
+				EndLine:   h.EndLine,
+			}
+
+			// Add previews (limit to first 5 lines each)
+			if len(h.LocalLines) > 0 {
+				limit := 5
+				if len(h.LocalLines) < limit {
+					limit = len(h.LocalLines)
+				}
+				hunkInfo.LocalPreview = h.LocalLines[:limit]
+			}
+			if len(h.RemoteLines) > 0 {
+				limit := 5
+				if len(h.RemoteLines) < limit {
+					limit = len(h.RemoteLines)
+				}
+				hunkInfo.RemotePreview = h.RemoteLines[:limit]
+			}
+
+			info.Hunks = append(info.Hunks, hunkInfo)
+		}
+
+		infos = append(infos, info)
+	}
+
+	return infos
 }
