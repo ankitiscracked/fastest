@@ -79,6 +79,7 @@ type model struct {
 	cursor         int
 	currentProject string
 	currentWsName  string
+	inWorkspace    bool // true if fst search was run from inside a workspace
 	width          int
 	height         int
 	err            error
@@ -149,6 +150,7 @@ func initialModel() model {
 	if cfg, err := config.Load(); err == nil {
 		m.currentProject = cfg.ProjectID
 		m.currentWsName = cfg.WorkspaceName
+		m.inWorkspace = true
 	}
 
 	// Load all workspaces
@@ -292,7 +294,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "m":
-			if len(m.filtered) > 0 {
+			if m.inWorkspace && len(m.filtered) > 0 {
 				item := &m.filtered[m.cursor]
 				if item.SameProject && !item.IsCurrent {
 					m.action = "merge"
@@ -410,7 +412,12 @@ func (m model) View() string {
 
 	// Help bar
 	b.WriteString("\n")
-	helpLine := helpStyle.Render("↑↓ navigate  enter open  m merge  o editor  q quit")
+	var helpLine string
+	if m.inWorkspace {
+		helpLine = helpStyle.Render("↑↓ navigate  enter open  m merge  o editor  q quit")
+	} else {
+		helpLine = helpStyle.Render("↑↓ navigate  enter open  o editor  q quit")
+	}
 	b.WriteString(helpLine)
 
 	return b.String()
@@ -618,7 +625,10 @@ func (m model) buildPreviewPane(width, height int) string {
 	}
 
 	// Merge hint
-	if item.SameProject && !item.IsCurrent {
+	if !m.inWorkspace {
+		b.WriteString(helpStyle.Render("  Run from a workspace to enable merge"))
+		b.WriteString("\n")
+	} else if item.SameProject && !item.IsCurrent {
 		b.WriteString(mergeableStyle.Render("  ● Press 'm' to merge into current"))
 		b.WriteString("\n")
 	} else if !item.SameProject {
@@ -768,7 +778,9 @@ func (m model) renderStatusBar() string {
 		status = fmt.Sprintf("%d / %d workspaces", filtered, total)
 	}
 
-	if m.cursor < len(m.filtered) {
+	if !m.inWorkspace {
+		status += "  (not in workspace - merge disabled)"
+	} else if m.cursor < len(m.filtered) {
 		item := m.filtered[m.cursor]
 		if !item.SameProject {
 			status += "  (different project - merge disabled)"
