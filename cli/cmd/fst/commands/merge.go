@@ -51,6 +51,7 @@ func newMergeCmd() *cobra.Command {
 	var fromPath string
 	var mergeAll bool
 	var showPlan bool
+	var noSnapshot bool
 
 	cmd := &cobra.Command{
 		Use:   "merge [workspace]",
@@ -115,7 +116,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 				if len(args) > 0 {
 					return fmt.Errorf("cannot specify workspace with --all")
 				}
-				return runMergeAll(mode, dryRun)
+				return runMergeAll(mode, dryRun, noSnapshot)
 			}
 
 			var workspaceName string
@@ -125,7 +126,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 			if workspaceName == "" && fromPath == "" {
 				return fmt.Errorf("must specify workspace name or --from path")
 			}
-			return runMerge(workspaceName, fromPath, mode, cherryPick, dryRun, dryRunSummary)
+			return runMerge(workspaceName, fromPath, mode, cherryPick, dryRun, dryRunSummary, noSnapshot)
 		},
 	}
 
@@ -140,6 +141,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 	cmd.Flags().StringVar(&fromPath, "from", "", "Source workspace path")
 	cmd.Flags().BoolVarP(&mergeAll, "all", "a", false, "Merge all workspaces in the project")
 	cmd.Flags().BoolVar(&showPlan, "plan", false, "Analyze workspaces and suggest optimal merge order")
+	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "Skip auto-snapshot before merge")
 
 	return cmd
 }
@@ -154,7 +156,7 @@ type MergeResult struct {
 	ManualMode bool
 }
 
-func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool) error {
+func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool, noSnapshot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -283,6 +285,17 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 	if len(mergeActions.toApply) == 0 && len(mergeActions.conflicts) == 0 {
 		fmt.Println("✓ Nothing to merge - workspaces are in sync")
 		return nil
+	}
+
+	// Create auto-snapshot before merge (unless dry-run or --no-snapshot)
+	if !dryRun && !noSnapshot {
+		snapshotID, err := CreateAutoSnapshot(fmt.Sprintf("Before merge from %s", sourceDisplayName))
+		if err != nil {
+			fmt.Printf("Warning: Could not create pre-merge snapshot: %v\n", err)
+		} else if snapshotID != "" {
+			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo merge)\n", snapshotID)
+			fmt.Println()
+		}
 	}
 
 	if dryRun {
@@ -895,7 +908,7 @@ func buildConflictInfosFromReport(report *conflicts.Report) []agent.ConflictInfo
 }
 
 // runMergeAll merges all workspaces in the project into the current one
-func runMergeAll(mode ConflictMode, dryRun bool) error {
+func runMergeAll(mode ConflictMode, dryRun bool, noSnapshot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -1054,7 +1067,17 @@ func runMergeAll(mode ConflictMode, dryRun bool) error {
 		return nil
 	}
 
-	fmt.Println()
+	// Create single auto-snapshot before merging all (unless --no-snapshot)
+	if !noSnapshot {
+		snapshotID, err := CreateAutoSnapshot("Before merge --all")
+		if err != nil {
+			fmt.Printf("Warning: Could not create pre-merge snapshot: %v\n", err)
+		} else if snapshotID != "" {
+			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo merge)\n", snapshotID)
+		}
+		fmt.Println()
+	}
+
 	fmt.Printf("Merging into: %s\n", cfg.WorkspaceName)
 	fmt.Println()
 
@@ -1073,8 +1096,8 @@ func runMergeAll(mode ConflictMode, dryRun bool) error {
 	for i, a := range toMerge {
 		fmt.Printf("[%d/%d] Merging %s...\n", i+1, len(toMerge), a.ws.Name)
 
-		// Run merge (reuse existing merge logic)
-		err := runMerge(a.ws.Name, "", mode, nil, false, false)
+		// Run merge (skip individual snapshots - we created one at the start)
+		err := runMerge(a.ws.Name, "", mode, nil, false, false, true)
 
 		outcome := mergeOutcome{
 			workspace: a.ws.Name,

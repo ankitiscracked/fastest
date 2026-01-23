@@ -231,6 +231,105 @@ func runSnapshot(message string, autoSummary bool, setBase bool, agentName strin
 	return nil
 }
 
+// CreateAutoSnapshot creates a snapshot silently (for use before merge/destructive operations)
+// Returns the snapshot ID or empty string if snapshot already exists (no changes)
+func CreateAutoSnapshot(message string) (string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", fmt.Errorf("not in a project directory")
+	}
+
+	root, err := config.FindProjectRoot()
+	if err != nil {
+		return "", fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	// Generate manifest
+	m, err := manifest.Generate(root, false)
+	if err != nil {
+		return "", fmt.Errorf("failed to scan files: %w", err)
+	}
+
+	// Compute content hash
+	manifestHash, err := m.Hash()
+	if err != nil {
+		return "", fmt.Errorf("failed to create snapshot: %w", err)
+	}
+
+	snapshotID := "snap-" + manifestHash[:16]
+
+	// Check if snapshot already exists
+	snapshotsDir, err := config.GetSnapshotsDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get snapshots directory: %w", err)
+	}
+
+	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
+	if _, err := os.Stat(manifestPath); err == nil {
+		// Snapshot already exists - no new changes to save
+		return "", nil
+	}
+
+	// Cache blobs
+	blobDir, err := config.GetGlobalBlobDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get global blob directory: %w", err)
+	}
+
+	for _, f := range m.Files {
+		blobPath := filepath.Join(blobDir, f.Hash)
+		if _, err := os.Stat(blobPath); err == nil {
+			continue
+		}
+
+		srcPath := filepath.Join(root, f.Path)
+		content, err := os.ReadFile(srcPath)
+		if err != nil {
+			continue
+		}
+
+		os.WriteFile(blobPath, content, 0644)
+	}
+
+	// Save manifest
+	manifestJSON, err := m.ToJSON()
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize snapshot: %w", err)
+	}
+
+	if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
+		return "", fmt.Errorf("failed to save snapshot: %w", err)
+	}
+
+	// Save metadata
+	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
+	metadata := fmt.Sprintf(`{
+  "id": "%s",
+  "workspace_id": "%s",
+  "workspace_name": "%s",
+  "manifest_hash": "%s",
+  "parent_snapshot_id": "%s",
+  "message": "%s",
+  "agent": "",
+  "created_at": "%s",
+  "files": %d,
+  "size": %d
+}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, cfg.BaseSnapshotID, escapeJSON(message),
+		time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+
+	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
+		return "", fmt.Errorf("failed to save metadata: %w", err)
+	}
+
+	// Update config
+	cfg.LastSnapshotID = snapshotID
+	if err := config.Save(cfg); err != nil {
+		return "", fmt.Errorf("failed to update config: %w", err)
+	}
+
+	return snapshotID, nil
+}
+
 // detectAgent attempts to auto-detect the coding agent from environment
 func detectAgent() string {
 	// Check explicit FST_AGENT env var first
