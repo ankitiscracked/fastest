@@ -17,8 +17,8 @@ import (
 type Hunk struct {
 	StartLine   int      `json:"start_line"`
 	EndLine     int      `json:"end_line"`
-	LocalLines  []string `json:"local_lines"`
-	RemoteLines []string `json:"remote_lines"`
+	CurrentLines  []string `json:"local_lines"`
+	SourceLines []string `json:"remote_lines"`
 	BaseLines   []string `json:"base_lines"`
 }
 
@@ -304,8 +304,8 @@ func findConflictingHunks(base, local, remote string) []Hunk {
 					StartLine:   lr.start,
 					EndLine:     max(lr.end, rr.end),
 					BaseLines:   baseLines,
-					LocalLines:  localLines,
-					RemoteLines: remoteLines,
+					CurrentLines:  localLines,
+					SourceLines: remoteLines,
 				})
 			}
 		}

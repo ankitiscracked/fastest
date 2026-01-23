@@ -202,22 +202,84 @@ Summary:`, conflictContext)
 	return invokeAgent(agent, prompt)
 }
 
+// MergeResult contains the agent's merge output
+type MergeResult struct {
+	Strategy   []string // Bullet points explaining merge decisions
+	MergedCode string   // The merged file content
+}
+
 // InvokeMerge invokes an agent to merge conflicting files
-func InvokeMerge(agent *Agent, baseContent, localContent, remoteContent, filename string) (string, error) {
+func InvokeMerge(agent *Agent, baseContent, currentContent, sourceContent, filename string) (*MergeResult, error) {
 	prompt := fmt.Sprintf(`Merge these two versions of %s. Both diverged from a common base.
 
-=== BASE VERSION ===
+=== BASE VERSION (common ancestor) ===
 %s
 
-=== LOCAL VERSION (keep this perspective) ===
+=== CURRENT VERSION (the workspace we're merging into) ===
 %s
 
-=== REMOTE VERSION (incorporate these changes) ===
+=== SOURCE VERSION (the workspace we're merging from) ===
 %s
 
-Output ONLY the merged file content, no explanations:`, filename, baseContent, localContent, remoteContent)
+First, briefly explain your merge strategy (2-3 bullet points starting with "• ").
+Then output the merged code after a line containing only "---MERGED CODE---".
 
-	return invokeAgent(agent, prompt)
+Example format:
+• Kept X from current because...
+• Added Y from source because...
+• Combined Z by...
+
+---MERGED CODE---
+<merged file content here>`, filename, baseContent, currentContent, sourceContent)
+
+	output, err := invokeAgent(agent, prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseMergeOutput(output)
+}
+
+// parseMergeOutput separates strategy bullets from merged code
+func parseMergeOutput(output string) (*MergeResult, error) {
+	// Look for the separator
+	separator := "---MERGED CODE---"
+	parts := strings.SplitN(output, separator, 2)
+
+	result := &MergeResult{}
+
+	if len(parts) == 2 {
+		// Parse strategy bullets
+		strategyPart := strings.TrimSpace(parts[0])
+		for _, line := range strings.Split(strategyPart, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "•") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, "*") {
+				// Clean up the bullet point
+				line = strings.TrimPrefix(line, "•")
+				line = strings.TrimPrefix(line, "-")
+				line = strings.TrimPrefix(line, "*")
+				line = strings.TrimSpace(line)
+				if line != "" {
+					result.Strategy = append(result.Strategy, line)
+				}
+			}
+		}
+
+		// Get merged code
+		result.MergedCode = strings.TrimSpace(parts[1])
+		// Strip code fences if present
+		result.MergedCode = stripCodeFences(result.MergedCode)
+	} else {
+		// No separator found - treat entire output as code (fallback)
+		result.MergedCode = stripCodeFences(strings.TrimSpace(output))
+		result.Strategy = []string{"Agent did not provide merge strategy"}
+	}
+
+	if result.MergedCode == "" {
+		return nil, fmt.Errorf("agent returned empty merged code")
+	}
+
+	return result, nil
 }
 
 // invokeAgent runs the agent with a prompt and returns the response
@@ -369,15 +431,15 @@ func BuildConflictContext(conflicts []ConflictInfo) string {
 		sb.WriteString(fmt.Sprintf("File: %s (%d conflicting regions)\n", c.Path, c.HunkCount))
 		for i, h := range c.Hunks {
 			sb.WriteString(fmt.Sprintf("  Conflict %d (lines %d-%d):\n", i+1, h.StartLine, h.EndLine))
-			if len(h.LocalPreview) > 0 {
-				sb.WriteString("    Local changes:\n")
-				for _, line := range h.LocalPreview {
+			if len(h.CurrentPreview) > 0 {
+				sb.WriteString("    Current workspace:\n")
+				for _, line := range h.CurrentPreview {
 					sb.WriteString(fmt.Sprintf("      %s\n", line))
 				}
 			}
-			if len(h.RemotePreview) > 0 {
-				sb.WriteString("    Main changes:\n")
-				for _, line := range h.RemotePreview {
+			if len(h.SourcePreview) > 0 {
+				sb.WriteString("    Source workspace:\n")
+				for _, line := range h.SourcePreview {
 					sb.WriteString(fmt.Sprintf("      %s\n", line))
 				}
 			}
@@ -397,10 +459,10 @@ type ConflictInfo struct {
 
 // HunkInfo represents a conflict hunk for LLM context
 type HunkInfo struct {
-	StartLine     int
-	EndLine       int
-	LocalPreview  []string
-	RemotePreview []string
+	StartLine      int
+	EndLine        int
+	CurrentPreview []string
+	SourcePreview  []string
 }
 
 // ReadFileContent reads file content for diff context (with size limit)

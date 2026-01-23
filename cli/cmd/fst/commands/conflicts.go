@@ -208,19 +208,19 @@ func buildConflictInfos(report *conflicts.Report) []agent.ConflictInfo {
 			}
 
 			// Add previews (limit to first 5 lines each)
-			if len(h.LocalLines) > 0 {
+			if len(h.CurrentLines) > 0 {
 				limit := 5
-				if len(h.LocalLines) < limit {
-					limit = len(h.LocalLines)
+				if len(h.CurrentLines) < limit {
+					limit = len(h.CurrentLines)
 				}
-				hunkInfo.LocalPreview = h.LocalLines[:limit]
+				hunkInfo.CurrentPreview = h.CurrentLines[:limit]
 			}
-			if len(h.RemoteLines) > 0 {
+			if len(h.SourceLines) > 0 {
 				limit := 5
-				if len(h.RemoteLines) < limit {
-					limit = len(h.RemoteLines)
+				if len(h.SourceLines) < limit {
+					limit = len(h.SourceLines)
 				}
-				hunkInfo.RemotePreview = h.RemoteLines[:limit]
+				hunkInfo.SourcePreview = h.SourceLines[:limit]
 			}
 
 			info.Hunks = append(info.Hunks, hunkInfo)

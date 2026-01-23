@@ -56,14 +56,14 @@ func newMergeCmd() *cobra.Command {
 
 This performs a three-way merge:
 1. BASE: The common ancestor snapshot
-2. LOCAL: Your current workspace
-3. REMOTE: The source workspace you're merging from
+2. CURRENT: Your current workspace (where you're running the command)
+3. SOURCE: The workspace you're merging from
 
 Non-conflicting changes are applied automatically. For conflicts:
 - Default (--agent): Uses your coding agent (claude, aider, etc.) to intelligently merge
 - Manual (--manual): Creates conflict markers for you to resolve
 - Theirs (--theirs): Take source version for all conflicts
-- Ours (--ours): Keep target version for all conflicts
+- Ours (--ours): Keep current version for all conflicts
 
 Use --dry-run to preview the merge and see line-level conflict details.
 
@@ -137,7 +137,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
 	}
 
-	localRoot, err := config.FindProjectRoot()
+	currentRoot, err := config.FindProjectRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
@@ -218,7 +218,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 	}
 
 	fmt.Printf("Merging from: %s (%s)\n", sourceDisplayName, sourceRoot)
-	fmt.Printf("Into:         %s (%s)\n", cfg.WorkspaceName, localRoot)
+	fmt.Printf("Into:         %s (%s)\n", cfg.WorkspaceName, currentRoot)
 	fmt.Println()
 
 	// Load base snapshot (common ancestor)
@@ -231,7 +231,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 
 	// Generate manifests for local and remote
 	fmt.Println("Scanning local workspace...")
-	localManifest, err := manifest.Generate(localRoot, false)
+	currentManifest, err := manifest.Generate(currentRoot, false)
 	if err != nil {
 		return fmt.Errorf("failed to scan local workspace: %w", err)
 	}
@@ -244,7 +244,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 
 	// Compute three-way diff
 	fmt.Println("Computing differences...")
-	mergeActions := computeMergeActions(baseManifest, localManifest, sourceManifest, cherryPick)
+	mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest, cherryPick)
 
 	// Display summary
 	fmt.Println()
@@ -269,7 +269,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		if len(mergeActions.conflicts) > 0 {
 			fmt.Println()
 			fmt.Println("Conflict details:")
-			conflictReport, err := conflicts.Detect(localRoot, sourceRoot, true)
+			conflictReport, err := conflicts.Detect(currentRoot, sourceRoot, true)
 			if err != nil {
 				fmt.Printf("  (Could not analyze conflicts: %v)\n", err)
 			} else if conflictReport.TrueConflicts > 0 {
@@ -282,17 +282,17 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 							fmt.Printf("    Region %d: line %d\n", i+1, h.StartLine)
 						}
 						// Show previews of conflicting content
-						if len(h.LocalLines) > 0 {
-							fmt.Printf("      Local:  %s", truncatePreview(h.LocalLines[0], 60))
-							if len(h.LocalLines) > 1 {
-								fmt.Printf(" (+%d more lines)", len(h.LocalLines)-1)
+						if len(h.CurrentLines) > 0 {
+							fmt.Printf("      Current: %s", truncatePreview(h.CurrentLines[0], 60))
+							if len(h.CurrentLines) > 1 {
+								fmt.Printf(" (+%d more lines)", len(h.CurrentLines)-1)
 							}
 							fmt.Println()
 						}
-						if len(h.RemoteLines) > 0 {
-							fmt.Printf("      Remote: %s", truncatePreview(h.RemoteLines[0], 60))
-							if len(h.RemoteLines) > 1 {
-								fmt.Printf(" (+%d more lines)", len(h.RemoteLines)-1)
+						if len(h.SourceLines) > 0 {
+							fmt.Printf("      Source:  %s", truncatePreview(h.SourceLines[0], 60))
+							if len(h.SourceLines) > 1 {
+								fmt.Printf(" (+%d more lines)", len(h.SourceLines)-1)
 							}
 							fmt.Println()
 						}
@@ -353,7 +353,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 	if len(mergeActions.toApply) > 0 {
 		fmt.Println("Applying non-conflicting changes...")
 		for _, action := range mergeActions.toApply {
-			if err := applyChange(localRoot, sourceRoot, action); err != nil {
+			if err := applyChange(currentRoot, sourceRoot, action); err != nil {
 				fmt.Printf("  ✗ %s: %v\n", action.path, err)
 				result.Failed = append(result.Failed, action.path)
 			} else {
@@ -377,10 +377,10 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 			} else {
 				fmt.Printf("Using %s for conflict resolution...\n", preferredAgent.Name)
 				for _, conflict := range mergeActions.conflicts {
-					if err := resolveConflictWithAgent(localRoot, sourceRoot, conflict, preferredAgent, baseManifest); err != nil {
+					if err := resolveConflictWithAgent(currentRoot, sourceRoot, conflict, preferredAgent, baseManifest); err != nil {
 						fmt.Printf("  ✗ %s: %v (creating conflict markers)\n", conflict.path, err)
 						// Fall back to manual for this file
-						if err := createConflictMarkers(localRoot, sourceRoot, conflict); err != nil {
+						if err := createConflictMarkers(currentRoot, sourceRoot, conflict); err != nil {
 							result.Failed = append(result.Failed, conflict.path)
 						} else {
 							result.Conflicts = append(result.Conflicts, conflict.path)
@@ -395,7 +395,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		case ConflictModeTheirs:
 			fmt.Println("Taking source version for all conflicts...")
 			for _, conflict := range mergeActions.conflicts {
-				if err := applyChange(localRoot, sourceRoot, conflict); err != nil {
+				if err := applyChange(currentRoot, sourceRoot, conflict); err != nil {
 					fmt.Printf("  ✗ %s: %v\n", conflict.path, err)
 					result.Failed = append(result.Failed, conflict.path)
 				} else {
@@ -416,7 +416,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		if mode == ConflictModeManual {
 			fmt.Println("Creating conflict markers for manual resolution...")
 			for _, conflict := range mergeActions.conflicts {
-				if err := createConflictMarkers(localRoot, sourceRoot, conflict); err != nil {
+				if err := createConflictMarkers(currentRoot, sourceRoot, conflict); err != nil {
 					fmt.Printf("  ✗ %s: %v\n", conflict.path, err)
 					result.Failed = append(result.Failed, conflict.path)
 				} else {
@@ -454,11 +454,11 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 
 // MergeAction represents a single file merge action
 type mergeAction struct {
-	path       string
-	actionType string // "apply", "conflict", "skip", "in_sync"
-	localHash  string
-	sourceHash string
-	baseHash   string
+	path        string
+	actionType  string // "apply", "conflict", "skip", "in_sync"
+	currentHash string
+	sourceHash  string
+	baseHash    string
 }
 
 // MergeActions holds all computed merge actions
@@ -469,7 +469,7 @@ type mergeActions struct {
 	skipped   []mergeAction
 }
 
-func computeMergeActions(base, local, source *manifest.Manifest, cherryPick []string) *mergeActions {
+func computeMergeActions(base, current, source *manifest.Manifest, cherryPick []string) *mergeActions {
 	result := &mergeActions{}
 
 	// Build lookup maps
@@ -478,9 +478,9 @@ func computeMergeActions(base, local, source *manifest.Manifest, cherryPick []st
 		baseFiles[f.Path] = f
 	}
 
-	localFiles := make(map[string]manifest.FileEntry)
-	for _, f := range local.Files {
-		localFiles[f.Path] = f
+	currentFiles := make(map[string]manifest.FileEntry)
+	for _, f := range current.Files {
+		currentFiles[f.Path] = f
 	}
 
 	sourceFiles := make(map[string]manifest.FileEntry)
@@ -500,7 +500,7 @@ func computeMergeActions(base, local, source *manifest.Manifest, cherryPick []st
 	for path := range baseFiles {
 		allPaths[path] = true
 	}
-	for path := range localFiles {
+	for path := range currentFiles {
 		allPaths[path] = true
 	}
 	for path := range sourceFiles {
@@ -515,7 +515,7 @@ func computeMergeActions(base, local, source *manifest.Manifest, cherryPick []st
 		}
 
 		baseFile, inBase := baseFiles[path]
-		localFile, inLocal := localFiles[path]
+		currentFile, inCurrent := currentFiles[path]
 		sourceFile, inSource := sourceFiles[path]
 
 		action := mergeAction{
@@ -525,57 +525,57 @@ func computeMergeActions(base, local, source *manifest.Manifest, cherryPick []st
 		if inBase {
 			action.baseHash = baseFile.Hash
 		}
-		if inLocal {
-			action.localHash = localFile.Hash
+		if inCurrent {
+			action.currentHash = currentFile.Hash
 		}
 		if inSource {
 			action.sourceHash = sourceFile.Hash
 		}
 
 		// Determine action based on three-way comparison
-		localChanged := !inBase && inLocal || (inBase && inLocal && baseFile.Hash != localFile.Hash)
+		currentChanged := !inBase && inCurrent || (inBase && inCurrent && baseFile.Hash != currentFile.Hash)
 		sourceChanged := !inBase && inSource || (inBase && inSource && baseFile.Hash != sourceFile.Hash)
-		localDeleted := inBase && !inLocal
+		currentDeleted := inBase && !inCurrent
 		sourceDeleted := inBase && !inSource
 
 		switch {
 		case !inSource && !sourceDeleted:
-			// File only exists locally or was deleted in source but we have it
+			// File only exists in current or was deleted in source but we have it
 			// Nothing to merge from source
 			continue
 
-		case !inLocal && inSource:
+		case !inCurrent && inSource:
 			// File only in source (added in source) - apply
 			action.actionType = "apply"
 			result.toApply = append(result.toApply, action)
 
-		case localDeleted && inSource:
+		case currentDeleted && inSource:
 			// We deleted, source has it - conflict (or apply source?)
 			// Treat as conflict - let user decide
 			action.actionType = "conflict"
 			result.conflicts = append(result.conflicts, action)
 
-		case sourceDeleted && inLocal:
+		case sourceDeleted && inCurrent:
 			// Source deleted, we have it - keep ours (no action needed)
 			action.actionType = "in_sync"
 			result.inSync = append(result.inSync, action)
 
-		case inLocal && inSource && localFile.Hash == sourceFile.Hash:
+		case inCurrent && inSource && currentFile.Hash == sourceFile.Hash:
 			// Same content - in sync
 			action.actionType = "in_sync"
 			result.inSync = append(result.inSync, action)
 
-		case !localChanged && sourceChanged:
+		case !currentChanged && sourceChanged:
 			// Only source changed - apply
 			action.actionType = "apply"
 			result.toApply = append(result.toApply, action)
 
-		case localChanged && !sourceChanged:
-			// Only local changed - keep ours (already have it)
+		case currentChanged && !sourceChanged:
+			// Only current changed - keep ours (already have it)
 			action.actionType = "in_sync"
 			result.inSync = append(result.inSync, action)
 
-		case localChanged && sourceChanged:
+		case currentChanged && sourceChanged:
 			// Both changed - conflict
 			action.actionType = "conflict"
 			result.conflicts = append(result.conflicts, action)
@@ -606,12 +606,12 @@ func printMergePlan(actions *mergeActions) {
 	}
 }
 
-func applyChange(localRoot, sourceRoot string, action mergeAction) error {
+func applyChange(currentRoot, sourceRoot string, action mergeAction) error {
 	sourcePath := filepath.Join(sourceRoot, action.path)
-	localPath := filepath.Join(localRoot, action.path)
+	currentPath := filepath.Join(currentRoot, action.path)
 
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0755); err != nil {
 		return err
 	}
 
@@ -627,22 +627,22 @@ func applyChange(localRoot, sourceRoot string, action mergeAction) error {
 		return fmt.Errorf("failed to stat source: %w", err)
 	}
 
-	// Write to local
-	if err := os.WriteFile(localPath, content, info.Mode()); err != nil {
+	// Write to current
+	if err := os.WriteFile(currentPath, content, info.Mode()); err != nil {
 		return fmt.Errorf("failed to write: %w", err)
 	}
 
 	return nil
 }
 
-func resolveConflictWithAgent(localRoot, sourceRoot string, action mergeAction, ag *agent.Agent, baseManifest *manifest.Manifest) error {
-	localPath := filepath.Join(localRoot, action.path)
+func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction, ag *agent.Agent, baseManifest *manifest.Manifest) error {
+	currentPath := filepath.Join(currentRoot, action.path)
 	sourcePath := filepath.Join(sourceRoot, action.path)
 
-	// Read local content
-	localContent, err := os.ReadFile(localPath)
+	// Read current content
+	currentContent, err := os.ReadFile(currentPath)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to read local: %w", err)
+		return fmt.Errorf("failed to read current: %w", err)
 	}
 
 	// Read source content
@@ -662,15 +662,26 @@ func resolveConflictWithAgent(localRoot, sourceRoot string, action mergeAction, 
 	}
 
 	// Invoke agent to merge
-	merged, err := agent.InvokeMerge(ag,
+	mergeResult, err := agent.InvokeMerge(ag,
 		string(baseContent),
-		string(localContent),
+		string(currentContent),
 		string(sourceContent),
 		action.path,
 	)
 	if err != nil {
 		return err
 	}
+
+	// Display strategy
+	if len(mergeResult.Strategy) > 0 {
+		fmt.Printf("    Strategy:\n")
+		for _, bullet := range mergeResult.Strategy {
+			fmt.Printf("      • %s\n", bullet)
+		}
+	}
+
+	// Show diff of what changed
+	showMergeDiff(string(currentContent), mergeResult.MergedCode)
 
 	// Write merged content
 	info, err := os.Stat(sourcePath)
@@ -679,36 +690,90 @@ func resolveConflictWithAgent(localRoot, sourceRoot string, action mergeAction, 
 		mode = info.Mode()
 	}
 
-	if err := os.WriteFile(localPath, []byte(merged), mode); err != nil {
+	if err := os.WriteFile(currentPath, []byte(mergeResult.MergedCode), mode); err != nil {
 		return fmt.Errorf("failed to write merged: %w", err)
 	}
 
 	return nil
 }
 
-func createConflictMarkers(localRoot, sourceRoot string, action mergeAction) error {
-	localPath := filepath.Join(localRoot, action.path)
+// showMergeDiff displays a compact diff of what the agent changed
+func showMergeDiff(before, after string) {
+	beforeLines := strings.Split(before, "\n")
+	afterLines := strings.Split(after, "\n")
+
+	// Simple line-based diff display (show first few changes)
+	fmt.Printf("    Diff:\n")
+
+	changes := 0
+	maxChanges := 10 // Limit output
+
+	i, j := 0, 0
+	for i < len(beforeLines) && j < len(afterLines) && changes < maxChanges {
+		if beforeLines[i] == afterLines[j] {
+			i++
+			j++
+			continue
+		}
+
+		// Found a difference
+		if i < len(beforeLines) {
+			line := truncatePreview(beforeLines[i], 60)
+			fmt.Printf("      \033[31m- %s\033[0m\n", line)
+			i++
+			changes++
+		}
+		if j < len(afterLines) && changes < maxChanges {
+			line := truncatePreview(afterLines[j], 60)
+			fmt.Printf("      \033[32m+ %s\033[0m\n", line)
+			j++
+			changes++
+		}
+	}
+
+	// Handle remaining lines
+	for i < len(beforeLines) && changes < maxChanges {
+		line := truncatePreview(beforeLines[i], 60)
+		fmt.Printf("      \033[31m- %s\033[0m\n", line)
+		i++
+		changes++
+	}
+	for j < len(afterLines) && changes < maxChanges {
+		line := truncatePreview(afterLines[j], 60)
+		fmt.Printf("      \033[32m+ %s\033[0m\n", line)
+		j++
+		changes++
+	}
+
+	remaining := (len(beforeLines) - i) + (len(afterLines) - j)
+	if remaining > 0 || changes >= maxChanges {
+		fmt.Printf("      ... (%d more changes)\n", remaining)
+	}
+}
+
+func createConflictMarkers(currentRoot, sourceRoot string, action mergeAction) error {
+	currentPath := filepath.Join(currentRoot, action.path)
 	sourcePath := filepath.Join(sourceRoot, action.path)
 
 	// Read both versions
-	localContent, localErr := os.ReadFile(localPath)
+	currentContent, currentErr := os.ReadFile(currentPath)
 	sourceContent, sourceErr := os.ReadFile(sourcePath)
 
-	if localErr != nil && sourceErr != nil {
+	if currentErr != nil && sourceErr != nil {
 		return fmt.Errorf("cannot read either version")
 	}
 
 	// Build conflict content
 	var result strings.Builder
 
-	result.WriteString("<<<<<<< LOCAL (this workspace)\n")
-	if localErr == nil {
-		result.Write(localContent)
-		if len(localContent) > 0 && localContent[len(localContent)-1] != '\n' {
+	result.WriteString("<<<<<<< CURRENT (this workspace)\n")
+	if currentErr == nil {
+		result.Write(currentContent)
+		if len(currentContent) > 0 && currentContent[len(currentContent)-1] != '\n' {
 			result.WriteString("\n")
 		}
 	} else {
-		result.WriteString("(file does not exist locally)\n")
+		result.WriteString("(file does not exist in current)\n")
 	}
 
 	result.WriteString("=======\n")
@@ -722,15 +787,15 @@ func createConflictMarkers(localRoot, sourceRoot string, action mergeAction) err
 		result.WriteString("(file does not exist in source)\n")
 	}
 
-	result.WriteString(">>>>>>> REMOTE (source workspace)\n")
+	result.WriteString(">>>>>>> SOURCE (merging from)\n")
 
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0755); err != nil {
 		return err
 	}
 
 	// Write conflict file
-	if err := os.WriteFile(localPath, []byte(result.String()), 0644); err != nil {
+	if err := os.WriteFile(currentPath, []byte(result.String()), 0644); err != nil {
 		return err
 	}
 
@@ -782,19 +847,19 @@ func buildConflictInfosFromReport(report *conflicts.Report) []agent.ConflictInfo
 			}
 
 			// Add previews (limit to first 5 lines each)
-			if len(h.LocalLines) > 0 {
+			if len(h.CurrentLines) > 0 {
 				limit := 5
-				if len(h.LocalLines) < limit {
-					limit = len(h.LocalLines)
+				if len(h.CurrentLines) < limit {
+					limit = len(h.CurrentLines)
 				}
-				hunkInfo.LocalPreview = h.LocalLines[:limit]
+				hunkInfo.CurrentPreview = h.CurrentLines[:limit]
 			}
-			if len(h.RemoteLines) > 0 {
+			if len(h.SourceLines) > 0 {
 				limit := 5
-				if len(h.RemoteLines) < limit {
-					limit = len(h.RemoteLines)
+				if len(h.SourceLines) < limit {
+					limit = len(h.SourceLines)
 				}
-				hunkInfo.RemotePreview = h.RemoteLines[:limit]
+				hunkInfo.SourcePreview = h.SourceLines[:limit]
 			}
 
 			info.Hunks = append(info.Hunks, hunkInfo)
