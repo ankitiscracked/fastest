@@ -24,6 +24,7 @@ func newSnapshotCmd() *cobra.Command {
 	var message string
 	var autoSummary bool
 	var setBase bool
+	var agentName string
 
 	cmd := &cobra.Command{
 		Use:   "snapshot",
@@ -36,20 +37,22 @@ This will:
 3. Optionally sync to cloud if authenticated
 
 Use --summary to auto-generate a description using your coding agent.
-Use --set-base to update this workspace's base snapshot to the new one.`,
+Use --set-base to update this workspace's base snapshot to the new one.
+Use --agent to record which AI agent made these changes.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSnapshot(message, autoSummary, setBase)
+			return runSnapshot(message, autoSummary, setBase, agentName)
 		},
 	}
 
 	cmd.Flags().StringVarP(&message, "message", "m", "", "Description for this snapshot")
 	cmd.Flags().BoolVar(&autoSummary, "summary", false, "Auto-generate description using coding agent")
 	cmd.Flags().BoolVar(&setBase, "set-base", false, "Update workspace base to this snapshot")
+	cmd.Flags().StringVar(&agentName, "agent", "", "Name of the AI agent (auto-detected if not specified)")
 
 	return cmd
 }
 
-func runSnapshot(message string, autoSummary bool, setBase bool) error {
+func runSnapshot(message string, autoSummary bool, setBase bool, agentName string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
@@ -58,6 +61,11 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 	root, err := config.FindProjectRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	// Detect agent if not specified
+	if agentName == "" {
+		agentName = detectAgent()
 	}
 
 	fmt.Println("Scanning files...")
@@ -149,7 +157,7 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 
 	// Save snapshot metadata
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	if !alreadyExists || message != "" {
+	if !alreadyExists || message != "" || agentName != "" {
 		metadata := fmt.Sprintf(`{
   "id": "%s",
   "workspace_id": "%s",
@@ -157,11 +165,12 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
   "manifest_hash": "%s",
   "parent_snapshot_id": "%s",
   "message": "%s",
+  "agent": "%s",
   "created_at": "%s",
   "files": %d,
   "size": %d
 }`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, cfg.BaseSnapshotID, escapeJSON(message),
-			time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+			escapeJSON(agentName), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
 		if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 			return fmt.Errorf("failed to save metadata: %w", err)
@@ -203,6 +212,9 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 	fmt.Printf("  Hash:     %s\n", manifestHash[:16]+"...")
 	fmt.Printf("  Files:    %d\n", m.FileCount())
 	fmt.Printf("  Size:     %s\n", formatBytesLong(m.TotalSize()))
+	if agentName != "" {
+		fmt.Printf("  Agent:    %s\n", agentName)
+	}
 	if message != "" {
 		fmt.Printf("  Message:  %s\n", message)
 	}
@@ -217,6 +229,56 @@ func runSnapshot(message string, autoSummary bool, setBase bool) error {
 	}
 
 	return nil
+}
+
+// detectAgent attempts to auto-detect the coding agent from environment
+func detectAgent() string {
+	// Check explicit FST_AGENT env var first
+	if agent := os.Getenv("FST_AGENT"); agent != "" {
+		return agent
+	}
+
+	// Claude Code sets CLAUDE_CODE=1 when running
+	if os.Getenv("CLAUDE_CODE") == "1" {
+		return "claude"
+	}
+
+	// Check for Claude Code's session ID (also indicates Claude Code)
+	if os.Getenv("CLAUDE_SESSION_ID") != "" {
+		return "claude"
+	}
+
+	// Aider sets AIDER=1 when running
+	if os.Getenv("AIDER") == "1" {
+		return "aider"
+	}
+
+	// Cursor sets CURSOR=1 when in Cursor terminal
+	if os.Getenv("CURSOR") == "1" {
+		return "cursor"
+	}
+
+	// Check for Cursor's terminal integration
+	if os.Getenv("TERM_PROGRAM") == "cursor" {
+		return "cursor"
+	}
+
+	// Check for VS Code Copilot
+	if os.Getenv("TERM_PROGRAM") == "vscode" && os.Getenv("GITHUB_COPILOT") != "" {
+		return "copilot"
+	}
+
+	// Check for Windsurf
+	if os.Getenv("WINDSURF") == "1" {
+		return "windsurf"
+	}
+
+	// Check for Cline
+	if os.Getenv("CLINE") == "1" {
+		return "cline"
+	}
+
+	return ""
 }
 
 // generateSnapshotSummary uses the coding agent to describe changes

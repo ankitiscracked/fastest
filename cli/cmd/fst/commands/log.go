@@ -48,6 +48,7 @@ type SnapshotMeta struct {
 	ManifestHash     string `json:"manifest_hash"`
 	ParentSnapshotID string `json:"parent_snapshot_id"`
 	Message          string `json:"message"`
+	Agent            string `json:"agent"`
 	CreatedAt        string `json:"created_at"`
 	Files            int    `json:"files"`
 	Size             int64  `json:"size"`
@@ -201,13 +202,20 @@ func displaySnapshot(snap *SnapshotMeta, isCurrent bool) {
 		shortID = shortID[:20]
 	}
 
-	// Format: * snap-abc123  2 hours ago  (5 files, 1.2 KB)
-	fmt.Printf("%s \033[33m%s\033[0m  \033[90m%s\033[0m  (%d files, %s)\n",
+	// Agent tag (if present)
+	agentTag := ""
+	if snap.Agent != "" {
+		agentTag = fmt.Sprintf(" \033[36m[%s]\033[0m", snap.Agent)
+	}
+
+	// Format: * snap-abc123  2 hours ago  (5 files, 1.2 KB) [claude]
+	fmt.Printf("%s \033[33m%s\033[0m  \033[90m%s\033[0m  (%d files, %s)%s\n",
 		indicator,
 		shortID,
 		timeStr,
 		snap.Files,
 		formatBytes(snap.Size),
+		agentTag,
 	)
 
 	// Message (indented)
