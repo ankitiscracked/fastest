@@ -14,6 +14,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
+	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -49,6 +50,7 @@ func newMergeCmd() *cobra.Command {
 	var dryRunSummary bool
 	var fromPath string
 	var mergeAll bool
+	var showPlan bool
 
 	cmd := &cobra.Command{
 		Use:   "merge [workspace]",
@@ -68,6 +70,7 @@ Non-conflicting changes are applied automatically. For conflicts:
 
 Use --dry-run to preview the merge and see line-level conflict details.
 Use --all to merge all workspaces in the project (non-conflicting first).
+Use --plan to analyze all workspaces and suggest optimal merge order.
 
 Workspace lookup uses the local registry. Use --from for explicit path.`,
 		Args: cobra.MaximumNArgs(1),
@@ -99,6 +102,14 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 				mode = ConflictModeOurs
 			}
 
+			// Handle --plan mode
+			if showPlan {
+				if len(args) > 0 {
+					return fmt.Errorf("cannot specify workspace with --plan")
+				}
+				return runMergePlan()
+			}
+
 			// Handle --all mode
 			if mergeAll {
 				if len(args) > 0 {
@@ -128,6 +139,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 	cmd.Flags().BoolVar(&dryRunSummary, "summary", false, "Generate LLM summary of conflicts (with --dry-run)")
 	cmd.Flags().StringVar(&fromPath, "from", "", "Source workspace path")
 	cmd.Flags().BoolVarP(&mergeAll, "all", "a", false, "Merge all workspaces in the project")
+	cmd.Flags().BoolVar(&showPlan, "plan", false, "Analyze workspaces and suggest optimal merge order")
 
 	return cmd
 }
@@ -1111,4 +1123,332 @@ func runMergeAll(mode ConflictMode, dryRun bool) error {
 	}
 
 	return nil
+}
+
+// runMergePlan analyzes all workspaces and suggests optimal merge order
+func runMergePlan() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("not in a project directory - run 'fst init' first")
+	}
+
+	currentRoot, err := config.FindProjectRoot()
+	if err != nil {
+		return fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	// Load workspace registry
+	registry, err := LoadRegistry()
+	if err != nil {
+		return fmt.Errorf("failed to load workspace registry: %w", err)
+	}
+
+	// Find all other workspaces in this project
+	var otherWorkspaces []RegisteredWorkspace
+	for _, ws := range registry.Workspaces {
+		if ws.ProjectID == cfg.ProjectID && ws.Name != cfg.WorkspaceName {
+			// Check if workspace exists
+			if _, err := os.Stat(filepath.Join(ws.Path, ".fst")); err == nil {
+				otherWorkspaces = append(otherWorkspaces, ws)
+			}
+		}
+	}
+
+	if len(otherWorkspaces) == 0 {
+		fmt.Println("No other workspaces found in this project.")
+		return nil
+	}
+
+	fmt.Printf("Analyzing %d workspaces for optimal merge order...\n", len(otherWorkspaces))
+	fmt.Println()
+
+	// Analyze each workspace
+	type workspaceInfo struct {
+		ws              RegisteredWorkspace
+		hasChanges      bool
+		addedFiles      []string
+		modifiedFiles   []string
+		deletedFiles    []string
+		totalFiles      int
+		conflictsWithMe int  // files that conflict with current workspace
+		conflictsWithOthers map[string]int  // workspace name -> conflict count
+		agent           string
+	}
+
+	workspaces := make([]workspaceInfo, len(otherWorkspaces))
+	allChangedFiles := make(map[string][]string) // file -> workspace names
+
+	// Get current workspace's changes
+	currentChanges, _ := getWorkspaceChangesForPath(currentRoot)
+	currentFiles := make(map[string]bool)
+	if currentChanges != nil {
+		for _, f := range currentChanges.FilesAdded {
+			currentFiles[f] = true
+		}
+		for _, f := range currentChanges.FilesModified {
+			currentFiles[f] = true
+		}
+		for _, f := range currentChanges.FilesDeleted {
+			currentFiles[f] = true
+		}
+	}
+
+	for i, ws := range otherWorkspaces {
+		workspaces[i] = workspaceInfo{
+			ws:                  ws,
+			conflictsWithOthers: make(map[string]int),
+		}
+
+		changes, err := getWorkspaceChanges(ws)
+		if err != nil {
+			continue
+		}
+
+		hasChanges := len(changes.FilesAdded) > 0 || len(changes.FilesModified) > 0 || len(changes.FilesDeleted) > 0
+		workspaces[i].hasChanges = hasChanges
+		workspaces[i].addedFiles = changes.FilesAdded
+		workspaces[i].modifiedFiles = changes.FilesModified
+		workspaces[i].deletedFiles = changes.FilesDeleted
+		workspaces[i].totalFiles = len(changes.FilesAdded) + len(changes.FilesModified) + len(changes.FilesDeleted)
+
+		// Check for agent in latest snapshot
+		snapshotsDir := config.GetSnapshotsDirAt(ws.Path)
+		entries, _ := os.ReadDir(snapshotsDir)
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".meta.json") {
+				data, _ := os.ReadFile(filepath.Join(snapshotsDir, entry.Name()))
+				var meta SnapshotMeta
+				if json.Unmarshal(data, &meta) == nil && meta.Agent != "" {
+					workspaces[i].agent = meta.Agent
+					break
+				}
+			}
+		}
+
+		// Track files
+		allFiles := append(append(changes.FilesAdded, changes.FilesModified...), changes.FilesDeleted...)
+		for _, f := range allFiles {
+			allChangedFiles[f] = append(allChangedFiles[f], ws.Name)
+			// Check if this conflicts with current workspace
+			if currentFiles[f] {
+				workspaces[i].conflictsWithMe++
+			}
+		}
+	}
+
+	// Determine conflicts between other workspaces
+	for i := range workspaces {
+		allFiles := append(append(workspaces[i].addedFiles, workspaces[i].modifiedFiles...), workspaces[i].deletedFiles...)
+		for _, f := range allFiles {
+			for _, otherName := range allChangedFiles[f] {
+				if otherName != workspaces[i].ws.Name {
+					workspaces[i].conflictsWithOthers[otherName]++
+				}
+			}
+		}
+	}
+
+	// Score workspaces for merge priority
+	// Lower score = should merge first
+	type scoredWorkspace struct {
+		info  workspaceInfo
+		score int
+		reasons []string
+	}
+
+	scored := make([]scoredWorkspace, 0)
+	for _, ws := range workspaces {
+		if !ws.hasChanges {
+			continue // Skip workspaces with no changes
+		}
+
+		sw := scoredWorkspace{info: ws, score: 0}
+
+		// Penalty for conflicts with current workspace
+		if ws.conflictsWithMe > 0 {
+			sw.score += ws.conflictsWithMe * 10
+			sw.reasons = append(sw.reasons, fmt.Sprintf("%d files conflict with your workspace", ws.conflictsWithMe))
+		}
+
+		// Penalty for conflicts with other workspaces
+		totalOtherConflicts := 0
+		for _, count := range ws.conflictsWithOthers {
+			totalOtherConflicts += count
+		}
+		if totalOtherConflicts > 0 {
+			sw.score += totalOtherConflicts * 5
+			sw.reasons = append(sw.reasons, fmt.Sprintf("%d overlapping files with other workspaces", totalOtherConflicts))
+		}
+
+		// Small bonus for smaller changes (easier to review)
+		if ws.totalFiles <= 5 {
+			sw.score -= 2
+			sw.reasons = append(sw.reasons, "small changeset")
+		} else if ws.totalFiles > 20 {
+			sw.score += 3
+			sw.reasons = append(sw.reasons, "large changeset")
+		}
+
+		scored = append(scored, sw)
+	}
+
+	// Sort by score (lowest first)
+	for i := 0; i < len(scored)-1; i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[i].score > scored[j].score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+
+	// Print analysis
+	fmt.Printf("Current workspace: \033[1m%s\033[0m\n", cfg.WorkspaceName)
+	if len(currentFiles) > 0 {
+		fmt.Printf("Your changes: %d files\n", len(currentFiles))
+	}
+	fmt.Println()
+
+	if len(scored) == 0 {
+		fmt.Println("No workspaces have changes to merge.")
+		return nil
+	}
+
+	fmt.Println("═══════════════════════════════════════════════════════════")
+	fmt.Println("RECOMMENDED MERGE ORDER")
+	fmt.Println("═══════════════════════════════════════════════════════════")
+	fmt.Println()
+
+	for i, sw := range scored {
+		// Status indicator
+		statusColor := "\033[32m" // green
+		statusIcon := "✓"
+		if sw.info.conflictsWithMe > 0 {
+			statusColor = "\033[31m" // red
+			statusIcon = "!"
+		} else if len(sw.info.conflictsWithOthers) > 0 {
+			statusColor = "\033[33m" // yellow
+			statusIcon = "~"
+		}
+
+		agentTag := ""
+		if sw.info.agent != "" {
+			agentTag = fmt.Sprintf(" \033[36m[%s]\033[0m", sw.info.agent)
+		}
+
+		fmt.Printf("%s%d. %s %s\033[0m%s\n", statusColor, i+1, statusIcon, sw.info.ws.Name, agentTag)
+		fmt.Printf("   Files: +%d ~%d -%d (%d total)\n",
+			len(sw.info.addedFiles), len(sw.info.modifiedFiles), len(sw.info.deletedFiles), sw.info.totalFiles)
+
+		if len(sw.reasons) > 0 {
+			fmt.Printf("   Notes: %s\n", strings.Join(sw.reasons, ", "))
+		}
+
+		// Show conflicting files if any
+		if sw.info.conflictsWithMe > 0 {
+			fmt.Printf("   \033[31mConflicts with your workspace:\033[0m\n")
+			count := 0
+			allFiles := append(append(sw.info.addedFiles, sw.info.modifiedFiles...), sw.info.deletedFiles...)
+			for _, f := range allFiles {
+				if currentFiles[f] {
+					fmt.Printf("      - %s\n", f)
+					count++
+					if count >= 3 {
+						remaining := sw.info.conflictsWithMe - count
+						if remaining > 0 {
+							fmt.Printf("      ... and %d more\n", remaining)
+						}
+						break
+					}
+				}
+			}
+		}
+
+		if len(sw.info.conflictsWithOthers) > 0 {
+			fmt.Printf("   \033[33mOverlaps with:\033[0m ")
+			names := make([]string, 0)
+			for name := range sw.info.conflictsWithOthers {
+				names = append(names, name)
+			}
+			fmt.Printf("%s\n", strings.Join(names, ", "))
+		}
+
+		fmt.Println()
+	}
+
+	// Summary and recommendations
+	fmt.Println("═══════════════════════════════════════════════════════════")
+	fmt.Println("RECOMMENDATIONS")
+	fmt.Println("═══════════════════════════════════════════════════════════")
+	fmt.Println()
+
+	// Count categories
+	noConflicts := 0
+	withConflicts := 0
+	for _, sw := range scored {
+		if sw.info.conflictsWithMe == 0 && len(sw.info.conflictsWithOthers) == 0 {
+			noConflicts++
+		}
+		if sw.info.conflictsWithMe > 0 {
+			withConflicts++
+		}
+	}
+
+	if noConflicts > 0 {
+		fmt.Printf("✓ %d workspace(s) can be merged without conflicts\n", noConflicts)
+	}
+	if withConflicts > 0 {
+		fmt.Printf("! %d workspace(s) have conflicts with your changes\n", withConflicts)
+		fmt.Println("  Consider using --agent for AI-assisted conflict resolution")
+	}
+
+	fmt.Println()
+	fmt.Println("Commands:")
+	if len(scored) > 0 {
+		fmt.Printf("  fst merge %s           # Merge first recommended workspace\n", scored[0].info.ws.Name)
+	}
+	fmt.Println("  fst merge --all            # Merge all in recommended order")
+	fmt.Println("  fst merge <name> --dry-run # Preview merge for specific workspace")
+
+	return nil
+}
+
+// getWorkspaceChangesForPath computes drift for a workspace by path
+func getWorkspaceChangesForPath(root string) (*drift.Report, error) {
+	wsCfg, err := config.LoadAt(root)
+	if err != nil {
+		return nil, err
+	}
+
+	if wsCfg.BaseSnapshotID == "" {
+		return &drift.Report{}, nil
+	}
+
+	// Load base manifest
+	snapshotsDir := config.GetSnapshotsDirAt(root)
+	manifestPath := filepath.Join(snapshotsDir, wsCfg.BaseSnapshotID+".json")
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	baseManifest, err := manifest.FromJSON(manifestData)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate current manifest
+	currentManifest, err := manifest.Generate(root, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Compute diff
+	added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
+
+	return &drift.Report{
+		BaseSnapshotID: wsCfg.BaseSnapshotID,
+		FilesAdded:     added,
+		FilesModified:  modified,
+		FilesDeleted:   deleted,
+	}, nil
 }
