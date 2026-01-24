@@ -449,6 +449,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
 
   const projectId = c.req.param('projectId');
   const body = await c.req.json<{
+    snapshot_id?: string;
     manifest_hash: string;
     parent_snapshot_id?: string;
     workspace_id?: string;
@@ -471,38 +472,51 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'manifest_hash is required' } }, 422);
   }
 
-  // Check if snapshot with same manifest already exists
-  const existingResult = await db
-    .select({ id: snapshots.id })
-    .from(snapshots)
-    .where(and(eq(snapshots.projectId, projectId), eq(snapshots.manifestHash, body.manifest_hash)))
-    .limit(1);
-
-  const existing = existingResult[0];
-
-  if (existing) {
-    // Return existing snapshot (idempotent)
-    const snapshotResult = await db
-      .select({
-        id: snapshots.id,
-        project_id: snapshots.projectId,
-        workspace_id: snapshots.workspaceId,
-        manifest_hash: snapshots.manifestHash,
-        parent_snapshot_id: snapshots.parentSnapshotId,
-        source: snapshots.source,
-        summary: snapshots.summary,
-        created_at: snapshots.createdAt,
-      })
-      .from(snapshots)
-      .where(eq(snapshots.id, existing.id))
+  if (body.workspace_id) {
+    const wsResult = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(and(eq(workspaces.id, body.workspace_id), eq(workspaces.projectId, projectId)))
       .limit(1);
 
-    return c.json({ snapshot: snapshotResult[0], created: false });
+    if (!wsResult[0]) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'workspace_id does not belong to this project' } }, 422);
+    }
   }
 
-  const snapshotId = `snap-${body.manifest_hash}`;
+  // Ensure manifest exists in object store before registering snapshot
+  const manifestKey = `${user.id}/manifests/${body.manifest_hash}.json`;
+  const manifestObj = await c.env.BLOBS.get(manifestKey);
+  if (!manifestObj) {
+    return c.json({ error: { code: 'MANIFEST_NOT_FOUND', message: 'Manifest not found in object store' } }, 422);
+  }
+
+  const snapshotId = body.snapshot_id || generateSnapshotID();
   const now = new Date().toISOString();
   const source = body.source || 'cli';
+
+  // Idempotency by snapshot ID (not by manifest hash)
+  const existingById = await db
+    .select({
+      id: snapshots.id,
+      project_id: snapshots.projectId,
+      workspace_id: snapshots.workspaceId,
+      manifest_hash: snapshots.manifestHash,
+      parent_snapshot_id: snapshots.parentSnapshotId,
+      source: snapshots.source,
+      summary: snapshots.summary,
+      created_at: snapshots.createdAt,
+    })
+    .from(snapshots)
+    .where(and(eq(snapshots.id, snapshotId), eq(snapshots.projectId, projectId)))
+    .limit(1);
+
+  if (existingById[0]) {
+    if (existingById[0].manifest_hash !== body.manifest_hash) {
+      return c.json({ error: { code: 'CONFLICT', message: 'snapshot_id already exists with different manifest_hash' } }, 409);
+    }
+    return c.json({ snapshot: existingById[0], created: false });
+  }
 
   await db.insert(snapshots).values({
     id: snapshotId,
@@ -1024,6 +1038,10 @@ function generateULID(): string {
     Math.floor(Math.random() * 36).toString(36)
   ).join('');
   return (timestamp + random).toUpperCase();
+}
+
+function generateSnapshotID(): string {
+  return `snap-${generateULID()}`;
 }
 
 // Helper: Mask secret value

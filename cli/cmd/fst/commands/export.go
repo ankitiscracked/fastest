@@ -230,7 +230,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		}
 
 		// Load snapshot data
-		manifestHash, err := config.ManifestHashFromSnapshotID(snap.ID)
+		manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snap.ID)
 		if err != nil {
 			return fmt.Errorf("invalid snapshot id %s: %w", snap.ID, err)
 		}
@@ -345,7 +345,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		// Check for drift
 		currentManifest, err := manifest.Generate(root, false)
 		if err == nil {
-			baseManifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
+			baseManifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.ForkSnapshotID)
 			if err == nil {
 				baseManifestPath := filepath.Join(configDir, config.ManifestsDirName, baseManifestHash+".json")
 				if baseData, err := os.ReadFile(baseManifestPath); err == nil {

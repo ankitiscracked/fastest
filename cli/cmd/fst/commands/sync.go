@@ -93,7 +93,10 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 	}
 
 	token, err := auth.GetToken()
-	if err != nil || token == "" {
+	if err != nil {
+		return auth.FormatKeyringError(err)
+	}
+	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 

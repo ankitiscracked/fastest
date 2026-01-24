@@ -68,7 +68,6 @@ export const snapshots = sqliteTable('snapshots', {
   summary: text('summary'), // LLM-generated description of changes
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
 }, (table) => [
-  uniqueIndex('idx_snapshots_project_manifest').on(table.projectId, table.manifestHash),
   index('idx_snapshots_project').on(table.projectId, table.createdAt),
   index('idx_snapshots_workspace').on(table.workspaceId, table.createdAt),
 ]);

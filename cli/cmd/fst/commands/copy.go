@@ -214,7 +214,7 @@ func runCopy(name, targetDir string) error {
 	_ = os.MkdirAll(targetManifestsDir, 0755)
 
 	// Copy snapshot manifest
-	if manifestHash, err := config.ManifestHashFromSnapshotID(forkSnapshotID); err == nil {
+	if manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, forkSnapshotID); err == nil {
 		snapshotManifestSrc := filepath.Join(sourceManifestsDir, manifestHash+".json")
 		snapshotManifestDst := filepath.Join(targetManifestsDir, manifestHash+".json")
 		if err := copyFile(snapshotManifestSrc, snapshotManifestDst, 0644); err != nil {

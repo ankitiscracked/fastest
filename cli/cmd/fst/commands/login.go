@@ -34,7 +34,10 @@ in your terminal to complete authentication.`,
 func runLogin(cmd *cobra.Command, args []string) error {
 	// Check if already logged in
 	token, err := auth.GetToken()
-	if err == nil && token != "" {
+	if err != nil {
+		return auth.FormatKeyringError(err)
+	}
+	if token != "" {
 		fmt.Println("Already logged in. Use 'fst logout' first to log in as a different user.")
 		return nil
 	}
@@ -110,7 +113,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		fmt.Printf("✓ Logged in as \033[1m%s\033[0m\n", tokenResp.User.Email)
 
 		if err := auth.SaveToken(tokenResp.AccessToken); err != nil {
-			return fmt.Errorf("logged in but failed to save token: %w", err)
+			return fmt.Errorf("logged in but failed to save token: %w", auth.FormatKeyringError(err))
 		}
 
 		return nil
@@ -126,7 +129,7 @@ func newLogoutCmd() *cobra.Command {
 		Short: "Log out of Fastest cloud",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := auth.ClearToken(); err != nil {
-				return fmt.Errorf("failed to clear credentials: %w", err)
+				return fmt.Errorf("failed to clear credentials: %w", auth.FormatKeyringError(err))
 			}
 			fmt.Println("Logged out successfully.")
 			return nil
@@ -140,7 +143,10 @@ func newWhoamiCmd() *cobra.Command {
 		Short: "Show current user",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			token, err := auth.GetToken()
-			if err != nil || token == "" {
+			if err != nil {
+				return auth.FormatKeyringError(err)
+			}
+			if token == "" {
 				fmt.Println("Not logged in. Run 'fst login' to authenticate.")
 				return nil
 			}

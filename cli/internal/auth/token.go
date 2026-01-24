@@ -1,111 +1,67 @@
 package auth
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
+
+	"github.com/zalando/go-keyring"
 )
 
 const (
-	configDirName  = "fst"
-	credentialFile = "credentials.json"
+	keyringService = "fst"
+	keyringUser    = "access_token"
 )
-
-type credentials struct {
-	AccessToken string `json:"access_token"`
-}
-
-// GetConfigDir returns the path to the fst config directory
-func GetConfigDir() (string, error) {
-	// Use XDG_CONFIG_HOME if set, otherwise ~/.config
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("could not determine home directory: %w", err)
-		}
-		configHome = filepath.Join(home, ".config")
-	}
-
-	configDir := filepath.Join(configHome, configDirName)
-
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll(configDir, 0700); err != nil {
-		return "", fmt.Errorf("could not create config directory: %w", err)
-	}
-
-	return configDir, nil
-}
-
-// GetCredentialPath returns the path to the credentials file
-func GetCredentialPath() (string, error) {
-	configDir, err := GetConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(configDir, credentialFile), nil
-}
 
 // SaveToken saves the access token to the credentials file
 func SaveToken(token string) error {
-	credPath, err := GetCredentialPath()
-	if err != nil {
-		return err
+	if err := keyring.Set(keyringService, keyringUser, token); err != nil {
+		return fmt.Errorf("failed to store token in OS keychain: %w", err)
 	}
-
-	creds := credentials{
-		AccessToken: token,
-	}
-
-	data, err := json.MarshalIndent(creds, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal credentials: %w", err)
-	}
-
-	// Write with restricted permissions (owner read/write only)
-	if err := os.WriteFile(credPath, data, 0600); err != nil {
-		return fmt.Errorf("failed to write credentials: %w", err)
-	}
-
 	return nil
 }
 
 // GetToken retrieves the access token from the credentials file
 func GetToken() (string, error) {
-	credPath, err := GetCredentialPath()
+	token, err := keyring.Get(keyringService, keyringUser)
+	if err == keyring.ErrNotFound {
+		return "", nil
+	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read token from OS keychain: %w", err)
 	}
-
-	data, err := os.ReadFile(credPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("failed to read credentials: %w", err)
-	}
-
-	var creds credentials
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return "", fmt.Errorf("failed to parse credentials: %w", err)
-	}
-
-	return creds.AccessToken, nil
+	return token, nil
 }
 
 // ClearToken removes the credentials file
 func ClearToken() error {
-	credPath, err := GetCredentialPath()
-	if err != nil {
+	if err := keyring.Delete(keyringService, keyringUser); err != nil && err != keyring.ErrNotFound {
+		return fmt.Errorf("failed to remove token from OS keychain: %w", err)
+	}
+	return nil
+}
+
+// FormatKeyringError adds platform-specific hints for common keyring failures.
+func FormatKeyringError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	hint := ""
+
+	switch {
+	case strings.Contains(msg, "No such file or directory") || strings.Contains(msg, "org.freedesktop.secrets"):
+		hint = "On Linux, install and run a Secret Service provider (e.g., GNOME Keyring or KWallet) and ensure DBus is available."
+	case strings.Contains(msg, "User interaction is not allowed"):
+		hint = "The OS keychain may be locked. Unlock it and try again."
+	case strings.Contains(msg, "Access denied") || strings.Contains(msg, "denied"):
+		hint = "The OS keychain denied access. Check keychain permissions."
+	}
+
+	if hint == "" {
 		return err
 	}
-
-	if err := os.Remove(credPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove credentials: %w", err)
-	}
-
-	return nil
+	return errors.New(fmt.Sprintf("%s\nHint: %s", msg, hint))
 }
 
 // IsLoggedIn returns true if there is a saved token

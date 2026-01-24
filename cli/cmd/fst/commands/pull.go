@@ -49,7 +49,10 @@ func runPull(snapshotID string, force bool) error {
 	}
 
 	token, err := auth.GetToken()
-	if err != nil || token == "" {
+	if err != nil {
+		return auth.FormatKeyringError(err)
+	}
+	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
@@ -131,7 +134,7 @@ func isWorkingTreeDirty(root, latestSnapshotID string) (bool, error) {
 		return current.FileCount() > 0, nil
 	}
 
-	manifestHash, err := config.ManifestHashFromSnapshotID(latestSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, latestSnapshotID)
 	if err != nil {
 		return true, err
 	}

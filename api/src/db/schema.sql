@@ -63,8 +63,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
   manifest_hash TEXT NOT NULL,
   parent_snapshot_id TEXT,
   source TEXT NOT NULL DEFAULT 'cli',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(project_id, manifest_hash)
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_project ON snapshots(project_id, created_at DESC);

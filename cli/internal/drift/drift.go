@@ -149,7 +149,7 @@ func ComputeFromCache(root string) (*Report, error) {
 	}
 
 	// Load base manifest from local manifests directory
-	manifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.ForkSnapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func ComputeAgainstWorkspace(root, otherRoot string, includeDirty bool) (*Report
 			return nil, fmt.Errorf("other workspace has no snapshots")
 		}
 
-		manifestHash, err := config.ManifestHashFromSnapshotID(snapshotID)
+		manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snapshotID)
 		if err != nil {
 			return nil, fmt.Errorf("invalid snapshot id: %w", err)
 		}
@@ -415,7 +415,7 @@ func (r *DivergenceReport) ToJSON() ([]byte, error) {
 
 // LoadManifestFromSnapshots loads a manifest from a workspace's manifests directory
 func LoadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, error) {
-	manifestHash, err := config.ManifestHashFromSnapshotID(snapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snapshotID)
 	if err != nil {
 		return nil, err
 	}

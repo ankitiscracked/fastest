@@ -390,7 +390,7 @@ func getLinesFromDiff(base, modified string, r lineRange) []string {
 
 // loadManifestFromSnapshots loads a manifest from a workspace's snapshots directory
 func loadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, error) {
-	manifestHash, err := config.ManifestHashFromSnapshotID(snapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snapshotID)
 	if err != nil {
 		return nil, err
 	}

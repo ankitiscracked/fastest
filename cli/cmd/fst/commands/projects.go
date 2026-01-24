@@ -128,7 +128,10 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	}
 
 	// Check for auth (optional)
-	token, _ := auth.GetToken()
+	token, err := auth.GetToken()
+	if err != nil {
+		fmt.Printf("Warning: %v\n", auth.FormatKeyringError(err))
+	}
 	hasAuth := token != ""
 
 	var projectID, workspaceID string
@@ -199,7 +202,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 			return fmt.Errorf("failed to create snapshot: %w", err)
 		}
 
-		snapshotID = "snap-" + manifestHash
+		snapshotID = generateSnapshotID()
 
 		// Cache blobs in global cache
 		blobDir, err := config.GetGlobalBlobDir()
@@ -322,7 +325,10 @@ func newProjectsCmd() *cobra.Command {
 
 func runProjects(cmd *cobra.Command, args []string) error {
 	token, err := auth.GetToken()
-	if err != nil || token == "" {
+	if err != nil {
+		return auth.FormatKeyringError(err)
+	}
+	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
@@ -376,7 +382,10 @@ If no ID is provided and you're in a project directory, shows the current projec
 
 func runProject(cmd *cobra.Command, args []string) error {
 	token, err := auth.GetToken()
-	if err != nil || token == "" {
+	if err != nil {
+		return auth.FormatKeyringError(err)
+	}
+	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 

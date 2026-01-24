@@ -28,6 +28,10 @@ function generateULID(): string {
   return (timestamp + randomPart).toUpperCase();
 }
 
+function generateSnapshotID(): string {
+  return `snap-${generateULID()}`;
+}
+
 /**
  * Main entry point for background jobs
  */
@@ -172,7 +176,7 @@ async function processWorkspace(
   console.log(`[BackgroundJobs] Creating snapshot for workspace ${ws.workspace_id}`);
 
   // Create new snapshot
-  const snapshotId = `snap-${currentManifestHash}`;
+  const snapshotId = generateSnapshotID();
   const now = new Date().toISOString();
 
   await db.insert(snapshots).values({

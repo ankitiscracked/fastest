@@ -103,7 +103,7 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 	}
 
 	// Load target manifest from local manifests directory
-	manifestHash, err := config.ManifestHashFromSnapshotID(targetSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, targetSnapshotID)
 	if err != nil {
 		return err
 	}

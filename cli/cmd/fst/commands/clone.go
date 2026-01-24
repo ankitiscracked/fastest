@@ -46,7 +46,10 @@ func newCloneCmd() *cobra.Command {
 
 func runClone(target string, targetDir string) error {
 	token, err := auth.GetToken()
-	if err != nil || token == "" {
+	if err != nil {
+		return auth.FormatKeyringError(err)
+	}
+	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 

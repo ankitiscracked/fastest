@@ -76,14 +76,14 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 
 	fmt.Printf("Found %d files (%s)\n", m.FileCount(), formatBytesLong(m.TotalSize()))
 
-	// Compute manifest hash - this becomes the snapshot ID
+	// Compute manifest hash (snapshot ID is generated separately)
 	manifestHash, err := m.Hash()
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	// Create snapshot ID from hash (full hash for determinism)
-	snapshotID := "snap-" + manifestHash
+	// Create a new snapshot ID (history entry)
+	snapshotID := generateSnapshotID()
 
 	// Check if this exact snapshot already exists in local snapshots dir
 	snapshotsDir, err := config.GetSnapshotsDir()
@@ -162,12 +162,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	// Save snapshot metadata
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	parentSnapshotID := cfg.CurrentSnapshotID
-	metadataExists := false
-	if _, err := os.Stat(metadataPath); err == nil {
-		metadataExists = true
-	}
-	if !metadataExists || message != "" || agentName != "" {
-		metadata := fmt.Sprintf(`{
+	metadata := fmt.Sprintf(`{
   "id": "%s",
   "workspace_id": "%s",
   "workspace_name": "%s",
@@ -179,22 +174,24 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
   "files": %d,
   "size": %d
 }`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentSnapshotID, escapeJSON(message),
-			escapeJSON(agentName), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+		escapeJSON(agentName), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
-		if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
-			return fmt.Errorf("failed to save metadata: %w", err)
-		}
+	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
+		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
 	// Try to sync to cloud if authenticated
-	token, _ := auth.GetToken()
+	token, err := auth.GetToken()
+	if err != nil {
+		fmt.Printf("Warning: %v\n", auth.FormatKeyringError(err))
+	}
 	cloudSynced := false
 	if token != "" {
 		client := newAPIClient(token, cfg)
 		if err := uploadSnapshotToCloud(client, root, m, manifestHash, manifestJSON); err != nil {
 			fmt.Printf("Warning: Cloud upload failed: %v\n", err)
 		} else {
-			_, created, err := client.CreateSnapshot(cfg.ProjectID, manifestHash, parentSnapshotID, cfg.WorkspaceID)
+			_, created, err := client.CreateSnapshot(cfg.ProjectID, snapshotID, manifestHash, parentSnapshotID, cfg.WorkspaceID)
 			if err == nil {
 				cloudSynced = true
 				if created {
@@ -215,12 +212,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 
 	// Output result
 	fmt.Println()
-	alreadyExists := manifestExists && metadataExists
-	if alreadyExists {
-		fmt.Println("✓ Snapshot already exists (no changes since last snapshot)")
-	} else {
-		fmt.Println("✓ Snapshot created!")
-	}
+	fmt.Println("✓ Snapshot created!")
 	fmt.Println()
 	fmt.Printf("  ID:       %s\n", snapshotID)
 	fmt.Printf("  Hash:     %s\n", manifestHash[:16]+"...")
@@ -267,7 +259,14 @@ func CreateAutoSnapshot(message string) (string, error) {
 		return "", fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	snapshotID := "snap-" + manifestHash
+	// Skip if no changes since current snapshot
+	if cfg.CurrentSnapshotID != "" {
+		if currentHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.CurrentSnapshotID); err == nil && currentHash == manifestHash {
+			return "", nil
+		}
+	}
+
+	snapshotID := generateSnapshotID()
 
 	// Check if snapshot already exists
 	snapshotsDir, err := config.GetSnapshotsDir()
@@ -280,9 +279,9 @@ func CreateAutoSnapshot(message string) (string, error) {
 		return "", fmt.Errorf("failed to get manifests directory: %w", err)
 	}
 	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
+	manifestExists := false
 	if _, err := os.Stat(manifestPath); err == nil {
-		// Snapshot already exists - no new changes to save
-		return "", nil
+		manifestExists = true
 	}
 
 	// Cache blobs
@@ -312,8 +311,10 @@ func CreateAutoSnapshot(message string) (string, error) {
 		return "", fmt.Errorf("failed to serialize snapshot: %w", err)
 	}
 
-	if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-		return "", fmt.Errorf("failed to save snapshot: %w", err)
+	if !manifestExists {
+		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
+			return "", fmt.Errorf("failed to save snapshot: %w", err)
+		}
 	}
 
 	// Save metadata

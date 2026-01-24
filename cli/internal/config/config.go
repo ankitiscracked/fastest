@@ -103,19 +103,47 @@ func GetManifestsDirAt(root string) string {
 	return filepath.Join(root, ConfigDirName, ManifestsDirName)
 }
 
-// ManifestHashFromSnapshotID extracts the manifest hash from a snapshot ID.
+// ManifestHashFromSnapshotID resolves a snapshot ID to its manifest hash using local metadata.
 func ManifestHashFromSnapshotID(snapshotID string) (string, error) {
-	const prefix = "snap-"
-	if strings.HasPrefix(snapshotID, prefix) && len(snapshotID) > len(prefix) {
-		return strings.TrimPrefix(snapshotID, prefix), nil
+	root, err := FindProjectRoot()
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("invalid snapshot ID format: %s", snapshotID)
+	return ManifestHashFromSnapshotIDAt(root, snapshotID)
+}
+
+// ManifestHashFromSnapshotIDAt resolves a snapshot ID to its manifest hash for a specific workspace root.
+func ManifestHashFromSnapshotIDAt(root, snapshotID string) (string, error) {
+	if snapshotID == "" {
+		return "", fmt.Errorf("empty snapshot ID")
+	}
+
+	snapshotsDir := GetSnapshotsDirAt(root)
+	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta SnapshotMeta
+		if err := json.Unmarshal(data, &meta); err == nil && meta.ManifestHash != "" {
+			return meta.ManifestHash, nil
+		}
+	}
+
+	// Fallback for legacy snapshot IDs that embedded the manifest hash.
+	const prefix = "snap-"
+	if strings.HasPrefix(snapshotID, prefix) {
+		legacy := strings.TrimPrefix(snapshotID, prefix)
+		if len(legacy) == 64 {
+			return legacy, nil
+		}
+	}
+
+	return "", fmt.Errorf("snapshot metadata not found for: %s", snapshotID)
 }
 
 // SnapshotMeta represents snapshot metadata
 type SnapshotMeta struct {
-	ID        string `json:"id"`
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	CreatedAt    string `json:"created_at"`
+	ManifestHash string `json:"manifest_hash"`
 }
 
 // GetLatestSnapshotID returns the most recent snapshot ID for the current workspace

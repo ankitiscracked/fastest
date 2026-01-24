@@ -212,8 +212,10 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 
 		if found == nil {
 			// Try cloud as fallback
-			token, _ := auth.GetToken()
-			if token != "" {
+			token, err := auth.GetToken()
+			if err != nil {
+				fmt.Printf("Warning: %v\n", auth.FormatKeyringError(err))
+			} else if token != "" {
 				client := newAPIClient(token, cfg)
 				_, cloudWorkspaces, err := client.GetProject(cfg.ProjectID)
 				if err == nil {
@@ -253,8 +255,10 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 	fmt.Printf("Into:         %s (%s)\n", cfg.WorkspaceName, currentRoot)
 	fmt.Println()
 
-	token, _ := auth.GetToken()
-	if token != "" {
+	token, err := auth.GetToken()
+	if err != nil {
+		fmt.Printf("Warning: %v\n", auth.FormatKeyringError(err))
+	} else if token != "" {
 		client := newAPIClient(token, cfg)
 		warnIfRemoteHeadDiff("target", client, cfg, currentRoot)
 		warnIfRemoteHeadDiff("source", client, sourceCfg, sourceRoot)
@@ -920,7 +924,7 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 		return nil, err
 	}
 
-	manifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.ForkSnapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -1066,7 +1070,7 @@ func loadManifestByID(root, snapshotID string) (*manifest.Manifest, error) {
 		return nil, fmt.Errorf("empty snapshot ID")
 	}
 
-	manifestHash, err := config.ManifestHashFromSnapshotID(snapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -1671,7 +1675,7 @@ func getWorkspaceChangesForPath(root string) (*drift.Report, error) {
 	}
 
 	// Load base manifest
-	manifestHash, err := config.ManifestHashFromSnapshotID(wsCfg.ForkSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, wsCfg.ForkSnapshotID)
 	if err != nil {
 		return nil, err
 	}

@@ -48,6 +48,8 @@ export interface Env {
   // Google OAuth
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  // User API key encryption (base64-encoded 32 bytes)
+  API_KEY_ENCRYPTION_KEY?: string;
   // Cloudflare deploy credentials (our account)
   CLOUDFLARE_DEPLOY_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;

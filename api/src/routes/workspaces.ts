@@ -1352,24 +1352,16 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
   // Create snapshot before (if requested)
   let snapshotBeforeId: string | undefined;
   if (create_snapshot_before) {
-    snapshotBeforeId = `snap-${currentSnapshot.manifest_hash}`;
-    const existingSnapshot = await db
-      .select({ id: snapshots.id })
-      .from(snapshots)
-      .where(eq(snapshots.id, snapshotBeforeId))
-      .limit(1);
-
-    if (!existingSnapshot[0]) {
-      await db.insert(snapshots).values({
-        id: snapshotBeforeId,
-        projectId: workspace.project_id,
-        workspaceId: workspaceId,
-        manifestHash: currentSnapshot.manifest_hash,
-        parentSnapshotId: currentSnapshotId,
-        source: 'system',
-        createdAt: new Date().toISOString(),
-      });
-    }
+    snapshotBeforeId = generateSnapshotID();
+    await db.insert(snapshots).values({
+      id: snapshotBeforeId,
+      projectId: workspace.project_id,
+      workspaceId: workspaceId,
+      manifestHash: currentSnapshot.manifest_hash,
+      parentSnapshotId: currentSnapshotId,
+      source: 'system',
+      createdAt: new Date().toISOString(),
+    });
   }
 
   // Create rollback context to track uploaded resources
@@ -1548,27 +1540,17 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
   // Track manifest for potential rollback
   rollbackContext.createdManifests.push(newManifestHash);
 
-  // Create new snapshot (idempotent)
-  let newSnapshotId = `snap-${newManifestHash}`;
-  const existingSnapshot = await db
-    .select({ id: snapshots.id })
-    .from(snapshots)
-    .where(and(eq(snapshots.projectId, workspace.project_id), eq(snapshots.manifestHash, newManifestHash)))
-    .limit(1);
-
-  if (existingSnapshot[0]) {
-    newSnapshotId = existingSnapshot[0].id;
-  } else {
-    await db.insert(snapshots).values({
-      id: newSnapshotId,
-      projectId: workspace.project_id,
-      workspaceId: workspaceId,
-      manifestHash: newManifestHash,
-      parentSnapshotId: currentSnapshotId,
-      source: 'web',
-      createdAt: new Date().toISOString(),
-    });
-  }
+  // Create new snapshot
+  const newSnapshotId = generateSnapshotID();
+  await db.insert(snapshots).values({
+    id: newSnapshotId,
+    projectId: workspace.project_id,
+    workspaceId: workspaceId,
+    manifestHash: newManifestHash,
+    parentSnapshotId: currentSnapshotId,
+    source: 'web',
+    createdAt: new Date().toISOString(),
+  });
 
   // Update workspace with OPTIMISTIC LOCKING
   // Only update if version matches what we read initially
@@ -2083,6 +2065,10 @@ function generateULID(): string {
     Math.floor(Math.random() * 36).toString(36)
   ).join('');
   return (timestamp + random).toUpperCase();
+}
+
+function generateSnapshotID(): string {
+  return `snap-${generateULID()}`;
 }
 
 // Helper: Build AI prompt for drift analysis

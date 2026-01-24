@@ -195,7 +195,7 @@ func getWorkspaceChanges(ws RegisteredWorkspace) (*drift.Report, error) {
 	}
 
 	// Load base manifest
-	manifestHash, err := config.ManifestHashFromSnapshotID(wsCfg.ForkSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(ws.Path, wsCfg.ForkSnapshotID)
 	if err != nil {
 		return fmt.Errorf("invalid fork snapshot id: %w", err)
 	}

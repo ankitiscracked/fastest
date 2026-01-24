@@ -79,7 +79,10 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 	if target == "" {
 		// No target specified - compare with main workspace
 		token, err := auth.GetToken()
-		if err != nil || token == "" {
+		if err != nil {
+			return auth.FormatKeyringError(err)
+		}
+		if token == "" {
 			return fmt.Errorf("not logged in - run 'fst login' first\nOr specify a workspace: fst drift <workspace>")
 		}
 
@@ -193,7 +196,10 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 	// Sync to cloud if requested
 	if syncToCloud {
 		token, err := auth.GetToken()
-		if err != nil || token == "" {
+		if err != nil {
+			return auth.FormatKeyringError(err)
+		}
+		if token == "" {
 			return fmt.Errorf("not logged in - run 'fst login' first")
 		}
 
@@ -317,7 +323,10 @@ func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, genera
 	// Sync to cloud if requested
 	if syncToCloud {
 		token, err := auth.GetToken()
-		if err != nil || token == "" {
+		if err != nil {
+			return auth.FormatKeyringError(err)
+		}
+		if token == "" {
 			return fmt.Errorf("not logged in - run 'fst login' first")
 		}
 

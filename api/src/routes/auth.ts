@@ -73,38 +73,6 @@ authRoutes.post('/google', async (c) => {
   }
 });
 
-// Start login flow (send magic link / code)
-authRoutes.post('/start', async (c) => {
-  const body = await c.req.json<{ email: string }>();
-
-  if (!body.email) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Email is required' } }, 422);
-  }
-
-  // TODO: Implement magic link flow
-  // For now, return a placeholder session_id
-  return c.json({
-    session_id: 'placeholder-session',
-    message: 'Check your email for the login code'
-  });
-});
-
-// Complete login (exchange code for token)
-authRoutes.post('/complete', async (c) => {
-  const body = await c.req.json<{ session_id: string; code: string }>();
-
-  if (!body.session_id || !body.code) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'session_id and code are required' } }, 422);
-  }
-
-  // TODO: Implement code verification
-  // For now, return a placeholder token
-  return c.json({
-    access_token: 'placeholder-token',
-    expires_in: 86400
-  });
-});
-
 // Get current user
 authRoutes.get('/me', async (c) => {
   const db = createDb(c.env.DB);
@@ -170,16 +138,28 @@ authRoutes.get('/api-keys', async (c) => {
     .from(userApiKeys)
     .where(eq(userApiKeys.userId, user.id));
 
-  // Mask key values - show only last 4 characters
-  const maskedKeys: UserApiKey[] = keys.map(key => ({
-    id: key.id,
-    user_id: key.userId,
-    provider: key.provider as ApiKeyProvider,
-    key_name: key.keyName,
-    key_value: '•'.repeat(20) + key.keyValue.slice(-4),
-    created_at: key.createdAt,
-    updated_at: key.updatedAt,
-  }));
+  // Mask key values - show only last 4 characters (decrypt if encrypted)
+  const maskedKeys: UserApiKey[] = [];
+  for (const key of keys) {
+    let suffix = '••••';
+    try {
+      const plain = await decryptApiKeyValue(c.env, key.keyValue);
+      if (plain.length >= 4) {
+        suffix = plain.slice(-4);
+      }
+    } catch {
+      // Ignore decryption errors for list view
+    }
+    maskedKeys.push({
+      id: key.id,
+      user_id: key.userId,
+      provider: key.provider as ApiKeyProvider,
+      key_name: key.keyName,
+      key_value: '•'.repeat(20) + suffix,
+      created_at: key.createdAt,
+      updated_at: key.updatedAt,
+    });
+  }
 
   return c.json({ api_keys: maskedKeys });
 });
@@ -217,13 +197,19 @@ authRoutes.post('/api-keys', async (c) => {
     .limit(1);
 
   const now = new Date().toISOString();
+  let encryptedValue: string;
+  try {
+    encryptedValue = await encryptApiKeyValue(c.env, body.key_value);
+  } catch (err) {
+    return c.json({ error: { code: 'ENCRYPTION_FAILED', message: err instanceof Error ? err.message : 'Failed to encrypt key' } }, 500);
+  }
 
   if (existing.length > 0) {
     // Update existing key
     await db
       .update(userApiKeys)
       .set({
-        keyValue: body.key_value,
+        keyValue: encryptedValue,
         updatedAt: now,
       })
       .where(eq(userApiKeys.id, existing[0].id));
@@ -234,7 +220,7 @@ authRoutes.post('/api-keys', async (c) => {
       userId: user.id,
       provider: body.provider,
       keyName: providerConfig.keyName,
-      keyValue: body.key_value,
+      keyValue: encryptedValue,
       createdAt: now,
       updatedAt: now,
     });
@@ -294,7 +280,11 @@ authRoutes.get('/api-keys/values', async (c) => {
   // Return as a map of env var name -> value
   const envVars: Record<string, string> = {};
   for (const key of keys) {
-    envVars[key.keyName] = key.keyValue;
+    try {
+      envVars[key.keyName] = await decryptApiKeyValue(c.env, key.keyValue);
+    } catch (err) {
+      return c.json({ error: { code: 'DECRYPTION_FAILED', message: err instanceof Error ? err.message : 'Failed to decrypt key' } }, 500);
+    }
   }
 
   return c.json({ env_vars: envVars });
@@ -357,4 +347,60 @@ function generateSecureToken(length: number): string {
   const array = new Uint8Array(length);
   crypto.getRandomValues(array);
   return Array.from(array, (byte) => chars[byte % chars.length]).join('');
+}
+
+const API_KEY_PREFIX = 'enc:v1:';
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) {
+    binary += String.fromCharCode(b);
+  }
+  return btoa(binary);
+}
+
+async function getApiKeyCryptoKey(env: Env): Promise<CryptoKey> {
+  if (!env.API_KEY_ENCRYPTION_KEY) {
+    throw new Error('API key encryption is not configured');
+  }
+  const raw = base64ToBytes(env.API_KEY_ENCRYPTION_KEY);
+  if (raw.length !== 32) {
+    throw new Error('API key encryption key must be 32 bytes (base64-encoded)');
+  }
+  return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+async function encryptApiKeyValue(env: Env, value: string): Promise<string> {
+  const key = await getApiKeyCryptoKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(value);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded));
+  const combined = new Uint8Array(iv.length + ciphertext.length);
+  combined.set(iv, 0);
+  combined.set(ciphertext, iv.length);
+  return API_KEY_PREFIX + bytesToBase64(combined);
+}
+
+async function decryptApiKeyValue(env: Env, stored: string): Promise<string> {
+  if (!stored.startsWith(API_KEY_PREFIX)) {
+    throw new Error('Stored API key is not encrypted');
+  }
+  const data = base64ToBytes(stored.slice(API_KEY_PREFIX.length));
+  if (data.length <= 12) {
+    throw new Error('Encrypted API key payload is invalid');
+  }
+  const iv = data.slice(0, 12);
+  const ciphertext = data.slice(12);
+  const key = await getApiKeyCryptoKey(env);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return new TextDecoder().decode(plain);
 }
