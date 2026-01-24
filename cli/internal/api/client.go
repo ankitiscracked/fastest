@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -22,13 +23,17 @@ type Client struct {
 
 // NewClient creates a new API client
 func NewClient(token string) *Client {
-	return &Client{
+	client := &Client{
 		baseURL: DefaultBaseURL,
 		token:   token,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+	if envURL := os.Getenv("FST_API_URL"); envURL != "" {
+		client.baseURL = envURL
+	}
+	return client
 }
 
 // SetBaseURL sets the base URL for the API
@@ -185,15 +190,17 @@ type MergeRecord struct {
 }
 
 type Workspace struct {
-	ID             string                  `json:"id"`
-	ProjectID      string                  `json:"project_id"`
-	Name           string                  `json:"name"`
-	MachineID      *string                 `json:"machine_id"`
-	BaseSnapshotID *string                 `json:"base_snapshot_id"`
-	LocalPath      *string                 `json:"local_path"`
-	LastSeenAt     *string                 `json:"last_seen_at"`
-	CreatedAt      string                  `json:"created_at"`
-	MergeHistory   map[string]MergeRecord  `json:"merge_history,omitempty"`
+	ID                  string                 `json:"id"`
+	ProjectID           string                 `json:"project_id"`
+	Name                string                 `json:"name"`
+	MachineID           *string                `json:"machine_id"`
+	ForkSnapshotID      *string                `json:"fork_snapshot_id"`
+	CurrentSnapshotID   *string                `json:"current_snapshot_id,omitempty"`
+	CurrentManifestHash *string                `json:"current_manifest_hash,omitempty"`
+	LocalPath           *string                `json:"local_path"`
+	LastSeenAt          *string                `json:"last_seen_at"`
+	CreatedAt           string                 `json:"created_at"`
+	MergeHistory        map[string]MergeRecord `json:"merge_history,omitempty"`
 }
 
 type CreateProjectRequest struct {
@@ -203,7 +210,7 @@ type CreateProjectRequest struct {
 type CreateWorkspaceRequest struct {
 	Name           string  `json:"name"`
 	MachineID      *string `json:"machine_id,omitempty"`
-	BaseSnapshotID *string `json:"base_snapshot_id,omitempty"`
+	ForkSnapshotID *string `json:"fork_snapshot_id,omitempty"`
 	LocalPath      *string `json:"local_path,omitempty"`
 }
 
@@ -318,6 +325,42 @@ func (c *Client) GetProject(projectID string) (*Project, []Workspace, error) {
 	}
 
 	return &result.Project, result.Workspaces, nil
+}
+
+// GetWorkspace returns a workspace by ID
+func (c *Client) GetWorkspace(workspaceID string) (*Workspace, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/v1/workspaces/"+workspaceID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("not authenticated - run 'fst login' first")
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("workspace not found")
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to fetch workspace: %s", string(respBody))
+	}
+
+	var result struct {
+		Workspace Workspace `json:"workspace"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result.Workspace, nil
 }
 
 // CreateWorkspace creates a new workspace for a project
@@ -477,6 +520,258 @@ func (c *Client) CreateSnapshot(projectID, manifestHash string, parentSnapshotID
 	}
 
 	return &result.Snapshot, result.Created, nil
+}
+
+// GetSnapshot fetches snapshot metadata by ID
+func (c *Client) GetSnapshot(snapshotID string) (*Snapshot, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/v1/snapshots/"+snapshotID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("not authenticated - run 'fst login' first")
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("snapshot not found")
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get snapshot: %s", string(respBody))
+	}
+
+	var result struct {
+		Snapshot Snapshot `json:"snapshot"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result.Snapshot, nil
+}
+
+// BlobExists checks which blobs are missing
+func (c *Client) BlobExists(hashes []string) ([]string, error) {
+	body := map[string]interface{}{
+		"hashes": hashes,
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/v1/blobs/exists", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("not authenticated - run 'fst login' first")
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to check blobs: %s", string(respBody))
+	}
+
+	var result struct {
+		Missing []string `json:"missing"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.Missing, nil
+}
+
+// PresignUpload returns upload URLs for blobs
+func (c *Client) PresignUpload(hashes []string) (map[string]string, error) {
+	body := map[string]interface{}{
+		"hashes": hashes,
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/v1/blobs/presign-upload", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("not authenticated - run 'fst login' first")
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to presign upload: %s", string(respBody))
+	}
+
+	var result struct {
+		URLs map[string]string `json:"urls"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.URLs, nil
+}
+
+// PresignDownload returns download URLs for blobs
+func (c *Client) PresignDownload(hashes []string) (map[string]string, error) {
+	body := map[string]interface{}{
+		"hashes": hashes,
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/v1/blobs/presign-download", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("not authenticated - run 'fst login' first")
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to presign download: %s", string(respBody))
+	}
+
+	var result struct {
+		URLs map[string]string `json:"urls"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.URLs, nil
+}
+
+// UploadBlob uploads a blob to the given URL
+func (c *Client) UploadBlob(url string, data []byte) error {
+	req, err := http.NewRequest("PUT", c.baseURL+url, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to upload blob: %s", string(respBody))
+	}
+
+	return nil
+}
+
+// DownloadBlob downloads a blob from the given URL
+func (c *Client) DownloadBlob(url string) ([]byte, error) {
+	req, err := http.NewRequest("GET", c.baseURL+url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to download blob: %s", string(respBody))
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+// UploadManifest uploads a manifest JSON by hash
+func (c *Client) UploadManifest(hash string, manifestJSON []byte) error {
+	req, err := http.NewRequest("PUT", c.baseURL+"/v1/blobs/manifests/"+hash, bytes.NewReader(manifestJSON))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to upload manifest: %s", string(respBody))
+	}
+
+	return nil
+}
+
+// DownloadManifest downloads a manifest JSON by hash
+func (c *Client) DownloadManifest(hash string) ([]byte, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/v1/blobs/manifests/"+hash, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to download manifest: %s", string(respBody))
+	}
+
+	return io.ReadAll(resp.Body)
 }
 
 // DriftReport represents drift data from the cloud

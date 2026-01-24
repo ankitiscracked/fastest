@@ -10,8 +10,9 @@ A container for identity and history.
 
 ### Workspace
 A local working copy of a project.
-- Tracks a base snapshot
-- Can detect drift (changes from base)
+- Tracks a fork snapshot (origin point)
+- Tracks a current snapshot (latest saved state)
+- Can detect drift (changes from fork)
 - Two types:
   - **Main workspace** — owns the `.fst/` directory with blob cache
   - **Linked workspace** — lightweight copy, shares cache with main
@@ -34,7 +35,7 @@ An immutable project state:
 - Upload/download deduped by blob hashes
 
 ### Drift
-Changes from the base snapshot to current files:
+Changes from the fork snapshot to current files:
 - Files added, modified, deleted
 - Can generate LLM summary via coding agents
 
@@ -132,7 +133,7 @@ Workspaces are registered in `~/.config/fst/workspaces.json`:
       "project_id": "proj-xyz",
       "name": "main",
       "path": "/Users/me/myproject",
-      "base_snapshot_id": "snap-123"
+      "fork_snapshot_id": "snap-123"
     }
   ]
 }

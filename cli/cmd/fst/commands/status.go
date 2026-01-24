@@ -37,7 +37,7 @@ func newStatusCmd() *cobra.Command {
 
 Without flags, shows detailed status of the current workspace:
 - Workspace name and path
-- Base snapshot info
+- Fork snapshot info
 - Upstream workspace (if any)
 - Current drift (files changed since base)
 
@@ -76,7 +76,7 @@ func runStatus(jsonOutput bool) error {
 
 	// Get drift from base
 	var driftReport *drift.Report
-	if cfg.BaseSnapshotID != "" {
+	if cfg.ForkSnapshotID != "" {
 		driftReport, err = drift.ComputeFromCache(root)
 		if err != nil {
 			// Non-fatal, just won't show drift
@@ -87,11 +87,11 @@ func runStatus(jsonOutput bool) error {
 	// Get upstream info
 	upstreamID, upstreamName, _ := drift.GetUpstreamWorkspace(root)
 
-	// Get base snapshot time
+	// Get fork snapshot time
 	var baseTime string
-	if cfg.BaseSnapshotID != "" {
+	if cfg.ForkSnapshotID != "" {
 		snapshotsDir, _ := config.GetSnapshotsDir()
-		metaPath := filepath.Join(snapshotsDir, cfg.BaseSnapshotID+".meta.json")
+		metaPath := filepath.Join(snapshotsDir, cfg.ForkSnapshotID+".meta.json")
 		if info, err := os.Stat(metaPath); err == nil {
 			baseTime = formatTimeAgo(info.ModTime())
 		}
@@ -109,15 +109,15 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 	fmt.Printf("Path:      %s\n", root)
 	fmt.Println()
 
-	// Base snapshot
-	if cfg.BaseSnapshotID != "" {
-		fmt.Printf("Base:      %s", cfg.BaseSnapshotID)
+	// Fork snapshot
+	if cfg.ForkSnapshotID != "" {
+		fmt.Printf("Fork:      %s", cfg.ForkSnapshotID)
 		if baseTime != "" {
 			fmt.Printf(" (%s)", baseTime)
 		}
 		fmt.Println()
 	} else {
-		fmt.Println("Base:      (none)")
+		fmt.Println("Fork:      (none)")
 	}
 
 	// Upstream
@@ -131,7 +131,7 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 	if driftReport == nil {
 		fmt.Println("Drift:     (unable to compute)")
 	} else if !driftReport.HasChanges() {
-		fmt.Println("\033[32m✓ No changes from base snapshot\033[0m")
+		fmt.Println("\033[32m✓ No changes from fork snapshot\033[0m")
 	} else {
 		added := len(driftReport.FilesAdded)
 		modified := len(driftReport.FilesModified)
@@ -206,7 +206,7 @@ func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.
 	fmt.Printf("  \"workspace_name\": %q,\n", cfg.WorkspaceName)
 	fmt.Printf("  \"workspace_id\": %q,\n", cfg.WorkspaceID)
 	fmt.Printf("  \"path\": %q,\n", root)
-	fmt.Printf("  \"base_snapshot_id\": %q,\n", cfg.BaseSnapshotID)
+	fmt.Printf("  \"fork_snapshot_id\": %q,\n", cfg.ForkSnapshotID)
 	if upstreamName != "" {
 		fmt.Printf("  \"upstream\": %q,\n", upstreamName)
 	}

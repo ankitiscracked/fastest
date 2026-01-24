@@ -64,7 +64,7 @@ This spec covers **Sync with main**. Merge into main is a separate feature.
 - Main's current files (recommended) - catches uncommitted changes
 - Main's last snapshot - stable comparison point
 
-**No three-way merge needed.** We don't track base snapshots for drift purposes - that's only for history.
+**No three-way merge needed.** We don't track fork snapshots for drift purposes - that's only for history.
 
 ### Drift Categories
 

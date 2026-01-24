@@ -32,7 +32,7 @@ type RegisteredWorkspace struct {
 	ProjectID      string `json:"project_id"`
 	Name           string `json:"name"`
 	Path           string `json:"path"`
-	BaseSnapshotID string `json:"base_snapshot_id"`
+	ForkSnapshotID string `json:"fork_snapshot_id"`
 	CreatedAt      string `json:"created_at"`
 }
 
@@ -182,7 +182,7 @@ func newWorkspacesCmd() *cobra.Command {
 		Short:   "List workspaces for this project",
 		Long: `List all registered workspaces for the current project.
 
-Shows workspace name, path, base snapshot, and current drift status.
+Shows workspace name, path, fork snapshot, and current drift status.
 Use --all to show workspaces from all projects.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWorkspaces(showAll)
@@ -322,7 +322,7 @@ func newWorkspaceCmd() *cobra.Command {
 		Short: "Show current workspace status",
 		Long: `Show the status of the current workspace.
 
-Displays workspace name, ID, project, base snapshot, and mode.`,
+Displays workspace name, ID, project, fork snapshot, and mode.`,
 		RunE: runWorkspaceStatus,
 	}
 
@@ -370,7 +370,7 @@ func runSetMain(workspaceName string) error {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
-	client := api.NewClient(token)
+	client := newAPIClient(token, cfg)
 
 	var targetWorkspaceID string
 	var targetWorkspaceName string
@@ -428,10 +428,10 @@ func runWorkspaceStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Project:    %s\n", cfg.ProjectID)
 	fmt.Printf("  Directory:  %s\n", root)
 
-	if cfg.BaseSnapshotID != "" {
-		fmt.Printf("  Base:       %s\n", cfg.BaseSnapshotID)
+	if cfg.ForkSnapshotID != "" {
+		fmt.Printf("  Fork:       %s\n", cfg.ForkSnapshotID)
 	} else {
-		fmt.Printf("  Base:       (no base snapshot)\n")
+		fmt.Printf("  Fork:       (no fork snapshot)\n")
 	}
 
 	fmt.Printf("  Mode:       %s\n", cfg.Mode)

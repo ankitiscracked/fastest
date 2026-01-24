@@ -171,13 +171,13 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		mapping.RepoPath = root
 	}
 
-	// Check if we have a base snapshot
-	if cfg.BaseSnapshotID == "" {
+	// Check if we have a current snapshot
+	if cfg.CurrentSnapshotID == "" {
 		return fmt.Errorf("no snapshots to export - create one with 'fst snapshot'")
 	}
 
 	// Build snapshot chain (walk back through parents)
-	chain, err := buildSnapshotChain(configDir, cfg.BaseSnapshotID)
+	chain, err := buildSnapshotChain(configDir, cfg.CurrentSnapshotID)
 	if err != nil {
 		return fmt.Errorf("failed to build snapshot chain: %w", err)
 	}
@@ -341,7 +341,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		// Check for drift
 		currentManifest, err := manifest.Generate(root, false)
 		if err == nil {
-			baseManifestPath := filepath.Join(configDir, "cache", "manifests", cfg.BaseSnapshotID+".json")
+			baseManifestPath := filepath.Join(configDir, "cache", "manifests", cfg.ForkSnapshotID+".json")
 			if baseData, err := os.ReadFile(baseManifestPath); err == nil {
 				if baseManifest, err := manifest.FromJSON(baseData); err == nil {
 					added, modified, deleted := manifest.Diff(baseManifest, currentManifest)

@@ -84,7 +84,7 @@ export class ConversationFiles {
   }
 
   /**
-   * Initialize workspace from base snapshot if available
+   * Initialize workspace from fork snapshot if available
    */
   async initializeWorkspace(
     sandbox: SandboxRunner,
@@ -100,7 +100,7 @@ export class ConversationFiles {
 
     if (!wsResponse.ok) return;
 
-    const { workspace } = await wsResponse.json() as { workspace: { base_snapshot_id?: string; current_manifest_hash?: string } };
+    const { workspace } = await wsResponse.json() as { workspace: { current_snapshot_id?: string; current_manifest_hash?: string } };
 
     if (workspace.current_manifest_hash) {
       await this.restoreFiles(sandbox, apiUrl, apiToken, workspace.current_manifest_hash, workDir);
@@ -109,8 +109,8 @@ export class ConversationFiles {
       return;
     }
 
-    if (workspace.base_snapshot_id) {
-      const snapResponse = await fetch(`${apiUrl}/v1/snapshots/${workspace.base_snapshot_id}`, {
+    if (workspace.current_snapshot_id) {
+      const snapResponse = await fetch(`${apiUrl}/v1/snapshots/${workspace.current_snapshot_id}`, {
         headers: { Authorization: `Bearer ${apiToken}` },
       });
 

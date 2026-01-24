@@ -53,7 +53,8 @@ export async function runBackgroundJobs(env: Env): Promise<void> {
         workspace_id: workspaces.id,
         workspace_name: workspaces.name,
         project_id: workspaces.projectId,
-        base_snapshot_id: workspaces.baseSnapshotId,
+        fork_snapshot_id: workspaces.forkSnapshotId,
+        current_snapshot_id: workspaces.currentSnapshotId,
         current_manifest_hash: workspaces.currentManifestHash,
         conversation_id: conversations.id,
         conversation_updated_at: conversations.updatedAt,
@@ -63,7 +64,7 @@ export async function runBackgroundJobs(env: Env): Promise<void> {
       .from(workspaces)
       .innerJoin(projects, eq(workspaces.projectId, projects.id))
       .innerJoin(conversations, eq(conversations.workspaceId, workspaces.id))
-      .where(isNotNull(workspaces.baseSnapshotId))
+      .where(isNotNull(workspaces.currentSnapshotId))
       .orderBy(desc(conversations.updatedAt))
       .limit(MAX_WORKSPACES_PER_RUN * 2); // Get more to filter
 
@@ -119,7 +120,7 @@ async function processWorkspace(
     workspace_id: string;
     workspace_name: string;
     project_id: string;
-    base_snapshot_id: string | null;
+    fork_snapshot_id: string | null;
     current_manifest_hash: string | null;
     conversation_id: string;
     conversation_updated_at: string;
@@ -184,11 +185,11 @@ async function processWorkspace(
     createdAt: now,
   });
 
-  // Update workspace's base_snapshot_id
+  // Update workspace's current_snapshot_id
   await db
     .update(workspaces)
     .set({
-      baseSnapshotId: snapshotId,
+      currentSnapshotId: snapshotId,
       currentManifestHash: currentManifestHash,
     })
     .where(eq(workspaces.id, ws.workspace_id));

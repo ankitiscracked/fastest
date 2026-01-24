@@ -141,13 +141,14 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		fmt.Printf("Cached %d new blobs.\n", blobsCached)
 	}
 
+	// Serialize manifest once (used for local save and cloud upload)
+	manifestJSON, err := m.ToJSON()
+	if err != nil {
+		return fmt.Errorf("failed to save snapshot: %w", err)
+	}
+
 	// Save snapshot locally
 	if !alreadyExists {
-		manifestJSON, err := m.ToJSON()
-		if err != nil {
-			return fmt.Errorf("failed to save snapshot: %w", err)
-		}
-
 		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
 			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
@@ -155,6 +156,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 
 	// Save snapshot metadata
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
+	parentSnapshotID := cfg.CurrentSnapshotID
 	if !alreadyExists || message != "" || agentName != "" {
 		metadata := fmt.Sprintf(`{
   "id": "%s",
@@ -167,7 +169,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
   "created_at": "%s",
   "files": %d,
   "size": %d
-}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, cfg.BaseSnapshotID, escapeJSON(message),
+}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentSnapshotID, escapeJSON(message),
 			escapeJSON(agentName), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
 		if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
@@ -179,17 +181,25 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	token, _ := auth.GetToken()
 	cloudSynced := false
 	if token != "" {
-		client := api.NewClient(token)
-		_, created, err := client.CreateSnapshot(cfg.ProjectID, manifestHash, cfg.BaseSnapshotID, cfg.WorkspaceID)
-		if err == nil {
-			cloudSynced = true
-			if created {
-				fmt.Println("Synced to cloud.")
+		client := newAPIClient(token, cfg)
+		if err := uploadSnapshotToCloud(client, root, m, manifestHash, manifestJSON); err != nil {
+			fmt.Printf("Warning: Cloud upload failed: %v\n", err)
+		} else {
+			_, created, err := client.CreateSnapshot(cfg.ProjectID, manifestHash, parentSnapshotID, cfg.WorkspaceID)
+			if err == nil {
+				cloudSynced = true
+				if created {
+					fmt.Println("Synced to cloud.")
+				}
+			} else {
+				fmt.Printf("Warning: Cloud snapshot record failed: %v\n", err)
 			}
 		}
 	}
 
-	// Save config (no need to track last snapshot - it's derived from snapshots dir)
+	cfg.CurrentSnapshotID = snapshotID
+
+	// Save config
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("failed to update config: %w", err)
 	}
@@ -212,8 +222,8 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	if message != "" {
 		fmt.Printf("  Message:  %s\n", message)
 	}
-	if cfg.BaseSnapshotID != "" {
-		fmt.Printf("  Base:     %s\n", cfg.BaseSnapshotID)
+	if cfg.ForkSnapshotID != "" {
+		fmt.Printf("  Fork:     %s\n", cfg.ForkSnapshotID)
 	}
 	if !cloudSynced && token == "" {
 		fmt.Println("  (local only - not synced to cloud)")
@@ -305,7 +315,7 @@ func CreateAutoSnapshot(message string) (string, error) {
   "created_at": "%s",
   "files": %d,
   "size": %d
-}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, cfg.BaseSnapshotID, escapeJSON(message),
+}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, cfg.CurrentSnapshotID, escapeJSON(message),
 		time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
 	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
@@ -417,6 +427,66 @@ func generateSnapshotSummary(root string, cfg *config.ProjectConfig) (string, er
 	}
 
 	return summary, nil
+}
+
+func uploadSnapshotToCloud(client *api.Client, root string, m *manifest.Manifest, manifestHash string, manifestJSON []byte) error {
+	if len(m.Files) == 0 {
+		return client.UploadManifest(manifestHash, manifestJSON)
+	}
+
+	hashToPath := make(map[string]string)
+	hashes := make([]string, 0, len(m.Files))
+	for _, f := range m.Files {
+		if _, exists := hashToPath[f.Hash]; !exists {
+			hashToPath[f.Hash] = f.Path
+			hashes = append(hashes, f.Hash)
+		}
+	}
+
+	missing := []string{}
+	for i := 0; i < len(hashes); i += 100 {
+		end := i + 100
+		if end > len(hashes) {
+			end = len(hashes)
+		}
+		batchMissing, err := client.BlobExists(hashes[i:end])
+		if err != nil {
+			return err
+		}
+		missing = append(missing, batchMissing...)
+	}
+
+	if len(missing) > 0 {
+		for i := 0; i < len(missing); i += 100 {
+			end := i + 100
+			if end > len(missing) {
+				end = len(missing)
+			}
+			urls, err := client.PresignUpload(missing[i:end])
+			if err != nil {
+				return err
+			}
+			for _, hash := range missing[i:end] {
+				path, ok := hashToPath[hash]
+				if !ok {
+					continue
+				}
+				url, ok := urls[hash]
+				if !ok || url == "" {
+					return fmt.Errorf("missing upload URL for blob %s", hash)
+				}
+				content, err := os.ReadFile(filepath.Join(root, path))
+				if err != nil {
+					return fmt.Errorf("failed to read %s: %w", path, err)
+				}
+				if err := client.UploadBlob(url, content); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return client.UploadManifest(manifestHash, manifestJSON)
 }
 
 // escapeJSON escapes a string for JSON

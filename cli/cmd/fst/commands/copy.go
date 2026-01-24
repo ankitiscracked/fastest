@@ -31,7 +31,7 @@ func newCopyCmd() *cobra.Command {
 This will:
 1. Copy all project files to the target directory (respecting .fstignore)
 2. Create a full .fst/ directory with its own config and snapshots
-3. Set the new workspace's base_snapshot_id to the current workspace's last snapshot (fork point)
+3. Set the new workspace's fork_snapshot_id to the current workspace's last snapshot (fork point)
 4. Copy the fork-point snapshot to the new workspace
 
 The new workspace is fully independent and can be moved or deleted without
@@ -66,10 +66,10 @@ func runCopy(name, targetDir string) error {
 	}
 
 	// Determine the fork point snapshot
-	// Use the most recent snapshot if available, otherwise base_snapshot_id
+	// Use the most recent snapshot if available, otherwise fork_snapshot_id
 	forkSnapshotID, _ := config.GetLatestSnapshotIDAt(root)
 	if forkSnapshotID == "" {
-		forkSnapshotID = cfg.BaseSnapshotID
+		forkSnapshotID = cfg.ForkSnapshotID
 	}
 	if forkSnapshotID == "" {
 		return fmt.Errorf("current workspace has no snapshots - run 'fst snapshot' first to create a fork point")
@@ -200,7 +200,7 @@ func runCopy(name, targetDir string) error {
 	workspaceID := generateLocalID()
 
 	// Initialize the new workspace with its own .fst/ directory
-	// Set base_snapshot_id to the fork point (source's current/last snapshot)
+	// Set fork_snapshot_id to the fork point (source's current/last snapshot)
 	if err := config.InitAt(targetDir, cfg.ProjectID, workspaceID, name, forkSnapshotID); err != nil {
 		os.RemoveAll(targetDir)
 		return fmt.Errorf("failed to initialize workspace: %w", err)
@@ -239,7 +239,7 @@ func runCopy(name, targetDir string) error {
 		ProjectID:      cfg.ProjectID,
 		Name:           name,
 		Path:           targetDir,
-		BaseSnapshotID: forkSnapshotID,
+		ForkSnapshotID: forkSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)

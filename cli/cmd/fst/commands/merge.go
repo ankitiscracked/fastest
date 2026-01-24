@@ -214,7 +214,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 			// Try cloud as fallback
 			token, _ := auth.GetToken()
 			if token != "" {
-				client := api.NewClient(token)
+				client := newAPIClient(token, cfg)
 				_, cloudWorkspaces, err := client.GetProject(cfg.ProjectID)
 				if err == nil {
 					for _, ws := range cloudWorkspaces {
@@ -270,7 +270,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 			baseManifest, err = loadManifestByID(snapshotsDir, mergeBaseID)
 		}
 		if err != nil {
-			fmt.Printf("Warning: Could not load base snapshot %s: %v\n", mergeBaseID, err)
+			fmt.Printf("Warning: Could not load fork snapshot %s: %v\n", mergeBaseID, err)
 			fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
 			baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
 		} else {
@@ -906,8 +906,8 @@ func createConflictMarkers(currentRoot, sourceRoot string, action mergeAction) e
 }
 
 func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
-	if cfg.BaseSnapshotID == "" {
-		return nil, fmt.Errorf("no base snapshot")
+	if cfg.ForkSnapshotID == "" {
+		return nil, fmt.Errorf("no fork snapshot")
 	}
 
 	snapshotsDir, err := config.GetSnapshotsDir()
@@ -915,7 +915,7 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 		return nil, err
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, cfg.BaseSnapshotID+".json")
+	manifestPath := filepath.Join(snapshotsDir, cfg.ForkSnapshotID+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot not in local snapshots: %w", err)
@@ -950,7 +950,7 @@ func loadSnapshotMetaFromDir(snapshotsDir, snapshotID string) (*snapshotMeta, er
 	return &meta, nil
 }
 
-// getMergeBase determines the correct base snapshot for a three-way merge.
+// getMergeBase determines the correct fork snapshot for a three-way merge.
 // It checks in order:
 // 1. Merge history - if we've merged from this source before, use that snapshot
 // 2. Direct relationship - if one workspace was forked from the other
@@ -978,49 +978,49 @@ func getMergeBase(targetCfg, sourceCfg *config.ProjectConfig, targetRoot, source
 		return nil
 	}
 
-	// 2. Check direct relationships using BaseSnapshotID
-	// When B forks from A, B.BaseSnapshotID points to a snapshot created by A
+	// 2. Check direct relationships using ForkSnapshotID
+	// When B forks from A, B.ForkSnapshotID points to a snapshot created by A
 	// So we need to check both directories for the metadata
 
 	// Check if target was forked from source
-	if targetCfg.BaseSnapshotID != "" {
-		if targetBaseMeta := tryLoadMeta(targetCfg.BaseSnapshotID); targetBaseMeta != nil {
+	if targetCfg.ForkSnapshotID != "" {
+		if targetBaseMeta := tryLoadMeta(targetCfg.ForkSnapshotID); targetBaseMeta != nil {
 			if targetBaseMeta.WorkspaceID == sourceCfg.WorkspaceID {
 				// Target was forked from source, use target's base as common ancestor
-				return targetCfg.BaseSnapshotID, nil
+				return targetCfg.ForkSnapshotID, nil
 			}
 		}
 	}
 
 	// Check if source was forked from target
-	if sourceCfg.BaseSnapshotID != "" {
-		if sourceBaseMeta := tryLoadMeta(sourceCfg.BaseSnapshotID); sourceBaseMeta != nil {
+	if sourceCfg.ForkSnapshotID != "" {
+		if sourceBaseMeta := tryLoadMeta(sourceCfg.ForkSnapshotID); sourceBaseMeta != nil {
 			if sourceBaseMeta.WorkspaceID == targetCfg.WorkspaceID {
 				// Source was forked from target, use source's base as common ancestor
-				return sourceCfg.BaseSnapshotID, nil
+				return sourceCfg.ForkSnapshotID, nil
 			}
 		}
 	}
 
 	// 3. Check if both are siblings (forked from same parent)
-	if targetCfg.BaseSnapshotID != "" && sourceCfg.BaseSnapshotID != "" {
-		targetBaseMeta := tryLoadMeta(targetCfg.BaseSnapshotID)
-		sourceBaseMeta := tryLoadMeta(sourceCfg.BaseSnapshotID)
+	if targetCfg.ForkSnapshotID != "" && sourceCfg.ForkSnapshotID != "" {
+		targetBaseMeta := tryLoadMeta(targetCfg.ForkSnapshotID)
+		sourceBaseMeta := tryLoadMeta(sourceCfg.ForkSnapshotID)
 
 		if targetBaseMeta != nil && sourceBaseMeta != nil {
 			if targetBaseMeta.WorkspaceID == sourceBaseMeta.WorkspaceID {
 				// Both forked from same workspace, use the earlier snapshot as common ancestor
 				if targetBaseMeta.CreatedAt < sourceBaseMeta.CreatedAt {
-					return targetCfg.BaseSnapshotID, nil
+					return targetCfg.ForkSnapshotID, nil
 				}
-				return sourceCfg.BaseSnapshotID, nil
+				return sourceCfg.ForkSnapshotID, nil
 			}
 		}
 	}
 
-	// 4. Fall back to target's base snapshot (original behavior)
-	if targetCfg.BaseSnapshotID != "" {
-		return targetCfg.BaseSnapshotID, nil
+	// 4. Fall back to target's fork snapshot (original behavior)
+	if targetCfg.ForkSnapshotID != "" {
+		return targetCfg.ForkSnapshotID, nil
 	}
 
 	return "", fmt.Errorf("no common ancestor found between workspaces")
@@ -1126,9 +1126,9 @@ func runMergeAll(mode ConflictMode, dryRun bool, noSnapshot bool) error {
 
 	// Analyze each workspace for changes and overlaps
 	type workspaceAnalysis struct {
-		ws           RegisteredWorkspace
-		hasChanges   bool
-		changedFiles map[string]bool
+		ws            RegisteredWorkspace
+		hasChanges    bool
+		changedFiles  map[string]bool
 		conflictsWith []string // names of workspaces it conflicts with
 	}
 
@@ -1371,15 +1371,15 @@ func runMergePlan() error {
 
 	// Analyze each workspace
 	type workspaceInfo struct {
-		ws              RegisteredWorkspace
-		hasChanges      bool
-		addedFiles      []string
-		modifiedFiles   []string
-		deletedFiles    []string
-		totalFiles      int
-		conflictsWithMe int  // files that conflict with current workspace
-		conflictsWithOthers map[string]int  // workspace name -> conflict count
-		agent           string
+		ws                  RegisteredWorkspace
+		hasChanges          bool
+		addedFiles          []string
+		modifiedFiles       []string
+		deletedFiles        []string
+		totalFiles          int
+		conflictsWithMe     int            // files that conflict with current workspace
+		conflictsWithOthers map[string]int // workspace name -> conflict count
+		agent               string
 	}
 
 	workspaces := make([]workspaceInfo, len(otherWorkspaces))
@@ -1458,8 +1458,8 @@ func runMergePlan() error {
 	// Score workspaces for merge priority
 	// Lower score = should merge first
 	type scoredWorkspace struct {
-		info  workspaceInfo
-		score int
+		info    workspaceInfo
+		score   int
 		reasons []string
 	}
 
@@ -1626,13 +1626,13 @@ func getWorkspaceChangesForPath(root string) (*drift.Report, error) {
 		return nil, err
 	}
 
-	if wsCfg.BaseSnapshotID == "" {
+	if wsCfg.ForkSnapshotID == "" {
 		return &drift.Report{}, nil
 	}
 
 	// Load base manifest
 	snapshotsDir := config.GetSnapshotsDirAt(root)
-	manifestPath := filepath.Join(snapshotsDir, wsCfg.BaseSnapshotID+".json")
+	manifestPath := filepath.Join(snapshotsDir, wsCfg.ForkSnapshotID+".json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, err
@@ -1653,7 +1653,7 @@ func getWorkspaceChangesForPath(root string) (*drift.Report, error) {
 	added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
 
 	return &drift.Report{
-		BaseSnapshotID: wsCfg.BaseSnapshotID,
+		ForkSnapshotID: wsCfg.ForkSnapshotID,
 		FilesAdded:     added,
 		FilesModified:  modified,
 		FilesDeleted:   deleted,

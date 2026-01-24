@@ -190,13 +190,13 @@ func getWorkspaceChanges(ws RegisteredWorkspace) (*drift.Report, error) {
 		return nil, err
 	}
 
-	if wsCfg.BaseSnapshotID == "" {
+	if wsCfg.ForkSnapshotID == "" {
 		return &drift.Report{}, nil
 	}
 
 	// Load base manifest
 	snapshotsDir := config.GetSnapshotsDirAt(ws.Path)
-	manifestPath := filepath.Join(snapshotsDir, wsCfg.BaseSnapshotID+".json")
+	manifestPath := filepath.Join(snapshotsDir, wsCfg.ForkSnapshotID+".json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, err
@@ -217,7 +217,7 @@ func getWorkspaceChanges(ws RegisteredWorkspace) (*drift.Report, error) {
 	added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
 
 	return &drift.Report{
-		BaseSnapshotID: wsCfg.BaseSnapshotID,
+		ForkSnapshotID: wsCfg.ForkSnapshotID,
 		FilesAdded:     added,
 		FilesModified:  modified,
 		FilesDeleted:   deleted,

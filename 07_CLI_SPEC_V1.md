@@ -57,6 +57,10 @@ fst copy -n exp -t ~/tmp/exp # Creates ~/tmp/exp
 fst snapshot                 # Capture current state
   --message, -m <msg>        # Snapshot message
 
+fst pull                     # Pull latest snapshot from cloud
+  --snapshot <id>            # Pull a specific snapshot
+  --force                    # Overwrite local changes
+
 fst clone <project|snapshot> # Clone to new directory
   --to, -t <path>            # Target directory
 
@@ -70,7 +74,7 @@ fst rollback [snapshot-id]   # Restore files from snapshot
 ### Drift
 
 ```bash
-fst drift                    # Show changes from base snapshot
+fst drift                    # Show changes from fork snapshot
   --json                     # Output as JSON
   --summary                  # Generate LLM summary (requires agent)
   --sync                     # Sync drift report to cloud
@@ -106,6 +110,18 @@ fst merge <workspace>        # Merge from another workspace
   --theirs                   # Take source version for conflicts
   --ours                     # Keep target version for conflicts
   --files <list>             # Only merge specific files
+  --dry-run                  # Show plan without making changes
+```
+
+### Sync
+
+```bash
+fst sync                     # Sync local and remote for this workspace
+  --agent                    # Use AI for conflict resolution (default)
+  --manual                   # Write conflict markers
+  --theirs                   # Take remote version for conflicts
+  --ours                     # Keep local version for conflicts
+  --files <list>             # Only sync specific files
   --dry-run                  # Show plan without making changes
 ```
 
@@ -209,7 +225,7 @@ workspace_id: local-abc123
       "project_id": "proj-xyz",
       "name": "main",
       "path": "/path/to/project",
-      "base_snapshot_id": "snap-123",
+      "fork_snapshot_id": "snap-123",
       "created_at": "2024-01-15T10:00:00Z"
     }
   ]

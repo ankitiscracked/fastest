@@ -136,7 +136,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 
 	if hasAuth {
 		// Try to create in cloud
-		client := api.NewClient(token)
+		client := newAPIClient(token, nil)
 
 		fmt.Printf("Creating project \"%s\" in cloud...\n", projectName)
 		project, err := client.CreateProject(projectName)
@@ -245,9 +245,10 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 
 		fmt.Printf("Captured %d files.\n", m.FileCount())
 
-		// Update config with base snapshot ID (fork point)
+		// Update config with fork snapshot ID (fork point)
 		cfg, _ := config.LoadAt(cwd)
-		cfg.BaseSnapshotID = snapshotID
+		cfg.ForkSnapshotID = snapshotID
+		cfg.CurrentSnapshotID = snapshotID
 		cfg.Mode = modeString(cloudSynced)
 		if err := config.SaveAt(cwd, cfg); err != nil {
 			return fmt.Errorf("failed to update config: %w", err)
@@ -260,7 +261,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		ProjectID:      projectID,
 		Name:           workspaceName,
 		Path:           cwd,
-		BaseSnapshotID: snapshotID,
+		ForkSnapshotID: snapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)
@@ -320,7 +321,7 @@ func runProjects(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
-	client := api.NewClient(token)
+	client := newAPIClient(token, nil)
 	projects, err := client.ListProjects()
 	if err != nil {
 		return fmt.Errorf("failed to list projects: %w", err)
@@ -386,7 +387,7 @@ func runProject(cmd *cobra.Command, args []string) error {
 		projectID = cfg.ProjectID
 	}
 
-	client := api.NewClient(token)
+	client := newAPIClient(token, nil)
 	project, workspaces, err := client.GetProject(projectID)
 	if err != nil {
 		return fmt.Errorf("failed to get project: %w", err)

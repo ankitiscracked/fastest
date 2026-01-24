@@ -29,7 +29,7 @@ func newDiffCmd() *cobra.Command {
 		Long: `Show actual content differences between this workspace and another.
 
 Without a workspace argument, compares against the upstream workspace (the
-workspace that created this workspace's base snapshot).
+workspace that created this workspace's fork snapshot).
 
 With file arguments, only shows diffs for those specific files.
 

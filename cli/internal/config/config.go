@@ -148,13 +148,14 @@ type MergeRecord struct {
 // ProjectConfig represents the local project configuration stored in .fst/config.json
 // All workspaces are peers - there is no main/linked distinction
 type ProjectConfig struct {
-	ProjectID      string                 `json:"project_id"`
-	WorkspaceID    string                 `json:"workspace_id,omitempty"`
-	WorkspaceName  string                 `json:"workspace_name,omitempty"`
-	BaseSnapshotID string                 `json:"base_snapshot_id,omitempty"`
-	MergeHistory   map[string]MergeRecord `json:"merge_history,omitempty"`
-	APIURL         string                 `json:"api_url,omitempty"`
-	Mode           string                 `json:"mode,omitempty"` // "cloud" or "local"
+	ProjectID         string                 `json:"project_id"`
+	WorkspaceID       string                 `json:"workspace_id,omitempty"`
+	WorkspaceName     string                 `json:"workspace_name,omitempty"`
+	ForkSnapshotID    string                 `json:"fork_snapshot_id,omitempty"`
+	CurrentSnapshotID string                 `json:"current_snapshot_id,omitempty"`
+	MergeHistory      map[string]MergeRecord `json:"merge_history,omitempty"`
+	APIURL            string                 `json:"api_url,omitempty"`
+	Mode              string                 `json:"mode,omitempty"` // "cloud" or "local"
 }
 
 // FindProjectRoot walks up the directory tree to find .fst/ directory
@@ -207,12 +208,26 @@ func Load() (*ProjectConfig, error) {
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	var config ProjectConfig
+	var config struct {
+		ProjectConfig
+		BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
+	}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	return &config, nil
+	if config.ForkSnapshotID == "" && config.BaseSnapshotID != "" {
+		config.ForkSnapshotID = config.BaseSnapshotID
+	}
+	if config.CurrentSnapshotID == "" {
+		if root, err := FindProjectRoot(); err == nil {
+			if latest, err := GetLatestSnapshotIDAt(root); err == nil && latest != "" {
+				config.CurrentSnapshotID = latest
+			}
+		}
+	}
+
+	return &config.ProjectConfig, nil
 }
 
 // LoadAt reads the project configuration from a specific workspace root
@@ -223,12 +238,24 @@ func LoadAt(root string) (*ProjectConfig, error) {
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	var config ProjectConfig
+	var config struct {
+		ProjectConfig
+		BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
+	}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	return &config, nil
+	if config.ForkSnapshotID == "" && config.BaseSnapshotID != "" {
+		config.ForkSnapshotID = config.BaseSnapshotID
+	}
+	if config.CurrentSnapshotID == "" {
+		if latest, err := GetLatestSnapshotIDAt(root); err == nil && latest != "" {
+			config.CurrentSnapshotID = latest
+		}
+	}
+
+	return &config.ProjectConfig, nil
 }
 
 // Save writes the project configuration to .fst/config.json
@@ -291,7 +318,7 @@ func Init(projectID, workspaceID, workspaceName string) error {
 }
 
 // InitAt creates a new workspace at a specific path
-func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) error {
+func InitAt(root, projectID, workspaceID, workspaceName, forkSnapshotID string) error {
 	configDir := filepath.Join(root, ConfigDirName)
 
 	// Check if already initialized
@@ -310,11 +337,12 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 	}
 
 	config := &ProjectConfig{
-		ProjectID:      projectID,
-		WorkspaceID:    workspaceID,
-		WorkspaceName:  workspaceName,
-		BaseSnapshotID: baseSnapshotID,
-		Mode:           "local",
+		ProjectID:         projectID,
+		WorkspaceID:       workspaceID,
+		WorkspaceName:     workspaceName,
+		ForkSnapshotID:    forkSnapshotID,
+		CurrentSnapshotID: forkSnapshotID,
+		Mode:              "local",
 	}
 
 	data, err := json.MarshalIndent(config, "", "  ")

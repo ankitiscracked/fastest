@@ -39,7 +39,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	client := api.NewClient("")
+	client := newAPIClient("", nil)
 
 	// Start device flow
 	fmt.Println("Starting login...")
@@ -145,7 +145,7 @@ func newWhoamiCmd() *cobra.Command {
 				return nil
 			}
 
-			client := api.NewClient(token)
+			client := newAPIClient(token, nil)
 			user, err := client.GetMe()
 			if err != nil {
 				return fmt.Errorf("failed to get user info: %w", err)

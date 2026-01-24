@@ -83,7 +83,7 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 			return fmt.Errorf("not logged in - run 'fst login' first\nOr specify a workspace: fst drift <workspace>")
 		}
 
-		client := api.NewClient(token)
+		client := newAPIClient(token, cfg)
 		project, workspacesList, err := client.GetProject(cfg.ProjectID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch project: %w", err)
@@ -197,7 +197,7 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 			return fmt.Errorf("not logged in - run 'fst login' first")
 		}
 
-		client := api.NewClient(token)
+		client := newAPIClient(token, cfg)
 		err = client.ReportDrift(
 			cfg.WorkspaceID,
 			len(report.FilesAdded),
@@ -269,7 +269,7 @@ func loadWorkspaceManifest(root string, includeDirty bool) (*manifest.Manifest, 
 	return m, snapshotID, nil
 }
 
-// runDriftFromBase shows drift from base snapshot (when no upstream is available)
+// runDriftFromBase shows drift from fork snapshot (when no upstream is available)
 func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, generateSummary, syncToCloud bool) error {
 	report, err := drift.ComputeFromCache(root)
 	if err != nil {
@@ -321,7 +321,7 @@ func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, genera
 			return fmt.Errorf("not logged in - run 'fst login' first")
 		}
 
-		client := api.NewClient(token)
+		client := newAPIClient(token, cfg)
 		err = client.ReportDrift(
 			cfg.WorkspaceID,
 			len(report.FilesAdded),
@@ -351,11 +351,11 @@ func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, genera
 
 	// Human-readable output
 	if !report.HasChanges() {
-		fmt.Println("No changes from base snapshot.")
+		fmt.Println("No changes from fork snapshot.")
 		return nil
 	}
 
-	fmt.Printf("Drift from base snapshot (%s):\n", report.BaseSnapshotID)
+	fmt.Printf("Drift from fork snapshot (%s):\n", report.ForkSnapshotID)
 	fmt.Println()
 	printChanges(report)
 

@@ -23,7 +23,7 @@
 **Primitives:**
 - **Project** — identity container (lives in cloud)
 - **Snapshot** — immutable project state (content-addressed)
-- **Workspace** — local working copy tracking a base snapshot
+- **Workspace** — local working copy tracking a fork snapshot
 - **Drift** — changes from base to current local state
 - **Drift Summary** — LLM-generated description of changes
 
@@ -173,7 +173,8 @@ CREATE TABLE workspaces (
   project_id TEXT NOT NULL REFERENCES projects(id),
   name TEXT NOT NULL,                    -- e.g., "agent-a", "manual-fixes"
   machine_id TEXT,                       -- identifies the machine
-  base_snapshot_id TEXT REFERENCES snapshots(id),
+  fork_snapshot_id TEXT REFERENCES snapshots(id),
+  current_snapshot_id TEXT REFERENCES snapshots(id),
   local_path TEXT,                       -- where it lives on that machine
   last_seen_at TEXT,                     -- last heartbeat from daemon
   created_at TEXT DEFAULT (datetime('now'))
@@ -245,7 +246,7 @@ CREATE TABLE activity_events (
 ### Local State (`.fst/`)
 ```
 .fst/
-├── config.json         # { project_id, workspace_id, base_snapshot_id }
+├── config.json         # { project_id, workspace_id, fork_snapshot_id, current_snapshot_id }
 ├── workspace.json      # { name, machine_id, created_at }
 └── cache/
 ```
@@ -272,12 +273,12 @@ CREATE TABLE activity_events (
 ## Phase 5: Drift Detection
 
 ### Deliverables
-- Drift computation: compare current state to base snapshot manifest
+- Drift computation: compare current state to fork snapshot manifest
 - CLI: `fst drift` (shows added/modified/deleted files)
 - Drift report structure:
   ```json
   {
-    "base_snapshot_id": "01ABC",
+    "fork_snapshot_id": "01ABC",
     "files_added": ["src/new.ts"],
     "files_modified": ["src/index.ts"],
     "files_deleted": ["src/old.ts"],
@@ -382,7 +383,7 @@ Output the merged file content only.
 1. **Projects List** — all projects, last activity
 2. **Project Detail** — project info, all workspaces, snapshots
 3. **Workspaces View** — see all active workspaces with:
-   - Base snapshot
+   - Fork snapshot
    - Current drift (files added/modified/deleted)
    - Last summary
    - Last seen (heartbeat)

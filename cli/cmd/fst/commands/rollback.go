@@ -81,9 +81,9 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 	if targetSnapshotID == "" {
 		if toBase {
 			// Explicit --to-base: use fork point
-			targetSnapshotID = cfg.BaseSnapshotID
+			targetSnapshotID = cfg.ForkSnapshotID
 			if targetSnapshotID == "" {
-				return fmt.Errorf("no base snapshot set")
+				return fmt.Errorf("no fork snapshot set")
 			}
 		} else {
 			// Default: find most recent snapshot from snapshots directory
@@ -94,7 +94,7 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 			if latestID != "" {
 				targetSnapshotID = latestID
 			} else {
-				targetSnapshotID = cfg.BaseSnapshotID
+				targetSnapshotID = cfg.ForkSnapshotID
 			}
 		}
 	}

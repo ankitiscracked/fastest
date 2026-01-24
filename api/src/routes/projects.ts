@@ -139,7 +139,8 @@ projectRoutes.get('/:projectId', async (c) => {
       project_id: workspaces.projectId,
       name: workspaces.name,
       machine_id: workspaces.machineId,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       local_path: workspaces.localPath,
       last_seen_at: workspaces.lastSeenAt,
       created_at: workspaces.createdAt,
@@ -302,16 +303,16 @@ projectRoutes.post('/:projectId/workspaces', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Workspace name is required' } }, 422);
   }
 
-  // If base_snapshot_id provided, verify it belongs to this project
-  if (body.base_snapshot_id) {
+  // If fork_snapshot_id provided, verify it belongs to this project
+  if (body.fork_snapshot_id) {
     const snapshotResult = await db
       .select({ id: snapshots.id })
       .from(snapshots)
-      .where(and(eq(snapshots.id, body.base_snapshot_id), eq(snapshots.projectId, projectId)))
+      .where(and(eq(snapshots.id, body.fork_snapshot_id), eq(snapshots.projectId, projectId)))
       .limit(1);
 
     if (!snapshotResult[0]) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'base_snapshot_id does not belong to this project' } }, 422);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'fork_snapshot_id does not belong to this project' } }, 422);
     }
   }
 
@@ -323,7 +324,8 @@ projectRoutes.post('/:projectId/workspaces', async (c) => {
     projectId,
     name: body.name.trim(),
     machineId: body.machine_id || null,
-    baseSnapshotId: body.base_snapshot_id || null,
+    forkSnapshotId: body.fork_snapshot_id || null,
+    currentSnapshotId: body.fork_snapshot_id || null,
     localPath: body.local_path || null,
     createdAt: now,
   });
@@ -345,7 +347,8 @@ projectRoutes.post('/:projectId/workspaces', async (c) => {
     project_id: projectId,
     name: body.name.trim(),
     machine_id: body.machine_id || null,
-    base_snapshot_id: body.base_snapshot_id || null,
+    fork_snapshot_id: body.fork_snapshot_id || null,
+    current_snapshot_id: body.fork_snapshot_id || null,
     local_path: body.local_path || null,
     last_seen_at: null,
     created_at: now
@@ -383,10 +386,11 @@ projectRoutes.get('/:projectId/workspaces', async (c) => {
       project_id: workspaces.projectId,
       name: workspaces.name,
       machine_id: workspaces.machineId,
-      base_snapshot_id: workspaces.baseSnapshotId,
-      local_path: workspaces.localPath,
-      last_seen_at: workspaces.lastSeenAt,
-      created_at: workspaces.createdAt,
+    fork_snapshot_id: workspaces.forkSnapshotId,
+    current_snapshot_id: workspaces.currentSnapshotId,
+    local_path: workspaces.localPath,
+    last_seen_at: workspaces.lastSeenAt,
+    created_at: workspaces.createdAt,
     })
     .from(workspaces)
     .where(eq(workspaces.projectId, projectId))
@@ -513,7 +517,10 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
   if (body.workspace_id) {
     await db
       .update(workspaces)
-      .set({ currentManifestHash: body.content_hash })
+      .set({
+        currentManifestHash: body.content_hash,
+        currentSnapshotId: snapshotId,
+      })
       .where(eq(workspaces.id, body.workspace_id));
   }
 
@@ -876,11 +883,11 @@ projectRoutes.get('/:projectId/docs', async (c) => {
 
   // For each workspace, get docs from its snapshot
   for (const workspace of projectWorkspaces) {
-    if (!workspace.baseSnapshotId) continue;
+    if (!workspace.currentSnapshotId) continue;
 
     try {
       // Get the manifest for this workspace's snapshot
-      const manifestKey = `${user.id}/manifests/${workspace.baseSnapshotId}.json`;
+      const manifestKey = `${user.id}/manifests/${workspace.currentSnapshotId}.json`;
       const manifestObj = await c.env.BLOBS.get(manifestKey);
 
       if (!manifestObj) continue;
@@ -964,13 +971,13 @@ projectRoutes.get('/:projectId/docs/content', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
   }
 
-  if (!workspace.baseSnapshotId) {
+  if (!workspace.currentSnapshotId) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace has no snapshot' } }, 404);
   }
 
   try {
     // Get the manifest
-    const manifestKey = `${user.id}/manifests/${workspace.baseSnapshotId}.json`;
+    const manifestKey = `${user.id}/manifests/${workspace.currentSnapshotId}.json`;
     const manifestObj = await c.env.BLOBS.get(manifestKey);
 
     if (!manifestObj) {

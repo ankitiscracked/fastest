@@ -10,9 +10,9 @@ import (
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
-// Report represents the drift from a base snapshot
+// Report represents the drift from a fork snapshot
 type Report struct {
-	BaseSnapshotID string   `json:"base_snapshot_id,omitempty"`
+	ForkSnapshotID string   `json:"fork_snapshot_id,omitempty"`
 	FilesAdded     []string `json:"files_added"`
 	FilesModified  []string `json:"files_modified"`
 	FilesDeleted   []string `json:"files_deleted"`
@@ -67,7 +67,7 @@ func LoadSnapshotMeta(root, snapshotID string) (*SnapshotMeta, error) {
 	return &meta, nil
 }
 
-// GetUpstreamWorkspace finds the workspace that created the base snapshot
+// GetUpstreamWorkspace finds the workspace that created the fork snapshot
 // Returns the workspace path and name, or empty strings if not found
 func GetUpstreamWorkspace(root string) (path string, name string, err error) {
 	cfg, err := config.LoadAt(root)
@@ -75,19 +75,19 @@ func GetUpstreamWorkspace(root string) (path string, name string, err error) {
 		return "", "", err
 	}
 
-	if cfg.BaseSnapshotID == "" {
-		return "", "", fmt.Errorf("no base snapshot set")
+	if cfg.ForkSnapshotID == "" {
+		return "", "", fmt.Errorf("no fork snapshot set")
 	}
 
-	// Load the base snapshot metadata to find its source workspace
-	meta, err := LoadSnapshotMeta(root, cfg.BaseSnapshotID)
+	// Load the fork snapshot metadata to find its source workspace
+	meta, err := LoadSnapshotMeta(root, cfg.ForkSnapshotID)
 	if err != nil {
 		return "", "", err
 	}
 
 	// If the snapshot was created by this workspace, there's no upstream
 	if meta.WorkspaceID == cfg.WorkspaceID {
-		return "", "", fmt.Errorf("base snapshot was created by this workspace")
+		return "", "", fmt.Errorf("fork snapshot was created by this workspace")
 	}
 
 	// The snapshot metadata tells us which workspace created it
@@ -118,16 +118,16 @@ func Compute(root string, baseManifest *manifest.Manifest) (*Report, error) {
 }
 
 // ComputeFromCache computes drift using the cached base manifest
-// Compares current working directory against the workspace's base_snapshot_id
+// Compares current working directory against the workspace's fork_snapshot_id
 func ComputeFromCache(root string) (*Report, error) {
-	// Load config to get base snapshot ID
+	// Load config to get fork snapshot ID
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("not in a project directory: %w", err)
 	}
 
-	if cfg.BaseSnapshotID == "" {
-		// No base snapshot, everything is new
+	if cfg.ForkSnapshotID == "" {
+		// No fork snapshot, everything is new
 		current, err := manifest.Generate(root, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate manifest: %w", err)
@@ -154,7 +154,7 @@ func ComputeFromCache(root string) (*Report, error) {
 		return nil, err
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, cfg.BaseSnapshotID+".json")
+	manifestPath := filepath.Join(snapshotsDir, cfg.ForkSnapshotID+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("base manifest not found in snapshots: %w", err)
@@ -170,7 +170,7 @@ func ComputeFromCache(root string) (*Report, error) {
 		return nil, err
 	}
 
-	report.BaseSnapshotID = cfg.BaseSnapshotID
+	report.ForkSnapshotID = cfg.ForkSnapshotID
 	return report, nil
 }
 
@@ -201,7 +201,7 @@ func ComputeAgainstWorkspace(root, otherRoot string, includeDirty bool) (*Report
 		// Use other's most recent snapshot, fall back to base
 		snapshotID, _ := config.GetLatestSnapshotIDAt(otherRoot)
 		if snapshotID == "" {
-			snapshotID = otherCfg.BaseSnapshotID
+			snapshotID = otherCfg.ForkSnapshotID
 		}
 
 		if snapshotID == "" {
@@ -235,7 +235,7 @@ func ComputeAgainstWorkspace(root, otherRoot string, includeDirty bool) (*Report
 	bytesChanged := calculateBytesChanged(otherManifest, currentManifest, added, modified, deleted)
 
 	return &Report{
-		BaseSnapshotID: referenceID,
+		ForkSnapshotID: referenceID,
 		FilesAdded:     added,
 		FilesModified:  modified,
 		FilesDeleted:   deleted,
@@ -257,14 +257,14 @@ func ComputeDivergence(ourRoot, theirRoot string, includeDirty bool) (*Divergenc
 	}
 
 	// Find common ancestor
-	// For now, use our base_snapshot_id as the common ancestor
-	// This works when "their" workspace is upstream (created our base snapshot)
+	// For now, use our fork_snapshot_id as the common ancestor
+	// This works when "their" workspace is upstream (created our fork snapshot)
 	// or when both forked from the same point
-	commonAncestorID := ourCfg.BaseSnapshotID
+	commonAncestorID := ourCfg.ForkSnapshotID
 	hasCommonAncestor := commonAncestorID != ""
 
 	// If their base is the same as ours, we definitely share an ancestor
-	if theirCfg.BaseSnapshotID == ourCfg.BaseSnapshotID && commonAncestorID != "" {
+	if theirCfg.ForkSnapshotID == ourCfg.ForkSnapshotID && commonAncestorID != "" {
 		hasCommonAncestor = true
 	}
 
@@ -292,7 +292,7 @@ func ComputeDivergence(ourRoot, theirRoot string, includeDirty bool) (*Divergenc
 			if err != nil {
 				return nil, fmt.Errorf("failed to compute our changes: %w", err)
 			}
-			ourReport.BaseSnapshotID = commonAncestorID
+			ourReport.ForkSnapshotID = commonAncestorID
 			report.OurChanges = ourReport
 
 			// Compute their changes from ancestor
@@ -305,7 +305,7 @@ func ComputeDivergence(ourRoot, theirRoot string, includeDirty bool) (*Divergenc
 			} else {
 				theirSnapshotID, _ := config.GetLatestSnapshotIDAt(theirRoot)
 				if theirSnapshotID == "" {
-					theirSnapshotID = theirCfg.BaseSnapshotID
+					theirSnapshotID = theirCfg.ForkSnapshotID
 				}
 				if theirSnapshotID != "" {
 					theirManifest, err = LoadManifestFromSnapshots(theirRoot, theirSnapshotID)
@@ -327,7 +327,7 @@ func ComputeDivergence(ourRoot, theirRoot string, includeDirty bool) (*Divergenc
 			theirAdded, theirModified, theirDeleted := manifest.Diff(ancestorManifest, theirManifest)
 			theirBytesChanged := calculateBytesChanged(ancestorManifest, theirManifest, theirAdded, theirModified, theirDeleted)
 			report.TheirChanges = &Report{
-				BaseSnapshotID: commonAncestorID,
+				ForkSnapshotID: commonAncestorID,
 				FilesAdded:     theirAdded,
 				FilesModified:  theirModified,
 				FilesDeleted:   theirDeleted,

@@ -88,13 +88,13 @@ func runLog(limit int, showAll bool) error {
 		})
 	} else {
 		// Walk the chain from current base
-		toShow = walkSnapshotChain(snapshots, cfg.BaseSnapshotID)
+		toShow = walkSnapshotChain(snapshots, cfg.CurrentSnapshotID)
 	}
 
 	if len(toShow) == 0 {
 		fmt.Println("No snapshots in current chain.")
 		fmt.Println()
-		fmt.Printf("Current base: %s\n", cfg.BaseSnapshotID)
+		fmt.Printf("Current snapshot: %s\n", cfg.CurrentSnapshotID)
 		fmt.Println("Use --all to see all snapshots.")
 		return nil
 	}
@@ -114,7 +114,7 @@ func runLog(limit int, showAll bool) error {
 
 	// Display snapshots
 	for i, snap := range toShow {
-		displaySnapshot(snap, i == 0 && snap.ID == cfg.BaseSnapshotID)
+		displaySnapshot(snap, i == 0 && snap.ID == cfg.CurrentSnapshotID)
 	}
 
 	// Show if there are more

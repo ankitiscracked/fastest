@@ -47,7 +47,8 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
       project_id: workspaces.projectId,
       name: workspaces.name,
       machine_id: workspaces.machineId,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       local_path: workspaces.localPath,
       last_seen_at: workspaces.lastSeenAt,
@@ -71,7 +72,8 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
     project_id: row.project_id,
     name: row.name,
     machine_id: row.machine_id,
-    base_snapshot_id: row.base_snapshot_id,
+    fork_snapshot_id: row.fork_snapshot_id,
+    current_snapshot_id: row.current_snapshot_id,
     current_manifest_hash: row.current_manifest_hash,
     local_path: row.local_path,
     last_seen_at: row.last_seen_at,
@@ -423,7 +425,8 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
       id: workspaces.id,
       project_id: workspaces.projectId,
       name: workspaces.name,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       main_workspace_id: projects.mainWorkspaceId,
       owner_user_id: projects.ownerUserId,
@@ -465,7 +468,8 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
     .select({
       id: workspaces.id,
       name: workspaces.name,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       project_id: workspaces.projectId,
     })
@@ -659,7 +663,8 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
       id: workspaces.id,
       project_id: workspaces.projectId,
       name: workspaces.name,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       main_workspace_id: projects.mainWorkspaceId,
       owner_user_id: projects.ownerUserId,
@@ -696,7 +701,8 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
     .select({
       id: workspaces.id,
       name: workspaces.name,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
     })
     .from(workspaces)
@@ -909,7 +915,8 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
       id: workspaces.id,
       project_id: workspaces.projectId,
       name: workspaces.name,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       main_workspace_id: projects.mainWorkspaceId,
       owner_user_id: projects.ownerUserId,
     })
@@ -939,7 +946,8 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
     .select({
       id: workspaces.id,
       name: workspaces.name,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
     })
     .from(workspaces)
     .where(eq(workspaces.id, workspace.main_workspace_id))
@@ -952,8 +960,8 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
   }
 
   // Get snapshot manifest hashes
-  const workspaceSnapshotId = workspace.base_snapshot_id;
-  const mainSnapshotId = mainWorkspace.base_snapshot_id;
+  const workspaceSnapshotId = workspace.current_snapshot_id;
+  const mainSnapshotId = mainWorkspace.current_snapshot_id;
 
   if (!workspaceSnapshotId || !mainSnapshotId) {
     return c.json({ error: { code: 'NO_SNAPSHOT', message: 'One or both workspaces have no snapshot' } }, 400);
@@ -1279,7 +1287,8 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     .select({
       id: workspaces.id,
       project_id: workspaces.projectId,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       version: workspaces.version,
     })
     .from(workspaces)
@@ -1296,7 +1305,7 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
   const initialVersion = workspace.version ?? 1;
 
   // Get current workspace manifest
-  const currentSnapshotId = workspace.base_snapshot_id;
+  const currentSnapshotId = workspace.current_snapshot_id;
   if (!currentSnapshotId) {
     return c.json({ error: { code: 'NO_SNAPSHOT', message: 'Workspace has no snapshot' } }, 400);
   }
@@ -1548,7 +1557,7 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
   const updateResult = await db
     .update(workspaces)
     .set({
-      baseSnapshotId: newSnapshotId,
+      currentSnapshotId: newSnapshotId,
       lastSeenAt: new Date().toISOString(),
       version: initialVersion + 1,
     })
@@ -1562,12 +1571,12 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
   // Check if optimistic lock succeeded (rowsAffected > 0)
   // D1 doesn't expose rowsAffected directly, so we verify by re-reading
   const verifyResult = await db
-    .select({ version: workspaces.version, base_snapshot_id: workspaces.baseSnapshotId })
+    .select({ version: workspaces.version, current_snapshot_id: workspaces.currentSnapshotId })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
 
-  if (!verifyResult[0] || verifyResult[0].version !== initialVersion + 1 || verifyResult[0].base_snapshot_id !== newSnapshotId) {
+  if (!verifyResult[0] || verifyResult[0].version !== initialVersion + 1 || verifyResult[0].current_snapshot_id !== newSnapshotId) {
     // Optimistic lock failed - concurrent modification detected
     console.error('Optimistic lock failed: workspace was modified concurrently');
 
@@ -1690,7 +1699,8 @@ workspaceRoutes.post('/:workspaceId/sync/undo', async (c) => {
     .select({
       id: workspaces.id,
       project_id: workspaces.projectId,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
     })
     .from(workspaces)
     .innerJoin(projects, eq(workspaces.projectId, projects.id))
@@ -1726,7 +1736,7 @@ workspaceRoutes.post('/:workspaceId/sync/undo', async (c) => {
   await db
     .update(workspaces)
     .set({
-      baseSnapshotId: body.snapshot_id,
+      currentSnapshotId: body.snapshot_id,
       lastSeenAt: new Date().toISOString(),
     })
     .where(eq(workspaces.id, workspaceId));
@@ -1887,23 +1897,24 @@ function computeThreeWayMerge(
  * This mirrors the CLI's getMergeBase function with its 4-step fallback:
  *
  * 1. Check merge history - if we've merged from this source before
- * 2. Check if target was forked from source (via base_snapshot_id metadata)
+ * 2. Check if target was forked from source (via fork_snapshot_id metadata)
  * 3. Check if source was forked from target
  * 4. Check if both are siblings (forked from same parent)
- * 5. Fallback to target's base_snapshot_id
+ * 5. Fallback to target's fork_snapshot_id
  *
- * @returns The merge base snapshot ID, or null if none found
+ * @returns The merge fork snapshot ID, or null if none found
  */
 async function getMergeBase(
   db: ReturnType<typeof createDb>,
   targetWorkspaceId: string,
   sourceWorkspaceId: string
 ): Promise<string | null> {
-  // Get both workspaces with their merge history and base snapshot IDs
+  // Get both workspaces with their merge history and fork snapshot IDs
   const [targetResult, sourceResult] = await Promise.all([
     db.select({
       id: workspaces.id,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       merge_history: workspaces.mergeHistory,
     })
       .from(workspaces)
@@ -1911,7 +1922,8 @@ async function getMergeBase(
       .limit(1),
     db.select({
       id: workspaces.id,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
       merge_history: workspaces.mergeHistory,
     })
       .from(workspaces)
@@ -1947,28 +1959,28 @@ async function getMergeBase(
   }
 
   // 2. Check if target was forked from source
-  if (target.base_snapshot_id) {
-    const targetBaseWorkspaceId = await getSnapshotWorkspaceId(target.base_snapshot_id);
+  if (target.fork_snapshot_id) {
+    const targetBaseWorkspaceId = await getSnapshotWorkspaceId(target.fork_snapshot_id);
     if (targetBaseWorkspaceId === sourceWorkspaceId) {
       // Target was forked from source, use target's base as common ancestor
-      return target.base_snapshot_id;
+      return target.fork_snapshot_id;
     }
   }
 
   // 3. Check if source was forked from target
-  if (source.base_snapshot_id) {
-    const sourceBaseWorkspaceId = await getSnapshotWorkspaceId(source.base_snapshot_id);
+  if (source.fork_snapshot_id) {
+    const sourceBaseWorkspaceId = await getSnapshotWorkspaceId(source.fork_snapshot_id);
     if (sourceBaseWorkspaceId === targetWorkspaceId) {
       // Source was forked from target, use source's base as common ancestor
-      return source.base_snapshot_id;
+      return source.fork_snapshot_id;
     }
   }
 
   // 4. Check if both are siblings (forked from same parent workspace)
-  if (target.base_snapshot_id && source.base_snapshot_id) {
+  if (target.fork_snapshot_id && source.fork_snapshot_id) {
     const [targetBaseWsId, sourceBaseWsId] = await Promise.all([
-      getSnapshotWorkspaceId(target.base_snapshot_id),
-      getSnapshotWorkspaceId(source.base_snapshot_id),
+      getSnapshotWorkspaceId(target.fork_snapshot_id),
+      getSnapshotWorkspaceId(source.fork_snapshot_id),
     ]);
 
     if (targetBaseWsId && sourceBaseWsId && targetBaseWsId === sourceBaseWsId) {
@@ -1977,26 +1989,26 @@ async function getMergeBase(
       const [targetSnapshotResult, sourceSnapshotResult] = await Promise.all([
         db.select({ created_at: snapshots.createdAt })
           .from(snapshots)
-          .where(eq(snapshots.id, target.base_snapshot_id!))
+          .where(eq(snapshots.id, target.fork_snapshot_id!))
           .limit(1),
         db.select({ created_at: snapshots.createdAt })
           .from(snapshots)
-          .where(eq(snapshots.id, source.base_snapshot_id!))
+          .where(eq(snapshots.id, source.fork_snapshot_id!))
           .limit(1),
       ]);
 
       if (targetSnapshotResult[0] && sourceSnapshotResult[0]) {
         if (targetSnapshotResult[0].created_at < sourceSnapshotResult[0].created_at) {
-          return target.base_snapshot_id;
+          return target.fork_snapshot_id;
         }
-        return source.base_snapshot_id;
+        return source.fork_snapshot_id;
       }
     }
   }
 
-  // 5. Fallback to target's base_snapshot_id
-  if (target.base_snapshot_id) {
-    return target.base_snapshot_id;
+  // 5. Fallback to target's fork_snapshot_id
+  if (target.fork_snapshot_id) {
+    return target.fork_snapshot_id;
   }
 
   return null;
@@ -2434,7 +2446,8 @@ workspaceRoutes.get('/:workspaceId/snapshots', async (c) => {
     .select({
       id: workspaces.id,
       project_id: workspaces.projectId,
-      base_snapshot_id: workspaces.baseSnapshotId,
+      fork_snapshot_id: workspaces.forkSnapshotId,
+      current_snapshot_id: workspaces.currentSnapshotId,
     })
     .from(workspaces)
     .innerJoin(projects, eq(workspaces.projectId, projects.id))
@@ -2466,12 +2479,12 @@ workspaceRoutes.get('/:workspaceId/snapshots', async (c) => {
   // Mark which snapshot is current for this workspace
   const snapshotsWithStatus = snapshotResults.map(s => ({
     ...s,
-    is_current: s.id === workspace.base_snapshot_id,
+    is_current: s.id === workspace.current_snapshot_id,
   }));
 
   return c.json({
     snapshots: snapshotsWithStatus,
-    current_snapshot_id: workspace.base_snapshot_id,
+    current_snapshot_id: workspace.current_snapshot_id,
   });
 });
 
