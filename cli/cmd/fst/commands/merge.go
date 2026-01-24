@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -242,16 +243,39 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		return fmt.Errorf("source workspace path does not exist: %s", sourceRoot)
 	}
 
+	// Load source workspace config
+	sourceCfg, err := config.LoadAt(sourceRoot)
+	if err != nil {
+		return fmt.Errorf("failed to load source workspace config: %w", err)
+	}
+
 	fmt.Printf("Merging from: %s (%s)\n", sourceDisplayName, sourceRoot)
 	fmt.Printf("Into:         %s (%s)\n", cfg.WorkspaceName, currentRoot)
 	fmt.Println()
 
-	// Load base snapshot (common ancestor)
-	baseManifest, err := loadBaseManifest(cfg)
+	// Determine merge base (common ancestor) using merge history and relationships
+	mergeBaseID, err := getMergeBase(cfg, sourceCfg, currentRoot, sourceRoot)
+	var baseManifest *manifest.Manifest
 	if err != nil {
-		fmt.Printf("Warning: Could not load base snapshot: %v\n", err)
+		fmt.Printf("Warning: Could not determine merge base: %v\n", err)
 		fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
 		baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
+	} else {
+		// Try to load from current workspace's snapshots first, then source's
+		snapshotsDir := config.GetSnapshotsDirAt(currentRoot)
+		baseManifest, err = loadManifestByID(snapshotsDir, mergeBaseID)
+		if err != nil {
+			// Try source workspace's snapshots
+			snapshotsDir = config.GetSnapshotsDirAt(sourceRoot)
+			baseManifest, err = loadManifestByID(snapshotsDir, mergeBaseID)
+		}
+		if err != nil {
+			fmt.Printf("Warning: Could not load base snapshot %s: %v\n", mergeBaseID, err)
+			fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
+			baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
+		} else {
+			fmt.Printf("Using merge base: %s\n", mergeBaseID)
+		}
 	}
 
 	// Generate manifests for local and remote
@@ -485,7 +509,50 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		fmt.Printf("Run 'fst snapshot -m \"Merged %s\"' to save.\n", sourceDisplayName)
 	}
 
+	// Update merge history to track this merge for future three-way merges
+	if err := updateMergeHistory(cfg, sourceCfg, sourceRoot); err != nil {
+		fmt.Printf("Warning: Could not update merge history: %v\n", err)
+	}
+
 	return nil
+}
+
+// updateMergeHistory records the merge in the target's config for future merges.
+// It also inherits the source's merge history for transitive tracking.
+func updateMergeHistory(targetCfg, sourceCfg *config.ProjectConfig, sourceRoot string) error {
+	// Get source's latest snapshot ID
+	sourceLatestID, err := config.GetLatestSnapshotIDAt(sourceRoot)
+	if err != nil || sourceLatestID == "" {
+		return fmt.Errorf("could not determine source's latest snapshot")
+	}
+
+	// Initialize merge history if needed
+	if targetCfg.MergeHistory == nil {
+		targetCfg.MergeHistory = make(map[string]config.MergeRecord)
+	}
+
+	// Record direct merge from source
+	targetCfg.MergeHistory[sourceCfg.WorkspaceID] = config.MergeRecord{
+		LastMergedSnapshot: sourceLatestID,
+		MergedAt:           time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Inherit source's merge history (transitive tracking)
+	// This allows us to know about workspaces that were merged into source
+	if sourceCfg.MergeHistory != nil {
+		for wsID, record := range sourceCfg.MergeHistory {
+			// Only inherit if we don't already have a more recent record
+			if existing, ok := targetCfg.MergeHistory[wsID]; !ok {
+				targetCfg.MergeHistory[wsID] = record
+			} else if record.MergedAt > existing.MergedAt {
+				// Source has a more recent merge from this workspace
+				targetCfg.MergeHistory[wsID] = record
+			}
+		}
+	}
+
+	// Save updated config
+	return config.Save(targetCfg)
 }
 
 // MergeAction represents a single file merge action
@@ -852,6 +919,123 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot not in local snapshots: %w", err)
+	}
+
+	return manifest.FromJSON(data)
+}
+
+// snapshotMeta represents snapshot metadata for merge base computation
+type snapshotMeta struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// loadSnapshotMetaFromDir loads snapshot metadata from a specific snapshots directory
+func loadSnapshotMetaFromDir(snapshotsDir, snapshotID string) (*snapshotMeta, error) {
+	if snapshotID == "" {
+		return nil, fmt.Errorf("empty snapshot ID")
+	}
+
+	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot metadata not found: %w", err)
+	}
+
+	var meta snapshotMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("failed to parse snapshot metadata: %w", err)
+	}
+	return &meta, nil
+}
+
+// getMergeBase determines the correct base snapshot for a three-way merge.
+// It checks in order:
+// 1. Merge history - if we've merged from this source before, use that snapshot
+// 2. Direct relationship - if one workspace was forked from the other
+// 3. Sibling relationship - if both were forked from the same parent
+func getMergeBase(targetCfg, sourceCfg *config.ProjectConfig, targetRoot, sourceRoot string) (string, error) {
+	// 1. Check if we've merged from this source before
+	if targetCfg.MergeHistory != nil {
+		if record, ok := targetCfg.MergeHistory[sourceCfg.WorkspaceID]; ok {
+			return record.LastMergedSnapshot, nil
+		}
+	}
+
+	// Helper to try loading metadata from multiple directories
+	targetSnapshotsDir := config.GetSnapshotsDirAt(targetRoot)
+	sourceSnapshotsDir := config.GetSnapshotsDirAt(sourceRoot)
+
+	tryLoadMeta := func(snapshotID string) *snapshotMeta {
+		// Try target's directory first, then source's
+		if meta, err := loadSnapshotMetaFromDir(targetSnapshotsDir, snapshotID); err == nil {
+			return meta
+		}
+		if meta, err := loadSnapshotMetaFromDir(sourceSnapshotsDir, snapshotID); err == nil {
+			return meta
+		}
+		return nil
+	}
+
+	// 2. Check direct relationships using BaseSnapshotID
+	// When B forks from A, B.BaseSnapshotID points to a snapshot created by A
+	// So we need to check both directories for the metadata
+
+	// Check if target was forked from source
+	if targetCfg.BaseSnapshotID != "" {
+		if targetBaseMeta := tryLoadMeta(targetCfg.BaseSnapshotID); targetBaseMeta != nil {
+			if targetBaseMeta.WorkspaceID == sourceCfg.WorkspaceID {
+				// Target was forked from source, use target's base as common ancestor
+				return targetCfg.BaseSnapshotID, nil
+			}
+		}
+	}
+
+	// Check if source was forked from target
+	if sourceCfg.BaseSnapshotID != "" {
+		if sourceBaseMeta := tryLoadMeta(sourceCfg.BaseSnapshotID); sourceBaseMeta != nil {
+			if sourceBaseMeta.WorkspaceID == targetCfg.WorkspaceID {
+				// Source was forked from target, use source's base as common ancestor
+				return sourceCfg.BaseSnapshotID, nil
+			}
+		}
+	}
+
+	// 3. Check if both are siblings (forked from same parent)
+	if targetCfg.BaseSnapshotID != "" && sourceCfg.BaseSnapshotID != "" {
+		targetBaseMeta := tryLoadMeta(targetCfg.BaseSnapshotID)
+		sourceBaseMeta := tryLoadMeta(sourceCfg.BaseSnapshotID)
+
+		if targetBaseMeta != nil && sourceBaseMeta != nil {
+			if targetBaseMeta.WorkspaceID == sourceBaseMeta.WorkspaceID {
+				// Both forked from same workspace, use the earlier snapshot as common ancestor
+				if targetBaseMeta.CreatedAt < sourceBaseMeta.CreatedAt {
+					return targetCfg.BaseSnapshotID, nil
+				}
+				return sourceCfg.BaseSnapshotID, nil
+			}
+		}
+	}
+
+	// 4. Fall back to target's base snapshot (original behavior)
+	if targetCfg.BaseSnapshotID != "" {
+		return targetCfg.BaseSnapshotID, nil
+	}
+
+	return "", fmt.Errorf("no common ancestor found between workspaces")
+}
+
+// loadManifestByID loads a manifest from the snapshots directory by ID
+func loadManifestByID(snapshotsDir, snapshotID string) (*manifest.Manifest, error) {
+	if snapshotID == "" {
+		return nil, fmt.Errorf("empty snapshot ID")
+	}
+
+	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot manifest not found: %w", err)
 	}
 
 	return manifest.FromJSON(data)

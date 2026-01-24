@@ -139,15 +139,22 @@ func GetLatestSnapshotIDAt(root string) (string, error) {
 	return latestID, nil
 }
 
+// MergeRecord tracks when a workspace was last merged from another workspace
+type MergeRecord struct {
+	LastMergedSnapshot string `json:"last_merged_snapshot"`
+	MergedAt           string `json:"merged_at"`
+}
+
 // ProjectConfig represents the local project configuration stored in .fst/config.json
 // All workspaces are peers - there is no main/linked distinction
 type ProjectConfig struct {
-	ProjectID      string `json:"project_id"`
-	WorkspaceID    string `json:"workspace_id,omitempty"`
-	WorkspaceName  string `json:"workspace_name,omitempty"`
-	BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
-	APIURL         string `json:"api_url,omitempty"`
-	Mode           string `json:"mode,omitempty"` // "cloud" or "local"
+	ProjectID      string                 `json:"project_id"`
+	WorkspaceID    string                 `json:"workspace_id,omitempty"`
+	WorkspaceName  string                 `json:"workspace_name,omitempty"`
+	BaseSnapshotID string                 `json:"base_snapshot_id,omitempty"`
+	MergeHistory   map[string]MergeRecord `json:"merge_history,omitempty"`
+	APIURL         string                 `json:"api_url,omitempty"`
+	Mode           string                 `json:"mode,omitempty"` // "cloud" or "local"
 }
 
 // FindProjectRoot walks up the directory tree to find .fst/ directory
