@@ -1,7 +1,7 @@
 # Storage format (v1): blobs + manifests
 
 ## Goals
-- Deterministic snapshot IDs (via manifest hash)
+- Deterministic snapshot IDs (`snap-<manifest_hash>`)
 - Deduped uploads/downloads
 - Cross-platform reproducibility
 
@@ -60,6 +60,10 @@ To ensure identical manifests:
 
 Store the manifest object under:
 - `manifests/<manifest_hash>.json`
+
+Local layout:
+- `.fst/manifests/<manifest_hash>.json`
+- `.fst/snapshots/<snapshot_id>.meta.json`
 
 ---
 

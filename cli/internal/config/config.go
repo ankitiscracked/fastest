@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Global cache directory name
@@ -14,6 +15,7 @@ const (
 	ConfigDirName    = ".fst"
 	ConfigFileName   = "config.json"
 	SnapshotsDirName = "snapshots"
+	ManifestsDirName = "manifests"
 )
 
 // GetGlobalCacheDir returns the global cache directory (~/.cache/fst/)
@@ -78,9 +80,36 @@ func GetSnapshotsDir() (string, error) {
 	return snapshotsDir, nil
 }
 
+// GetManifestsDir returns the local manifests directory for the current workspace
+func GetManifestsDir() (string, error) {
+	root, err := FindProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	manifestsDir := filepath.Join(root, ConfigDirName, ManifestsDirName)
+	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
+		return "", fmt.Errorf("could not create manifests directory: %w", err)
+	}
+	return manifestsDir, nil
+}
+
 // GetSnapshotsDirAt returns the snapshots directory for a specific workspace root
 func GetSnapshotsDirAt(root string) string {
 	return filepath.Join(root, ConfigDirName, SnapshotsDirName)
+}
+
+// GetManifestsDirAt returns the manifests directory for a specific workspace root
+func GetManifestsDirAt(root string) string {
+	return filepath.Join(root, ConfigDirName, ManifestsDirName)
+}
+
+// ManifestHashFromSnapshotID extracts the manifest hash from a snapshot ID.
+func ManifestHashFromSnapshotID(snapshotID string) (string, error) {
+	const prefix = "snap-"
+	if strings.HasPrefix(snapshotID, prefix) && len(snapshotID) > len(prefix) {
+		return strings.TrimPrefix(snapshotID, prefix), nil
+	}
+	return "", fmt.Errorf("invalid snapshot ID format: %s", snapshotID)
 }
 
 // SnapshotMeta represents snapshot metadata
@@ -336,6 +365,12 @@ func InitAt(root, projectID, workspaceID, workspaceName, forkSnapshotID string) 
 		return fmt.Errorf("failed to create snapshots directory: %w", err)
 	}
 
+	// Create manifests directory
+	manifestsDir := filepath.Join(configDir, ManifestsDirName)
+	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create manifests directory: %w", err)
+	}
+
 	config := &ProjectConfig{
 		ProjectID:         projectID,
 		WorkspaceID:       workspaceID,
@@ -356,8 +391,9 @@ func InitAt(root, projectID, workspaceID, workspaceName, forkSnapshotID string) 
 	}
 
 	// Create .gitignore for .fst directory
-	gitignore := `# Fastest local data
+gitignore := `# Fastest local data
 snapshots/
+manifests/
 *.log
 `
 	gitignorePath := filepath.Join(configDir, ".gitignore")

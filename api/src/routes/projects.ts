@@ -155,7 +155,7 @@ projectRoutes.get('/:projectId', async (c) => {
       id: snapshots.id,
       project_id: snapshots.projectId,
       workspace_id: snapshots.workspaceId,
-      content_hash: snapshots.manifestHash,
+      manifest_hash: snapshots.manifestHash,
       parent_snapshot_id: snapshots.parentSnapshotId,
       source: snapshots.source,
       summary: snapshots.summary,
@@ -449,7 +449,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
 
   const projectId = c.req.param('projectId');
   const body = await c.req.json<{
-    content_hash: string;
+    manifest_hash: string;
     parent_snapshot_id?: string;
     workspace_id?: string;
     source?: 'cli' | 'web';
@@ -467,15 +467,15 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
   }
 
-  if (!body.content_hash) {
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'content_hash is required' } }, 422);
+  if (!body.manifest_hash) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'manifest_hash is required' } }, 422);
   }
 
   // Check if snapshot with same manifest already exists
   const existingResult = await db
     .select({ id: snapshots.id })
     .from(snapshots)
-    .where(and(eq(snapshots.projectId, projectId), eq(snapshots.manifestHash, body.content_hash)))
+    .where(and(eq(snapshots.projectId, projectId), eq(snapshots.manifestHash, body.manifest_hash)))
     .limit(1);
 
   const existing = existingResult[0];
@@ -487,7 +487,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
         id: snapshots.id,
         project_id: snapshots.projectId,
         workspace_id: snapshots.workspaceId,
-        content_hash: snapshots.manifestHash,
+        manifest_hash: snapshots.manifestHash,
         parent_snapshot_id: snapshots.parentSnapshotId,
         source: snapshots.source,
         summary: snapshots.summary,
@@ -500,7 +500,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     return c.json({ snapshot: snapshotResult[0], created: false });
   }
 
-  const snapshotId = generateULID();
+  const snapshotId = `snap-${body.manifest_hash}`;
   const now = new Date().toISOString();
   const source = body.source || 'cli';
 
@@ -508,7 +508,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     id: snapshotId,
     projectId,
     workspaceId: body.workspace_id || null,
-    manifestHash: body.content_hash,
+    manifestHash: body.manifest_hash,
     parentSnapshotId: body.parent_snapshot_id || null,
     source,
     createdAt: now,
@@ -518,7 +518,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     await db
       .update(workspaces)
       .set({
-        currentManifestHash: body.content_hash,
+        currentManifestHash: body.manifest_hash,
         currentSnapshotId: snapshotId,
       })
       .where(eq(workspaces.id, body.workspace_id));
@@ -546,7 +546,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     id: snapshotId,
     project_id: projectId,
     workspace_id: body.workspace_id || null,
-    content_hash: body.content_hash,
+    manifest_hash: body.manifest_hash,
     parent_snapshot_id: body.parent_snapshot_id || null,
     source,
     summary: null,
@@ -583,7 +583,7 @@ projectRoutes.get('/:projectId/snapshots', async (c) => {
       id: snapshots.id,
       project_id: snapshots.projectId,
       workspace_id: snapshots.workspaceId,
-      content_hash: snapshots.manifestHash,
+      manifest_hash: snapshots.manifestHash,
       parent_snapshot_id: snapshots.parentSnapshotId,
       source: snapshots.source,
       summary: snapshots.summary,
@@ -881,13 +881,13 @@ projectRoutes.get('/:projectId/docs', async (c) => {
   const workspaceDocs: WorkspaceDocs[] = [];
   let totalFiles = 0;
 
-  // For each workspace, get docs from its snapshot
+  // For each workspace, get docs from its latest manifest
   for (const workspace of projectWorkspaces) {
-    if (!workspace.currentSnapshotId) continue;
+    if (!workspace.currentManifestHash) continue;
 
     try {
       // Get the manifest for this workspace's snapshot
-      const manifestKey = `${user.id}/manifests/${workspace.currentSnapshotId}.json`;
+      const manifestKey = `${user.id}/manifests/${workspace.currentManifestHash}.json`;
       const manifestObj = await c.env.BLOBS.get(manifestKey);
 
       if (!manifestObj) continue;
@@ -971,13 +971,13 @@ projectRoutes.get('/:projectId/docs/content', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
   }
 
-  if (!workspace.currentSnapshotId) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace has no snapshot' } }, 404);
+  if (!workspace.currentManifestHash) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace has no manifest' } }, 404);
   }
 
   try {
     // Get the manifest
-    const manifestKey = `${user.id}/manifests/${workspace.currentSnapshotId}.json`;
+    const manifestKey = `${user.id}/manifests/${workspace.currentManifestHash}.json`;
     const manifestObj = await c.env.BLOBS.get(manifestKey);
 
     if (!manifestObj) {

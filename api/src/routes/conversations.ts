@@ -1015,20 +1015,30 @@ Write a brief summary (1-2 sentences):`;
     }
   }
 
-  // Create a new snapshot with the current manifest
-  const snapshotId = generateULID();
+  // Create a new snapshot with the current manifest (idempotent)
+  let snapshotId = `snap-${currentManifestHash}`;
   const now = new Date().toISOString();
 
-  await db.insert(snapshots).values({
-    id: snapshotId,
-    projectId: conversation.project_id,
-    workspaceId: conversation.workspace_id,
-    manifestHash: currentManifestHash,
-    parentSnapshotId: conversation.fork_snapshot_id,
-    source: 'web',
-    summary,
-    createdAt: now,
-  });
+  const existingSnapshot = await db
+    .select({ id: snapshots.id })
+    .from(snapshots)
+    .where(and(eq(snapshots.projectId, conversation.project_id), eq(snapshots.manifestHash, currentManifestHash)))
+    .limit(1);
+
+  if (existingSnapshot[0]) {
+    snapshotId = existingSnapshot[0].id;
+  } else {
+    await db.insert(snapshots).values({
+      id: snapshotId,
+      projectId: conversation.project_id,
+      workspaceId: conversation.workspace_id,
+      manifestHash: currentManifestHash,
+      parentSnapshotId: conversation.fork_snapshot_id,
+      source: 'web',
+      summary,
+      createdAt: now,
+    });
+  }
 
   return c.json({
     snapshot_id: snapshotId,

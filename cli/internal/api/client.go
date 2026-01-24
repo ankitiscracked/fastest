@@ -455,7 +455,7 @@ type Snapshot struct {
 	ID               string  `json:"id"`
 	ProjectID        string  `json:"project_id"`
 	WorkspaceID      *string `json:"workspace_id"`
-	ContentHash      string  `json:"content_hash"`
+	ManifestHash     string  `json:"manifest_hash"`
 	ParentSnapshotID *string `json:"parent_snapshot_id"`
 	Source           string  `json:"source"`
 	Summary          *string `json:"summary"`
@@ -463,7 +463,7 @@ type Snapshot struct {
 }
 
 type CreateSnapshotRequest struct {
-	ContentHash      string  `json:"content_hash"`
+	ManifestHash     string  `json:"manifest_hash"`
 	ParentSnapshotID *string `json:"parent_snapshot_id,omitempty"`
 	WorkspaceID      *string `json:"workspace_id,omitempty"`
 	Source           string  `json:"source,omitempty"`
@@ -472,7 +472,7 @@ type CreateSnapshotRequest struct {
 // CreateSnapshot creates a new snapshot for a project
 func (c *Client) CreateSnapshot(projectID, manifestHash string, parentSnapshotID string, workspaceID string) (*Snapshot, bool, error) {
 	req := CreateSnapshotRequest{
-		ContentHash: manifestHash,
+		ManifestHash: manifestHash,
 		Source:      "cli",
 	}
 	if parentSnapshotID != "" {

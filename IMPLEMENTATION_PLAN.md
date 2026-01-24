@@ -248,7 +248,8 @@ CREATE TABLE activity_events (
 .fst/
 ├── config.json         # { project_id, workspace_id, fork_snapshot_id, current_snapshot_id }
 ├── workspace.json      # { name, machine_id, created_at }
-└── cache/
+├── manifests/          # <manifest_hash>.json
+└── snapshots/          # <snapshot_id>.meta.json
 ```
 
 ### Exit Criteria

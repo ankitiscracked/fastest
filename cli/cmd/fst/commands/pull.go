@@ -89,7 +89,7 @@ func runPull(snapshotID string, force bool) error {
 		return err
 	}
 
-	manifestJSON, err := client.DownloadManifest(snapshot.ContentHash)
+	manifestJSON, err := client.DownloadManifest(snapshot.ManifestHash)
 	if err != nil {
 		return fmt.Errorf("failed to download manifest: %w", err)
 	}
@@ -131,8 +131,13 @@ func isWorkingTreeDirty(root, latestSnapshotID string) (bool, error) {
 		return current.FileCount() > 0, nil
 	}
 
-	snapshotsDir := config.GetSnapshotsDirAt(root)
-	manifestPath := filepath.Join(snapshotsDir, latestSnapshotID+".json")
+	manifestHash, err := config.ManifestHashFromSnapshotID(latestSnapshotID)
+	if err != nil {
+		return true, err
+	}
+
+	manifestsDir := config.GetManifestsDirAt(root)
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return true, nil

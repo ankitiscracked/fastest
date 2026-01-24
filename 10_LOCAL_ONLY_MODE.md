@@ -30,15 +30,19 @@ When you later run `fst login`:
 myproject/
 ├── .fst/
 │   ├── config.json           # Project and workspace config
-│   ├── cache/
-│   │   ├── blobs/<sha256>    # Content-addressed files
-│   │   └── manifests/
-│   │       ├── snap-xxx.json      # Manifest
-│   │       └── snap-xxx.meta.json # Metadata (parent, message, etc.)
+│   ├── manifests/<hash>.json # File index (manifest)
+│   ├── snapshots/
+│   │   └── snap-xxx.meta.json # Metadata (parent, message, etc.)
 │   ├── workspaces/           # Linked workspace configs
 │   └── export/
 │       └── git-map.json      # Git export mapping
 └── ... (your files)
+```
+
+Global cache (shared across workspaces):
+```
+~/.cache/fst/
+└── blobs/<sha256>            # content-addressed files
 ```
 
 ### Linked Workspace

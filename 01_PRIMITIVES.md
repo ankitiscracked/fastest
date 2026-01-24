@@ -30,11 +30,12 @@ Rules:
 - Snapshots are immutable.
 - Parent is optional but recommended.
 - Snapshots are content-addressed via manifest_hash.
+- Snapshot IDs are deterministic: `snap-<manifest_hash>`.
 
 ---
 
-## 3. Manifest
-Describes a snapshot.
+## 3. File index (manifest)
+Describes a snapshot's file tree.
 
 Schema:
 - version

@@ -172,7 +172,7 @@ async function processWorkspace(
   console.log(`[BackgroundJobs] Creating snapshot for workspace ${ws.workspace_id}`);
 
   // Create new snapshot
-  const snapshotId = generateULID();
+  const snapshotId = `snap-${currentManifestHash}`;
   const now = new Date().toISOString();
 
   await db.insert(snapshots).values({

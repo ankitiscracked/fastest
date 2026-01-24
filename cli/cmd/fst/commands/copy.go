@@ -206,15 +206,22 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("failed to initialize workspace: %w", err)
 	}
 
-	// Copy the fork-point snapshot to the new workspace's snapshots directory
+	// Copy the fork-point snapshot metadata and manifest to the new workspace
 	sourceSnapshotsDir := config.GetSnapshotsDirAt(root)
 	targetSnapshotsDir := config.GetSnapshotsDirAt(targetDir)
+	sourceManifestsDir := config.GetManifestsDirAt(root)
+	targetManifestsDir := config.GetManifestsDirAt(targetDir)
+	_ = os.MkdirAll(targetManifestsDir, 0755)
 
 	// Copy snapshot manifest
-	snapshotManifestSrc := filepath.Join(sourceSnapshotsDir, forkSnapshotID+".json")
-	snapshotManifestDst := filepath.Join(targetSnapshotsDir, forkSnapshotID+".json")
-	if err := copyFile(snapshotManifestSrc, snapshotManifestDst, 0644); err != nil {
-		fmt.Printf("Warning: Could not copy snapshot manifest: %v\n", err)
+	if manifestHash, err := config.ManifestHashFromSnapshotID(forkSnapshotID); err == nil {
+		snapshotManifestSrc := filepath.Join(sourceManifestsDir, manifestHash+".json")
+		snapshotManifestDst := filepath.Join(targetManifestsDir, manifestHash+".json")
+		if err := copyFile(snapshotManifestSrc, snapshotManifestDst, 0644); err != nil {
+			fmt.Printf("Warning: Could not copy snapshot manifest: %v\n", err)
+		}
+	} else {
+		fmt.Printf("Warning: Could not parse snapshot id %s: %v\n", forkSnapshotID, err)
 	}
 
 	// Copy snapshot metadata if it exists

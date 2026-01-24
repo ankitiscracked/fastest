@@ -76,14 +76,14 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 
 	fmt.Printf("Found %d files (%s)\n", m.FileCount(), formatBytesLong(m.TotalSize()))
 
-	// Compute content hash - this becomes the snapshot ID
+	// Compute manifest hash - this becomes the snapshot ID
 	manifestHash, err := m.Hash()
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	// Create snapshot ID from hash (use first 16 chars for readability)
-	snapshotID := "snap-" + manifestHash[:16]
+	// Create snapshot ID from hash (full hash for determinism)
+	snapshotID := "snap-" + manifestHash
 
 	// Check if this exact snapshot already exists in local snapshots dir
 	snapshotsDir, err := config.GetSnapshotsDir()
@@ -91,10 +91,15 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		return fmt.Errorf("failed to get snapshots directory: %w", err)
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
-	alreadyExists := false
+	manifestsDir, err := config.GetManifestsDir()
+	if err != nil {
+		return fmt.Errorf("failed to get manifests directory: %w", err)
+	}
+
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
+	manifestExists := false
 	if _, err := os.Stat(manifestPath); err == nil {
-		alreadyExists = true
+		manifestExists = true
 	}
 
 	// Generate summary if requested
@@ -148,7 +153,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	}
 
 	// Save snapshot locally
-	if !alreadyExists {
+	if !manifestExists {
 		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
 			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
@@ -157,7 +162,11 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	// Save snapshot metadata
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	parentSnapshotID := cfg.CurrentSnapshotID
-	if !alreadyExists || message != "" || agentName != "" {
+	metadataExists := false
+	if _, err := os.Stat(metadataPath); err == nil {
+		metadataExists = true
+	}
+	if !metadataExists || message != "" || agentName != "" {
 		metadata := fmt.Sprintf(`{
   "id": "%s",
   "workspace_id": "%s",
@@ -206,6 +215,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 
 	// Output result
 	fmt.Println()
+	alreadyExists := manifestExists && metadataExists
 	if alreadyExists {
 		fmt.Println("✓ Snapshot already exists (no changes since last snapshot)")
 	} else {
@@ -251,13 +261,13 @@ func CreateAutoSnapshot(message string) (string, error) {
 		return "", fmt.Errorf("failed to scan files: %w", err)
 	}
 
-	// Compute content hash
+	// Compute manifest hash
 	manifestHash, err := m.Hash()
 	if err != nil {
 		return "", fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	snapshotID := "snap-" + manifestHash[:16]
+	snapshotID := "snap-" + manifestHash
 
 	// Check if snapshot already exists
 	snapshotsDir, err := config.GetSnapshotsDir()
@@ -265,7 +275,11 @@ func CreateAutoSnapshot(message string) (string, error) {
 		return "", fmt.Errorf("failed to get snapshots directory: %w", err)
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
+	manifestsDir, err := config.GetManifestsDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get manifests directory: %w", err)
+	}
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	if _, err := os.Stat(manifestPath); err == nil {
 		// Snapshot already exists - no new changes to save
 		return "", nil

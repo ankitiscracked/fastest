@@ -71,9 +71,9 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	snapshotsDir, err := config.GetSnapshotsDir()
+	manifestsDir, err := config.GetManifestsDir()
 	if err != nil {
-		return fmt.Errorf("failed to get snapshots directory: %w", err)
+		return fmt.Errorf("failed to get manifests directory: %w", err)
 	}
 
 	// Determine target snapshot (default to most recent snapshot)
@@ -102,8 +102,12 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 		return fmt.Errorf("no snapshots found - create one with 'fst snapshot'")
 	}
 
-	// Load target manifest from local snapshots directory
-	manifestPath := filepath.Join(snapshotsDir, targetSnapshotID+".json")
+	// Load target manifest from local manifests directory
+	manifestHash, err := config.ManifestHashFromSnapshotID(targetSnapshotID)
+	if err != nil {
+		return err
+	}
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return fmt.Errorf("snapshot not found: %s", targetSnapshotID)

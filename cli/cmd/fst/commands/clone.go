@@ -95,7 +95,7 @@ func runClone(target string, targetDir string) error {
 		return err
 	}
 
-	manifestJSON, err := client.DownloadManifest(snapshot.ContentHash)
+	manifestJSON, err := client.DownloadManifest(snapshot.ManifestHash)
 	if err != nil {
 		return fmt.Errorf("failed to download manifest: %w", err)
 	}
@@ -248,7 +248,12 @@ func writeSnapshotFiles(root string, snapshot *api.Snapshot, manifestJSON []byte
 		return err
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, snapshot.ID+".json")
+	manifestsDir := filepath.Join(root, config.ConfigDirName, config.ManifestsDirName)
+	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
+		return err
+	}
+
+	manifestPath := filepath.Join(manifestsDir, snapshot.ManifestHash+".json")
 	if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
 		return err
 	}
@@ -258,7 +263,7 @@ func writeSnapshotFiles(root string, snapshot *api.Snapshot, manifestJSON []byte
 		"id":                 snapshot.ID,
 		"workspace_id":       snapshot.WorkspaceID,
 		"workspace_name":     workspaceName,
-		"manifest_hash":      snapshot.ContentHash,
+		"manifest_hash":      snapshot.ManifestHash,
 		"parent_snapshot_id": snapshot.ParentSnapshotID,
 		"message":            "",
 		"agent":              "",

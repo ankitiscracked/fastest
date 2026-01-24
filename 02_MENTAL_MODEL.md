@@ -14,8 +14,8 @@ A local working copy of a project.
 - Tracks a current snapshot (latest saved state)
 - Can detect drift (changes from fork)
 - Two types:
-  - **Main workspace** — owns the `.fst/` directory with blob cache
-  - **Linked workspace** — lightweight copy, shares cache with main
+  - **Main workspace** — owns the `.fst/` directory (manifests + metadata)
+  - **Linked workspace** — lightweight copy, shares the global blob cache
 
 ```
                     Project
@@ -54,14 +54,19 @@ Combine changes from one workspace into another:
 myproject/
 ├── .fst/
 │   ├── config.json           # workspace config
-│   ├── cache/
-│   │   ├── blobs/<sha256>    # content-addressed files
-│   │   └── manifests/<id>.json
+│   ├── manifests/<hash>.json # file index (manifest)
+│   ├── snapshots/<id>.meta.json
 │   ├── workspaces/           # linked workspace configs
 │   └── export/
 │       └── git-map.json      # snapshot→commit mapping
 ├── src/
 └── ...
+```
+
+Global cache (shared across workspaces):
+```
+~/.cache/fst/
+└── blobs/<sha256>            # content-addressed files
 ```
 
 ### Linked Workspace

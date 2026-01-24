@@ -148,16 +148,21 @@ func ComputeFromCache(root string) (*Report, error) {
 		}, nil
 	}
 
-	// Load base manifest from local snapshots directory
-	snapshotsDir, err := config.GetSnapshotsDir()
+	// Load base manifest from local manifests directory
+	manifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
 	if err != nil {
 		return nil, err
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, cfg.ForkSnapshotID+".json")
+	manifestsDir, err := config.GetManifestsDir()
+	if err != nil {
+		return nil, err
+	}
+
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("base manifest not found in snapshots: %w", err)
+		return nil, fmt.Errorf("base manifest not found in manifests: %w", err)
 	}
 
 	baseManifest, err := manifest.FromJSON(data)
@@ -208,8 +213,13 @@ func ComputeAgainstWorkspace(root, otherRoot string, includeDirty bool) (*Report
 			return nil, fmt.Errorf("other workspace has no snapshots")
 		}
 
-		otherSnapshotsDir := config.GetSnapshotsDirAt(otherRoot)
-		manifestPath := filepath.Join(otherSnapshotsDir, snapshotID+".json")
+		manifestHash, err := config.ManifestHashFromSnapshotID(snapshotID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid snapshot id: %w", err)
+		}
+
+		otherManifestsDir := config.GetManifestsDirAt(otherRoot)
+		manifestPath := filepath.Join(otherManifestsDir, manifestHash+".json")
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load other workspace's snapshot: %w", err)
@@ -403,13 +413,18 @@ func (r *DivergenceReport) ToJSON() ([]byte, error) {
 	return json.MarshalIndent(r, "", "  ")
 }
 
-// LoadManifestFromSnapshots loads a manifest from a workspace's snapshots directory
+// LoadManifestFromSnapshots loads a manifest from a workspace's manifests directory
 func LoadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, error) {
-	snapshotsDir := config.GetSnapshotsDirAt(root)
-	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
+	manifestHash, err := config.ManifestHashFromSnapshotID(snapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	manifestsDir := config.GetManifestsDirAt(root)
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("manifest not found in snapshots: %w", err)
+		return nil, fmt.Errorf("manifest not found in manifests: %w", err)
 	}
 	return manifest.FromJSON(data)
 }

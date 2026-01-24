@@ -196,15 +196,19 @@ fst watch                    # Watch for changes (daemon)
 ```
 .fst/
 ├── config.json              # Workspace configuration
-├── cache/
-│   ├── blobs/<sha256>       # Content-addressed file cache
-│   └── manifests/
-│       ├── <id>.json        # Manifest files
-│       └── <id>.meta.json   # Snapshot metadata
+├── manifests/<hash>.json    # File index (manifest)
+├── snapshots/
+│   └── <id>.meta.json       # Snapshot metadata
 ├── workspaces/              # Linked workspace configs
 │   └── <ws-id>/config.json
 └── export/
     └── git-map.json         # Snapshot → git commit mapping
+```
+
+Global cache:
+```
+~/.cache/fst/
+└── blobs/<sha256>           # content-addressed files
 ```
 
 ### Linked Workspace (`.fst` file)

@@ -230,7 +230,11 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		}
 
 		// Load snapshot data
-		manifestPath := filepath.Join(configDir, "cache", "manifests", snap.ID+".json")
+		manifestHash, err := config.ManifestHashFromSnapshotID(snap.ID)
+		if err != nil {
+			return fmt.Errorf("invalid snapshot id %s: %w", snap.ID, err)
+		}
+		manifestPath := filepath.Join(configDir, config.ManifestsDirName, manifestHash+".json")
 		manifestData, err := os.ReadFile(manifestPath)
 		if err != nil {
 			return fmt.Errorf("failed to load snapshot %s: %w", snap.ID, err)
@@ -341,13 +345,16 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		// Check for drift
 		currentManifest, err := manifest.Generate(root, false)
 		if err == nil {
-			baseManifestPath := filepath.Join(configDir, "cache", "manifests", cfg.ForkSnapshotID+".json")
-			if baseData, err := os.ReadFile(baseManifestPath); err == nil {
-				if baseManifest, err := manifest.FromJSON(baseData); err == nil {
-					added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
-					if len(added)+len(modified)+len(deleted) > 0 {
-						fmt.Printf("\nNote: %d uncommitted changes not exported.\n", len(added)+len(modified)+len(deleted))
-						fmt.Println("Use --include-drift to include them.")
+			baseManifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
+			if err == nil {
+				baseManifestPath := filepath.Join(configDir, config.ManifestsDirName, baseManifestHash+".json")
+				if baseData, err := os.ReadFile(baseManifestPath); err == nil {
+					if baseManifest, err := manifest.FromJSON(baseData); err == nil {
+						added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
+						if len(added)+len(modified)+len(deleted) > 0 {
+							fmt.Printf("\nNote: %d uncommitted changes not exported.\n", len(added)+len(modified)+len(deleted))
+							fmt.Println("Use --include-drift to include them.")
+						}
 					}
 				}
 			}
@@ -370,7 +377,7 @@ func buildSnapshotChain(configDir, startID string) ([]SnapshotInfo, error) {
 	currentID := startID
 
 	for currentID != "" {
-		metaPath := filepath.Join(configDir, "cache", "manifests", currentID+".meta.json")
+		metaPath := filepath.Join(configDir, config.SnapshotsDirName, currentID+".meta.json")
 		data, err := os.ReadFile(metaPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -402,7 +409,10 @@ func buildSnapshotChain(configDir, startID string) ([]SnapshotInfo, error) {
 
 // restoreFilesFromManifest restores all files from a manifest using cached blobs
 func restoreFilesFromManifest(root, configDir string, m *manifest.Manifest) error {
-	blobDir := filepath.Join(configDir, "cache", "blobs")
+	blobDir, err := config.GetGlobalBlobDir()
+	if err != nil {
+		return err
+	}
 
 	// First, remove files that shouldn't exist (except .git and .fst)
 	// We'll do this by tracking what should exist

@@ -178,6 +178,11 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 
 	fstDir := filepath.Join(cwd, ".fst")
 	snapshotsDir := filepath.Join(fstDir, config.SnapshotsDirName)
+	manifestsDir := filepath.Join(fstDir, config.ManifestsDirName)
+
+	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create manifests directory: %w", err)
+	}
 
 	// Create initial snapshot if not disabled
 	var snapshotID string
@@ -194,7 +199,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 			return fmt.Errorf("failed to create snapshot: %w", err)
 		}
 
-		snapshotID = "snap-" + manifestHash[:16]
+		snapshotID = "snap-" + manifestHash
 
 		// Cache blobs in global cache
 		blobDir, err := config.GetGlobalBlobDir()
@@ -220,7 +225,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 			return fmt.Errorf("failed to save snapshot: %w", err)
 		}
 
-		manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
+		manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
 			return fmt.Errorf("failed to save snapshot: %w", err)
 		}

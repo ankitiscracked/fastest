@@ -253,6 +253,13 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 	fmt.Printf("Into:         %s (%s)\n", cfg.WorkspaceName, currentRoot)
 	fmt.Println()
 
+	token, _ := auth.GetToken()
+	if token != "" {
+		client := newAPIClient(token, cfg)
+		warnIfRemoteHeadDiff("target", client, cfg, currentRoot)
+		warnIfRemoteHeadDiff("source", client, sourceCfg, sourceRoot)
+	}
+
 	// Determine merge base (common ancestor) using merge history and relationships
 	mergeBaseID, err := getMergeBase(cfg, sourceCfg, currentRoot, sourceRoot)
 	var baseManifest *manifest.Manifest
@@ -261,13 +268,11 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
 		baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
 	} else {
-		// Try to load from current workspace's snapshots first, then source's
-		snapshotsDir := config.GetSnapshotsDirAt(currentRoot)
-		baseManifest, err = loadManifestByID(snapshotsDir, mergeBaseID)
+		// Try to load from current workspace's manifests first, then source's
+		baseManifest, err = loadManifestByID(currentRoot, mergeBaseID)
 		if err != nil {
-			// Try source workspace's snapshots
-			snapshotsDir = config.GetSnapshotsDirAt(sourceRoot)
-			baseManifest, err = loadManifestByID(snapshotsDir, mergeBaseID)
+			// Try source workspace's manifests
+			baseManifest, err = loadManifestByID(sourceRoot, mergeBaseID)
 		}
 		if err != nil {
 			fmt.Printf("Warning: Could not load fork snapshot %s: %v\n", mergeBaseID, err)
@@ -910,12 +915,16 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 		return nil, fmt.Errorf("no fork snapshot")
 	}
 
-	snapshotsDir, err := config.GetSnapshotsDir()
+	manifestsDir, err := config.GetManifestsDir()
 	if err != nil {
 		return nil, err
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, cfg.ForkSnapshotID+".json")
+	manifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot not in local snapshots: %w", err)
@@ -948,6 +957,31 @@ func loadSnapshotMetaFromDir(snapshotsDir, snapshotID string) (*snapshotMeta, er
 		return nil, fmt.Errorf("failed to parse snapshot metadata: %w", err)
 	}
 	return &meta, nil
+}
+
+func warnIfRemoteHeadDiff(label string, client *api.Client, cfg *config.ProjectConfig, root string) {
+	if cfg == nil || cfg.WorkspaceID == "" {
+		return
+	}
+
+	remoteWs, err := client.GetWorkspace(cfg.WorkspaceID)
+	if err != nil || remoteWs.CurrentSnapshotID == nil || *remoteWs.CurrentSnapshotID == "" {
+		return
+	}
+
+	localHead := cfg.CurrentSnapshotID
+	if localHead == "" {
+		if latest, err := config.GetLatestSnapshotIDAt(root); err == nil {
+			localHead = latest
+		}
+	}
+
+	if localHead == "" || localHead == *remoteWs.CurrentSnapshotID {
+		return
+	}
+
+	fmt.Printf("Warning: %s workspace has remote changes not in this local copy (remote %s, local %s).\n", label, *remoteWs.CurrentSnapshotID, localHead)
+	fmt.Printf("         Run 'fst sync' in the %s workspace before merging to avoid missing changes.\n", label)
 }
 
 // getMergeBase determines the correct fork snapshot for a three-way merge.
@@ -1026,13 +1060,19 @@ func getMergeBase(targetCfg, sourceCfg *config.ProjectConfig, targetRoot, source
 	return "", fmt.Errorf("no common ancestor found between workspaces")
 }
 
-// loadManifestByID loads a manifest from the snapshots directory by ID
-func loadManifestByID(snapshotsDir, snapshotID string) (*manifest.Manifest, error) {
+// loadManifestByID loads a manifest from the manifests directory by snapshot ID
+func loadManifestByID(root, snapshotID string) (*manifest.Manifest, error) {
 	if snapshotID == "" {
 		return nil, fmt.Errorf("empty snapshot ID")
 	}
 
-	manifestPath := filepath.Join(snapshotsDir, snapshotID+".json")
+	manifestHash, err := config.ManifestHashFromSnapshotID(snapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	manifestsDir := config.GetManifestsDirAt(root)
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot manifest not found: %w", err)
@@ -1631,8 +1671,12 @@ func getWorkspaceChangesForPath(root string) (*drift.Report, error) {
 	}
 
 	// Load base manifest
-	snapshotsDir := config.GetSnapshotsDirAt(root)
-	manifestPath := filepath.Join(snapshotsDir, wsCfg.ForkSnapshotID+".json")
+	manifestHash, err := config.ManifestHashFromSnapshotID(wsCfg.ForkSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	manifestsDir := config.GetManifestsDirAt(root)
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, err

@@ -122,7 +122,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		return err
 	}
 
-	manifestJSON, err := client.DownloadManifest(remoteSnapshot.ContentHash)
+	manifestJSON, err := client.DownloadManifest(remoteSnapshot.ManifestHash)
 	if err != nil {
 		return fmt.Errorf("failed to download manifest: %w", err)
 	}
@@ -287,7 +287,7 @@ func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead st
 		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
 	}
 
-	if localManifest, err := loadManifestByID(snapshotsDir, mergeBaseID); err == nil {
+	if localManifest, err := loadManifestByID(root, mergeBaseID); err == nil {
 		return localManifest, nil
 	}
 
@@ -295,7 +295,7 @@ func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead st
 	if err != nil {
 		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
 	}
-	baseJSON, err := client.DownloadManifest(baseSnap.ContentHash)
+	baseJSON, err := client.DownloadManifest(baseSnap.ManifestHash)
 	if err != nil {
 		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
 	}
