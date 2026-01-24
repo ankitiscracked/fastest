@@ -180,7 +180,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	cloudSynced := false
 	if token != "" {
 		client := api.NewClient(token)
-		_, created, err := client.CreateSnapshot(cfg.ProjectID, manifestHash, cfg.BaseSnapshotID)
+		_, created, err := client.CreateSnapshot(cfg.ProjectID, manifestHash, cfg.BaseSnapshotID, cfg.WorkspaceID)
 		if err == nil {
 			cloudSynced = true
 			if created {

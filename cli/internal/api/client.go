@@ -169,23 +169,31 @@ func (c *Client) GetMe() (*User, error) {
 // Project types
 
 type Project struct {
-	ID             string  `json:"id"`
-	OwnerUserID    string  `json:"owner_user_id"`
-	Name           string  `json:"name"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	LastSnapshotID *string `json:"last_snapshot_id"`
+	ID              string  `json:"id"`
+	OwnerUserID     string  `json:"owner_user_id"`
+	Name            string  `json:"name"`
+	CreatedAt       string  `json:"created_at"`
+	UpdatedAt       string  `json:"updated_at"`
+	LastSnapshotID  *string `json:"last_snapshot_id"`
+	MainWorkspaceID *string `json:"main_workspace_id"`
+}
+
+// MergeRecord tracks when a workspace was last merged from another workspace
+type MergeRecord struct {
+	LastMergedSnapshot string `json:"last_merged_snapshot"`
+	MergedAt           string `json:"merged_at"`
 }
 
 type Workspace struct {
-	ID             string  `json:"id"`
-	ProjectID      string  `json:"project_id"`
-	Name           string  `json:"name"`
-	MachineID      *string `json:"machine_id"`
-	BaseSnapshotID *string `json:"base_snapshot_id"`
-	LocalPath      *string `json:"local_path"`
-	LastSeenAt     *string `json:"last_seen_at"`
-	CreatedAt      string  `json:"created_at"`
+	ID             string                  `json:"id"`
+	ProjectID      string                  `json:"project_id"`
+	Name           string                  `json:"name"`
+	MachineID      *string                 `json:"machine_id"`
+	BaseSnapshotID *string                 `json:"base_snapshot_id"`
+	LocalPath      *string                 `json:"local_path"`
+	LastSeenAt     *string                 `json:"last_seen_at"`
+	CreatedAt      string                  `json:"created_at"`
+	MergeHistory   map[string]MergeRecord  `json:"merge_history,omitempty"`
 }
 
 type CreateProjectRequest struct {
@@ -375,31 +383,60 @@ func (c *Client) SendHeartbeat(workspaceID string) error {
 	return nil
 }
 
+// SetMainWorkspace sets a workspace as the main workspace for its project
+func (c *Client) SetMainWorkspace(workspaceID string) error {
+	req, err := http.NewRequest("POST", c.baseURL+"/v1/workspaces/"+workspaceID+"/set-as-main", nil)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to set main workspace: %s", string(respBody))
+	}
+
+	return nil
+}
+
 // Snapshot types
 
 type Snapshot struct {
 	ID               string  `json:"id"`
 	ProjectID        string  `json:"project_id"`
+	WorkspaceID      *string `json:"workspace_id"`
 	ContentHash      string  `json:"content_hash"`
 	ParentSnapshotID *string `json:"parent_snapshot_id"`
 	Source           string  `json:"source"`
+	Summary          *string `json:"summary"`
 	CreatedAt        string  `json:"created_at"`
 }
 
 type CreateSnapshotRequest struct {
 	ContentHash      string  `json:"content_hash"`
 	ParentSnapshotID *string `json:"parent_snapshot_id,omitempty"`
+	WorkspaceID      *string `json:"workspace_id,omitempty"`
 	Source           string  `json:"source,omitempty"`
 }
 
 // CreateSnapshot creates a new snapshot for a project
-func (c *Client) CreateSnapshot(projectID, manifestHash string, parentSnapshotID string) (*Snapshot, bool, error) {
+func (c *Client) CreateSnapshot(projectID, manifestHash string, parentSnapshotID string, workspaceID string) (*Snapshot, bool, error) {
 	req := CreateSnapshotRequest{
 		ContentHash: manifestHash,
 		Source:      "cli",
 	}
 	if parentSnapshotID != "" {
 		req.ParentSnapshotID = &parentSnapshotID
+	}
+	if workspaceID != "" {
+		req.WorkspaceID = &workspaceID
 	}
 
 	jsonBody, err := json.Marshal(req)

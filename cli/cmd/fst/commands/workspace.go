@@ -10,6 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/anthropics/fastest/cli/internal/api"
+	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
 )
@@ -324,7 +326,91 @@ Displays workspace name, ID, project, base snapshot, and mode.`,
 		RunE: runWorkspaceStatus,
 	}
 
+	cmd.AddCommand(newSetMainCmd())
+
 	return cmd
+}
+
+func newSetMainCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "set-main [workspace]",
+		Short: "Set a workspace as the main workspace for the project",
+		Long: `Set a workspace as the main workspace for the project.
+
+The main workspace is used as the default comparison target for 'fst drift'.
+Other workspaces can sync their changes with the main workspace.
+
+Without arguments, sets the current workspace as main.
+With a workspace name, sets that workspace as main.
+
+Examples:
+  fst workspace set-main          # Set current workspace as main
+  fst workspace set-main dev      # Set workspace "dev" as main`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var workspaceName string
+			if len(args) > 0 {
+				workspaceName = args[0]
+			}
+			return runSetMain(workspaceName)
+		},
+	}
+
+	return cmd
+}
+
+func runSetMain(workspaceName string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("not in a project directory - run 'fst init' first")
+	}
+
+	token, err := auth.GetToken()
+	if err != nil || token == "" {
+		return fmt.Errorf("not logged in - run 'fst login' first")
+	}
+
+	client := api.NewClient(token)
+
+	var targetWorkspaceID string
+	var targetWorkspaceName string
+
+	if workspaceName == "" {
+		// Use current workspace
+		targetWorkspaceID = cfg.WorkspaceID
+		targetWorkspaceName = cfg.WorkspaceName
+	} else {
+		// Look up workspace by name
+		_, workspaces, err := client.GetProject(cfg.ProjectID)
+		if err != nil {
+			return fmt.Errorf("failed to fetch project: %w", err)
+		}
+
+		found := false
+		for _, ws := range workspaces {
+			if ws.Name == workspaceName || ws.ID == workspaceName {
+				targetWorkspaceID = ws.ID
+				targetWorkspaceName = ws.Name
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("workspace '%s' not found in project", workspaceName)
+		}
+	}
+
+	// Set as main workspace
+	if err := client.SetMainWorkspace(targetWorkspaceID); err != nil {
+		return err
+	}
+
+	fmt.Printf("✓ Set '%s' as the main workspace for this project.\n", targetWorkspaceName)
+	fmt.Println()
+	fmt.Println("Other workspaces can now use 'fst drift' to compare against this workspace.")
+
+	return nil
 }
 
 func runWorkspaceStatus(cmd *cobra.Command, args []string) error {

@@ -83,14 +83,43 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 	var otherName string
 
 	if target == "" {
-		// No target specified - find upstream workspace
-		upstreamID, upstreamName, err := drift.GetUpstreamWorkspace(root)
-		if err != nil {
-			// No upstream - fall back to showing drift from base snapshot
-			return runDriftFromBase(root, cfg, jsonOutput, generateSummary, syncToCloud)
+		// No target specified - compare with main workspace
+		token, err := auth.GetToken()
+		if err != nil || token == "" {
+			return fmt.Errorf("not logged in - run 'fst login' first\nOr specify a workspace: fst drift <workspace>")
 		}
 
-		// Look up upstream workspace path from registry
+		client := api.NewClient(token)
+		project, workspacesList, err := client.GetProject(cfg.ProjectID)
+		if err != nil {
+			return fmt.Errorf("failed to fetch project: %w", err)
+		}
+
+		if project.MainWorkspaceID == nil || *project.MainWorkspaceID == "" {
+			return fmt.Errorf("no main workspace configured for this project\nSet one with: fst workspace set-main <workspace>\nOr specify a workspace to compare: fst drift <workspace>")
+		}
+
+		// Check if current workspace is the main workspace
+		if *project.MainWorkspaceID == cfg.WorkspaceID {
+			fmt.Println("This is the main workspace - nothing to compare against.")
+			fmt.Println("Use 'fst drift <workspace>' to compare with a specific workspace.")
+			return nil
+		}
+
+		// Find main workspace in the list
+		var mainWorkspace *api.Workspace
+		for i := range workspacesList {
+			if workspacesList[i].ID == *project.MainWorkspaceID {
+				mainWorkspace = &workspacesList[i]
+				break
+			}
+		}
+
+		if mainWorkspace == nil {
+			return fmt.Errorf("main workspace not found")
+		}
+
+		// Look up main workspace path from local registry
 		registry, err := LoadRegistry()
 		if err != nil {
 			return fmt.Errorf("failed to load workspace registry: %w", err)
@@ -98,7 +127,7 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 
 		found := false
 		for _, ws := range registry.Workspaces {
-			if ws.ID == upstreamID || ws.Name == upstreamName {
+			if ws.ID == mainWorkspace.ID {
 				otherRoot = ws.Path
 				otherName = ws.Name
 				found = true
@@ -107,11 +136,7 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 		}
 
 		if !found {
-			// Upstream workspace not in registry - show drift from base instead
-			fmt.Printf("Upstream workspace '%s' not found in registry.\n", upstreamName)
-			fmt.Println("Showing drift from base snapshot instead.")
-			fmt.Println()
-			return runDriftFromBase(root, cfg, jsonOutput, generateSummary, syncToCloud)
+			return fmt.Errorf("main workspace '%s' not found in local registry\nIt may be on a different machine. Use 'fst copy' to clone it locally.", mainWorkspace.Name)
 		}
 	} else {
 		// Target specified - determine if it's a path or name

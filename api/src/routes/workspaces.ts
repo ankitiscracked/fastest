@@ -263,7 +263,9 @@ workspaceRoutes.get('/:workspaceId/drift', async (c) => {
   });
 });
 
-// Compare workspace against main (for sync with main)
+// Compare workspace against another workspace (default: main workspace)
+// Query params:
+//   - source_workspace_id: optional, compare with this workspace instead of main
 workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   const user = await getAuthUser(c);
   if (!user) {
@@ -271,6 +273,7 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   }
 
   const workspaceId = c.req.param('workspaceId');
+  const sourceWorkspaceId = c.req.query('source_workspace_id');
   const db = createDb(c.env.DB);
 
   // Fetch workspace with project info
@@ -294,17 +297,20 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
   }
 
-  // Check if this is the main workspace
-  if (workspace.id === workspace.main_workspace_id) {
+  // Determine which workspace to compare against
+  const compareWithId = sourceWorkspaceId || workspace.main_workspace_id;
+
+  // Check if comparing with self
+  if (workspace.id === compareWithId) {
     return c.json({
       drift: null,
-      is_main_workspace: true,
-      message: 'This is the main workspace'
+      is_main_workspace: !sourceWorkspaceId && workspace.id === workspace.main_workspace_id,
+      message: sourceWorkspaceId ? 'Cannot compare workspace with itself' : 'This is the main workspace'
     });
   }
 
-  // Check if main workspace is set
-  if (!workspace.main_workspace_id) {
+  // Check if we have a workspace to compare against
+  if (!compareWithId) {
     return c.json({
       drift: null,
       is_main_workspace: false,
@@ -312,31 +318,38 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
     });
   }
 
-  // Get main workspace's snapshot
-  const mainWorkspaceResult = await db
+  // Get source workspace's snapshot (verify it belongs to same project)
+  const sourceWorkspaceResult = await db
     .select({
       id: workspaces.id,
+      name: workspaces.name,
       base_snapshot_id: workspaces.baseSnapshotId,
+      project_id: workspaces.projectId,
     })
     .from(workspaces)
-    .where(eq(workspaces.id, workspace.main_workspace_id))
+    .where(eq(workspaces.id, compareWithId))
     .limit(1);
 
-  const mainWorkspace = mainWorkspaceResult[0];
+  const sourceWorkspace = sourceWorkspaceResult[0];
 
-  if (!mainWorkspace) {
+  if (!sourceWorkspace) {
     return c.json({
       drift: null,
       is_main_workspace: false,
-      message: 'Main workspace not found'
+      message: sourceWorkspaceId ? 'Source workspace not found' : 'Main workspace not found'
     });
+  }
+
+  // Verify source workspace belongs to the same project
+  if (sourceWorkspace.project_id !== workspace.project_id) {
+    return c.json({ error: { code: 'INVALID_OPERATION', message: 'Cannot compare workspaces from different projects' } }, 400);
   }
 
   // Get snapshot manifest hashes
   const workspaceSnapshotId = workspace.base_snapshot_id;
-  const mainSnapshotId = mainWorkspace.base_snapshot_id;
+  const sourceSnapshotId = sourceWorkspace.base_snapshot_id;
 
-  if (!workspaceSnapshotId || !mainSnapshotId) {
+  if (!workspaceSnapshotId || !sourceSnapshotId) {
     return c.json({
       drift: null,
       is_main_workspace: false,
@@ -345,26 +358,25 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   }
 
   // Get snapshot manifest hashes
-  const snapshotResults = await db
-    .select({
+  const [snapshotResults, sourceSnapshotResults] = await Promise.all([
+    db.select({
       id: snapshots.id,
       manifest_hash: snapshots.manifestHash,
     })
-    .from(snapshots)
-    .where(eq(snapshots.id, workspaceSnapshotId));
-
-  const mainSnapshotResults = await db
-    .select({
+      .from(snapshots)
+      .where(eq(snapshots.id, workspaceSnapshotId)),
+    db.select({
       id: snapshots.id,
       manifest_hash: snapshots.manifestHash,
     })
-    .from(snapshots)
-    .where(eq(snapshots.id, mainSnapshotId));
+      .from(snapshots)
+      .where(eq(snapshots.id, sourceSnapshotId)),
+  ]);
 
   const workspaceSnapshot = snapshotResults[0];
-  const mainSnapshot = mainSnapshotResults[0];
+  const sourceSnapshot = sourceSnapshotResults[0];
 
-  if (!workspaceSnapshot || !mainSnapshot) {
+  if (!workspaceSnapshot || !sourceSnapshot) {
     return c.json({
       drift: null,
       is_main_workspace: false,
@@ -374,14 +386,14 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
 
   // Fetch manifests from R2
   const workspaceManifestKey = `${user.id}/manifests/${workspaceSnapshot.manifest_hash}.json`;
-  const mainManifestKey = `${user.id}/manifests/${mainSnapshot.manifest_hash}.json`;
+  const sourceManifestKey = `${user.id}/manifests/${sourceSnapshot.manifest_hash}.json`;
 
-  const [workspaceManifestObj, mainManifestObj] = await Promise.all([
+  const [workspaceManifestObj, sourceManifestObj] = await Promise.all([
     c.env.BLOBS.get(workspaceManifestKey),
-    c.env.BLOBS.get(mainManifestKey),
+    c.env.BLOBS.get(sourceManifestKey),
   ]);
 
-  if (!workspaceManifestObj || !mainManifestObj) {
+  if (!workspaceManifestObj || !sourceManifestObj) {
     return c.json({
       drift: null,
       is_main_workspace: false,
@@ -390,14 +402,14 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   }
 
   const workspaceManifestText = await workspaceManifestObj.text();
-  const mainManifestText = await mainManifestObj.text();
+  const sourceManifestText = await sourceManifestObj.text();
 
   let workspaceManifest: Manifest;
-  let mainManifest: Manifest;
+  let sourceManifest: Manifest;
 
   try {
     workspaceManifest = fromJSON(workspaceManifestText);
-    mainManifest = fromJSON(mainManifestText);
+    sourceManifest = fromJSON(sourceManifestText);
   } catch {
     return c.json({
       drift: null,
@@ -406,8 +418,8 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
     });
   }
 
-  // Compare the manifests
-  const comparison = compareDrift(workspaceManifest, mainManifest);
+  // Compare the manifests (source is treated as "main" in the comparison)
+  const comparison = compareDrift(workspaceManifest, sourceManifest);
 
   const driftId = generateULID();
   const now = new Date().toISOString();
@@ -415,10 +427,10 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   const driftReport: DriftReport = {
     id: driftId,
     workspace_id: workspaceId,
-    main_workspace_id: workspace.main_workspace_id,
+    main_workspace_id: sourceWorkspace.id, // The workspace we compared against
     compared_at: now,
     workspace_snapshot_id: workspaceSnapshotId,
-    main_snapshot_id: mainSnapshotId,
+    main_snapshot_id: sourceSnapshotId,
     main_only: comparison.main_only,
     workspace_only: comparison.workspace_only,
     both_same: comparison.both_same,
@@ -455,6 +467,10 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   return c.json({
     drift: driftReport,
     is_main_workspace: false,
+    source_workspace: {
+      id: sourceWorkspace.id,
+      name: sourceWorkspace.name,
+    },
   });
 });
 
