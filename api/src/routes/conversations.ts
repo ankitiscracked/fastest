@@ -6,7 +6,7 @@
  */
 
 import { Hono } from 'hono';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import type { Env } from '../index';
 import { authMiddleware, getAuthUser } from '../middleware/auth';
 import { createDb, conversations, workspaces, projects, snapshots } from '../db';
@@ -49,18 +49,21 @@ conversationRoutes.post('/', async (c) => {
     return c.json({ error: { code: 'INVALID_INPUT', message: 'workspace_id is required' } }, 400);
   }
 
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
   // Verify workspace exists and user has access
-  const workspace = await db
-    .prepare(`
-      SELECT w.*, p.owner_user_id
-      FROM workspaces w
-      JOIN projects p ON w.project_id = p.id
-      WHERE w.id = ?
-    `)
-    .bind(workspace_id)
-    .first<{ id: string; project_id: string; owner_user_id: string }>();
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+      owner_user_id: projects.ownerUserId,
+      current_manifest_hash: workspaces.currentManifestHash,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(eq(workspaces.id, workspace_id))
+    .limit(1);
+  const workspace = workspaceResult[0];
 
   if (!workspace) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
@@ -74,13 +77,31 @@ conversationRoutes.post('/', async (c) => {
   const conversationId = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await db
-    .prepare(`
-      INSERT INTO conversations (id, workspace_id, title, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-    `)
-    .bind(conversationId, workspace_id, title || null, now, now)
-    .run();
+  await db.insert(conversations).values({
+    id: conversationId,
+    workspaceId: workspace_id,
+    title: title || null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  let initialManifestHash: string | undefined = workspace.current_manifest_hash || undefined;
+  if (!initialManifestHash) {
+    const snapshotResult = await db
+      .select({ manifest_hash: snapshots.manifestHash })
+      .from(snapshots)
+      .where(eq(snapshots.workspaceId, workspace_id))
+      .orderBy(desc(snapshots.createdAt))
+      .limit(1);
+    initialManifestHash = snapshotResult[0]?.manifest_hash;
+  }
+
+  if (initialManifestHash && !workspace.current_manifest_hash) {
+    await db
+      .update(workspaces)
+      .set({ currentManifestHash: initialManifestHash })
+      .where(eq(workspaces.id, workspace_id));
+  }
 
   // Initialize the Durable Object
   const doId = getConversationDOId(c.env, conversationId);
@@ -93,6 +114,7 @@ conversationRoutes.post('/', async (c) => {
       conversationId,
       workspaceId: workspace_id,
       projectId: workspace.project_id,
+      initialManifestHash,
     }),
   }));
 

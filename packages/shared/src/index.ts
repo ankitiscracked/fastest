@@ -39,6 +39,7 @@ export interface Workspace {
   name: string;
   machine_id: string | null;
   base_snapshot_id: string | null;
+  current_manifest_hash: string | null;
   local_path: string | null;
   last_seen_at: string | null;
   created_at: string;
@@ -49,22 +50,34 @@ export interface Workspace {
 export interface DriftReport {
   id: string;
   workspace_id: string;
-  main_workspace_id: string;
+  source_workspace_id: string;
 
   // Comparison metadata
   compared_at: string;
   workspace_snapshot_id: string | null;  // null = current files
-  main_snapshot_id: string | null;       // null = current files
+  source_snapshot_id: string | null;       // null = current files
 
   // File categorization
-  main_only: string[];           // Files in main but not workspace
-  workspace_only: string[];      // Files in workspace but not main
+  source_only: string[];         // Files in source but not workspace
+  workspace_only: string[];      // Files in workspace but not source
   both_same: string[];           // Same content in both
   both_different: string[];      // Different content (potential conflicts)
 
   // Computed
-  total_drift_files: number;     // main_only + both_different
+  total_drift_files: number;     // source_only + both_different
   has_overlaps: boolean;         // both_different.length > 0
+
+  // Derived metrics (for merge risk awareness)
+  overlap_ratio?: number;        // both_different / total_drift_files
+  risk_level?: 'low' | 'medium' | 'high';
+  staleness_hours?: number;      // hours since compared_at
+  top_overlap_files?: string[];  // top N from both_different
+  counts_by_ext?: {
+    source_only: Record<string, number>;
+    workspace_only: Record<string, number>;
+    both_different: Record<string, number>;
+  };
+  large_files_changed?: boolean | null; // null when sizes are unavailable
 
   // Legacy fields (backward compatibility)
   files_added: number;
@@ -188,7 +201,7 @@ export interface GetDriftResponse {
 // AI-generated drift analysis
 export interface DriftAnalysis {
   // Human-readable summaries
-  main_changes_summary: string;       // "Added rate limiting, fixed auth bug"
+  source_changes_summary: string;     // "Added rate limiting, fixed auth bug"
   workspace_changes_summary: string;  // "Added retry logic, custom errors"
 
   // Risk assessment

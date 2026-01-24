@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, isNull, or } from 'drizzle-orm';
 import type { Env } from '../index';
 import type {
   Workspace,
@@ -27,6 +27,9 @@ import {
 
 export const workspaceRoutes = new Hono<{ Bindings: Env }>();
 
+const LARGE_FILE_BYTES = 200_000;
+const TOP_OVERLAP_LIMIT = 20;
+
 // Get workspace by ID
 workspaceRoutes.get('/:workspaceId', async (c) => {
   const user = await getAuthUser(c);
@@ -45,6 +48,7 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
       name: workspaces.name,
       machine_id: workspaces.machineId,
       base_snapshot_id: workspaces.baseSnapshotId,
+      current_manifest_hash: workspaces.currentManifestHash,
       local_path: workspaces.localPath,
       last_seen_at: workspaces.lastSeenAt,
       created_at: workspaces.createdAt,
@@ -68,6 +72,7 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
     name: row.name,
     machine_id: row.machine_id,
     base_snapshot_id: row.base_snapshot_id,
+    current_manifest_hash: row.current_manifest_hash,
     local_path: row.local_path,
     last_seen_at: row.last_seen_at,
     created_at: row.created_at,
@@ -79,6 +84,13 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
     .select({
       id: driftReports.id,
       workspace_id: driftReports.workspaceId,
+      source_workspace_id: driftReports.sourceWorkspaceId,
+      workspace_snapshot_id: driftReports.workspaceSnapshotId,
+      source_snapshot_id: driftReports.sourceSnapshotId,
+      source_only: driftReports.sourceOnly,
+      workspace_only: driftReports.workspaceOnly,
+      both_same: driftReports.bothSame,
+      both_different: driftReports.bothDifferent,
       files_added: driftReports.filesAdded,
       files_modified: driftReports.filesModified,
       files_deleted: driftReports.filesDeleted,
@@ -91,7 +103,39 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
     .orderBy(desc(driftReports.reportedAt))
     .limit(1);
 
-  const drift = driftResult[0] || null;
+  const drift = driftResult[0]
+    ? (() => {
+        const sourceOnly = JSON.parse(driftResult[0].source_only || '[]');
+        const workspaceOnly = JSON.parse(driftResult[0].workspace_only || '[]');
+        const bothDifferent = JSON.parse(driftResult[0].both_different || '[]');
+        return {
+          ...driftResult[0],
+          compared_at: driftResult[0].reported_at,
+          source_only: sourceOnly,
+          workspace_only: workspaceOnly,
+          both_same: JSON.parse(driftResult[0].both_same || '[]'),
+          both_different: bothDifferent,
+          total_drift_files: (driftResult[0].files_added || 0) + (driftResult[0].files_modified || 0),
+          has_overlaps: (driftResult[0].files_modified || 0) > 0,
+          overlap_ratio: computeOverlapRatio(
+            driftResult[0].files_added || 0,
+            driftResult[0].files_modified || 0
+          ),
+          risk_level: computeRiskLevel(
+            driftResult[0].files_added || 0,
+            driftResult[0].files_modified || 0
+          ),
+          staleness_hours: computeStalenessHours(driftResult[0].reported_at),
+          top_overlap_files: bothDifferent.slice(0, TOP_OVERLAP_LIMIT),
+          counts_by_ext: {
+            source_only: countByExt(sourceOnly),
+            workspace_only: countByExt(workspaceOnly),
+            both_different: countByExt(bothDifferent),
+          },
+          large_files_changed: null,
+        };
+      })()
+    : null;
 
   return c.json({
     workspace,
@@ -129,6 +173,69 @@ workspaceRoutes.post('/:workspaceId/heartbeat', async (c) => {
     .where(eq(workspaces.id, workspaceId));
 
   return c.json({ success: true, last_seen_at: now });
+});
+
+// Update current manifest hash for a workspace (optimistic)
+workspaceRoutes.post('/:workspaceId/current-manifest', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const body = await c.req.json<{ manifest_hash: string; previous_manifest_hash?: string }>();
+  const db = createDb(c.env.DB);
+
+  if (!body.manifest_hash) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'manifest_hash is required' } }, 422);
+  }
+
+  // Verify ownership through project
+  const workspaceResult = await db
+    .select({
+      id: workspaces.id,
+      project_id: workspaces.projectId,
+    })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  if (!workspaceResult[0]) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  const allowOverwrite = body.previous_manifest_hash
+    ? or(
+        isNull(workspaces.currentManifestHash),
+        eq(workspaces.currentManifestHash, body.previous_manifest_hash)
+      )
+    : isNull(workspaces.currentManifestHash);
+
+  const updateResult = await db
+    .update(workspaces)
+    .set({
+      currentManifestHash: body.manifest_hash,
+      lastSeenAt: new Date().toISOString(),
+    })
+    .where(and(eq(workspaces.id, workspaceId), allowOverwrite))
+    .returning({ current_manifest_hash: workspaces.currentManifestHash });
+
+  if (updateResult.length > 0) {
+    return c.json({ updated: true, current_manifest_hash: updateResult[0].current_manifest_hash });
+  }
+
+  const currentResult = await db
+    .select({ current_manifest_hash: workspaces.currentManifestHash })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+
+  return c.json({
+    updated: false,
+    current_manifest_hash: currentResult[0]?.current_manifest_hash || null,
+    conflict: true,
+  }, 409);
 });
 
 // Report drift for a workspace
@@ -198,11 +305,11 @@ workspaceRoutes.post('/:workspaceId/drift', async (c) => {
   const driftReport: DriftReport = {
     id: driftId,
     workspace_id: workspaceId,
-    main_workspace_id: '', // Not available for legacy reports
+    source_workspace_id: '', // Not available for legacy reports
     compared_at: now,
     workspace_snapshot_id: null,
-    main_snapshot_id: null,
-    main_only: [],
+    source_snapshot_id: null,
+    source_only: [],
     workspace_only: [],
     both_same: [],
     both_different: [],
@@ -245,6 +352,13 @@ workspaceRoutes.get('/:workspaceId/drift', async (c) => {
     .select({
       id: driftReports.id,
       workspace_id: driftReports.workspaceId,
+      source_workspace_id: driftReports.sourceWorkspaceId,
+      workspace_snapshot_id: driftReports.workspaceSnapshotId,
+      source_snapshot_id: driftReports.sourceSnapshotId,
+      source_only: driftReports.sourceOnly,
+      workspace_only: driftReports.workspaceOnly,
+      both_same: driftReports.bothSame,
+      both_different: driftReports.bothDifferent,
       files_added: driftReports.filesAdded,
       files_modified: driftReports.filesModified,
       files_deleted: driftReports.filesDeleted,
@@ -257,9 +371,35 @@ workspaceRoutes.get('/:workspaceId/drift', async (c) => {
     .orderBy(desc(driftReports.reportedAt))
     .limit(limit);
 
+  const drift_reports = result.map((row) => {
+    const sourceOnly = JSON.parse(row.source_only || '[]');
+    const workspaceOnly = JSON.parse(row.workspace_only || '[]');
+    const bothDifferent = JSON.parse(row.both_different || '[]');
+    return {
+      ...row,
+      compared_at: row.reported_at,
+      source_only: sourceOnly,
+      workspace_only: workspaceOnly,
+      both_same: JSON.parse(row.both_same || '[]'),
+      both_different: bothDifferent,
+      total_drift_files: (row.files_added || 0) + (row.files_modified || 0),
+      has_overlaps: (row.files_modified || 0) > 0,
+      overlap_ratio: computeOverlapRatio(row.files_added || 0, row.files_modified || 0),
+      risk_level: computeRiskLevel(row.files_added || 0, row.files_modified || 0),
+      staleness_hours: computeStalenessHours(row.reported_at),
+      top_overlap_files: bothDifferent.slice(0, TOP_OVERLAP_LIMIT),
+      counts_by_ext: {
+        source_only: countByExt(sourceOnly),
+        workspace_only: countByExt(workspaceOnly),
+        both_different: countByExt(bothDifferent),
+      },
+      large_files_changed: null,
+    };
+  });
+
   return c.json({
-    drift_reports: result,
-    latest: result[0] || null
+    drift_reports,
+    latest: drift_reports[0] || null
   });
 });
 
@@ -274,6 +414,7 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
 
   const workspaceId = c.req.param('workspaceId');
   const sourceWorkspaceId = c.req.query('source_workspace_id');
+  const includeDirty = c.req.query('include_dirty') === 'true';
   const db = createDb(c.env.DB);
 
   // Fetch workspace with project info
@@ -283,6 +424,7 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
       project_id: workspaces.projectId,
       name: workspaces.name,
       base_snapshot_id: workspaces.baseSnapshotId,
+      current_manifest_hash: workspaces.currentManifestHash,
       main_workspace_id: projects.mainWorkspaceId,
       owner_user_id: projects.ownerUserId,
     })
@@ -324,6 +466,7 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
       id: workspaces.id,
       name: workspaces.name,
       base_snapshot_id: workspaces.baseSnapshotId,
+      current_manifest_hash: workspaces.currentManifestHash,
       project_id: workspaces.projectId,
     })
     .from(workspaces)
@@ -345,42 +488,37 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
     return c.json({ error: { code: 'INVALID_OPERATION', message: 'Cannot compare workspaces from different projects' } }, 400);
   }
 
-  // Get snapshot manifest hashes
-  const workspaceSnapshotId = workspace.base_snapshot_id;
-  const sourceSnapshotId = sourceWorkspace.base_snapshot_id;
+  const resolveManifest = async (ws: { id: string; current_manifest_hash: string | null }) => {
+    if (includeDirty && ws.current_manifest_hash) {
+      return { manifest_hash: ws.current_manifest_hash, snapshot_id: null as string | null };
+    }
 
-  if (!workspaceSnapshotId || !sourceSnapshotId) {
+    const snapshotResult = await db
+      .select({
+        id: snapshots.id,
+        manifest_hash: snapshots.manifestHash,
+      })
+      .from(snapshots)
+      .where(eq(snapshots.workspaceId, ws.id))
+      .orderBy(desc(snapshots.createdAt))
+      .limit(1);
+
+    return {
+      manifest_hash: snapshotResult[0]?.manifest_hash,
+      snapshot_id: snapshotResult[0]?.id || null,
+    };
+  };
+
+  const [workspaceSnapshot, sourceSnapshot] = await Promise.all([
+    resolveManifest({ id: workspace.id, current_manifest_hash: workspace.current_manifest_hash }),
+    resolveManifest({ id: sourceWorkspace.id, current_manifest_hash: sourceWorkspace.current_manifest_hash }),
+  ]);
+
+  if (!workspaceSnapshot.manifest_hash || !sourceSnapshot.manifest_hash) {
     return c.json({
       drift: null,
       is_main_workspace: false,
       message: 'One or both workspaces have no snapshot'
-    });
-  }
-
-  // Get snapshot manifest hashes
-  const [snapshotResults, sourceSnapshotResults] = await Promise.all([
-    db.select({
-      id: snapshots.id,
-      manifest_hash: snapshots.manifestHash,
-    })
-      .from(snapshots)
-      .where(eq(snapshots.id, workspaceSnapshotId)),
-    db.select({
-      id: snapshots.id,
-      manifest_hash: snapshots.manifestHash,
-    })
-      .from(snapshots)
-      .where(eq(snapshots.id, sourceSnapshotId)),
-  ]);
-
-  const workspaceSnapshot = snapshotResults[0];
-  const sourceSnapshot = sourceSnapshotResults[0];
-
-  if (!workspaceSnapshot || !sourceSnapshot) {
-    return c.json({
-      drift: null,
-      is_main_workspace: false,
-      message: 'Snapshot data not found'
     });
   }
 
@@ -427,18 +565,34 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   const driftReport: DriftReport = {
     id: driftId,
     workspace_id: workspaceId,
-    main_workspace_id: sourceWorkspace.id, // The workspace we compared against
+    source_workspace_id: sourceWorkspace.id, // The workspace we compared against
     compared_at: now,
-    workspace_snapshot_id: workspaceSnapshotId,
-    main_snapshot_id: sourceSnapshotId,
-    main_only: comparison.main_only,
+    workspace_snapshot_id: workspaceSnapshot.snapshot_id,
+    source_snapshot_id: sourceSnapshot.snapshot_id,
+    source_only: comparison.source_only,
     workspace_only: comparison.workspace_only,
     both_same: comparison.both_same,
     both_different: comparison.both_different,
-    total_drift_files: comparison.main_only.length + comparison.both_different.length,
+    total_drift_files: comparison.source_only.length + comparison.both_different.length,
     has_overlaps: comparison.both_different.length > 0,
+    overlap_ratio: computeOverlapRatio(comparison.source_only.length, comparison.both_different.length),
+    risk_level: computeRiskLevel(comparison.source_only.length, comparison.both_different.length),
+    staleness_hours: 0,
+    top_overlap_files: comparison.both_different.slice(0, TOP_OVERLAP_LIMIT),
+    counts_by_ext: {
+      source_only: countByExt(comparison.source_only),
+      workspace_only: countByExt(comparison.workspace_only),
+      both_different: countByExt(comparison.both_different),
+    },
+    large_files_changed: computeLargeFilesChanged(
+      workspaceManifest,
+      sourceManifest,
+      comparison.source_only,
+      comparison.workspace_only,
+      comparison.both_different
+    ),
     // Legacy fields
-    files_added: comparison.main_only.length,
+    files_added: comparison.source_only.length,
     files_modified: comparison.both_different.length,
     files_deleted: 0, // Not applicable for sync comparison
     bytes_changed: 0,
@@ -449,7 +603,14 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   await db.insert(driftReports).values({
     id: driftId,
     workspaceId: workspaceId,
-    filesAdded: comparison.main_only.length,
+    sourceWorkspaceId: sourceWorkspace.id,
+    workspaceSnapshotId: workspaceSnapshot.snapshot_id,
+    sourceSnapshotId: sourceSnapshot.snapshot_id,
+    sourceOnly: JSON.stringify(comparison.source_only),
+    workspaceOnly: JSON.stringify(comparison.workspace_only),
+    bothSame: JSON.stringify(comparison.both_same),
+    bothDifferent: JSON.stringify(comparison.both_different),
+    filesAdded: comparison.source_only.length,
     filesModified: comparison.both_different.length,
     filesDeleted: 0,
     bytesChanged: 0,
@@ -458,7 +619,14 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
   }).onConflictDoUpdate({
     target: driftReports.id,
     set: {
-      filesAdded: comparison.main_only.length,
+      sourceWorkspaceId: sourceWorkspace.id,
+      workspaceSnapshotId: workspaceSnapshot.snapshot_id,
+      sourceSnapshotId: sourceSnapshot.snapshot_id,
+      sourceOnly: JSON.stringify(comparison.source_only),
+      workspaceOnly: JSON.stringify(comparison.workspace_only),
+      bothSame: JSON.stringify(comparison.both_same),
+      bothDifferent: JSON.stringify(comparison.both_different),
+      filesAdded: comparison.source_only.length,
       filesModified: comparison.both_different.length,
       reportedAt: now,
     },
@@ -482,6 +650,7 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
   }
 
   const workspaceId = c.req.param('workspaceId');
+  const includeDirty = c.req.query('include_dirty') === 'true';
   const db = createDb(c.env.DB);
 
   // Fetch workspace with project info
@@ -491,6 +660,7 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
       project_id: workspaces.projectId,
       name: workspaces.name,
       base_snapshot_id: workspaces.baseSnapshotId,
+      current_manifest_hash: workspaces.currentManifestHash,
       main_workspace_id: projects.mainWorkspaceId,
       owner_user_id: projects.ownerUserId,
     })
@@ -527,6 +697,7 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
       id: workspaces.id,
       name: workspaces.name,
       base_snapshot_id: workspaces.baseSnapshotId,
+      current_manifest_hash: workspaces.currentManifestHash,
     })
     .from(workspaces)
     .where(eq(workspaces.id, workspace.main_workspace_id))
@@ -541,30 +712,30 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
     });
   }
 
-  // Get snapshot manifest hashes
-  const workspaceSnapshotId = workspace.base_snapshot_id;
-  const mainSnapshotId = mainWorkspace.base_snapshot_id;
+  const resolveManifest = async (ws: { id: string; current_manifest_hash: string | null }) => {
+    if (includeDirty && ws.current_manifest_hash) {
+      return { manifest_hash: ws.current_manifest_hash };
+    }
 
-  if (!workspaceSnapshotId || !mainSnapshotId) {
+    const snapshotResult = await db
+      .select({ manifest_hash: snapshots.manifestHash })
+      .from(snapshots)
+      .where(eq(snapshots.workspaceId, ws.id))
+      .orderBy(desc(snapshots.createdAt))
+      .limit(1);
+
+    return { manifest_hash: snapshotResult[0]?.manifest_hash };
+  };
+
+  const [workspaceSnapshot, mainSnapshot] = await Promise.all([
+    resolveManifest({ id: workspace.id, current_manifest_hash: workspace.current_manifest_hash }),
+    resolveManifest({ id: mainWorkspace.id, current_manifest_hash: mainWorkspace.current_manifest_hash }),
+  ]);
+
+  if (!workspaceSnapshot.manifest_hash || !mainSnapshot.manifest_hash) {
     return c.json({
       analysis: null,
       error: 'One or both workspaces have no snapshot'
-    });
-  }
-
-  // Get snapshot manifest hashes
-  const [snapshotResults, mainSnapshotResults] = await Promise.all([
-    db.select({ manifest_hash: snapshots.manifestHash }).from(snapshots).where(eq(snapshots.id, workspaceSnapshotId)),
-    db.select({ manifest_hash: snapshots.manifestHash }).from(snapshots).where(eq(snapshots.id, mainSnapshotId)),
-  ]);
-
-  const workspaceSnapshot = snapshotResults[0];
-  const mainSnapshot = mainSnapshotResults[0];
-
-  if (!workspaceSnapshot || !mainSnapshot) {
-    return c.json({
-      analysis: null,
-      error: 'Snapshot data not found'
     });
   }
 
@@ -604,9 +775,9 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
   const comparison = compareDrift(workspaceManifest, mainManifest);
 
   // If no drift, return a simple analysis
-  if (comparison.main_only.length === 0 && comparison.both_different.length === 0) {
+  if (comparison.source_only.length === 0 && comparison.both_different.length === 0) {
     const analysis: DriftAnalysis = {
-      main_changes_summary: 'No new changes in main',
+      source_changes_summary: 'No new changes in source workspace',
       workspace_changes_summary: comparison.workspace_only.length > 0
         ? `${comparison.workspace_only.length} files unique to your workspace`
         : 'No unique changes in your workspace',
@@ -621,12 +792,29 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
   }
 
   // Build AI prompt
+  const overlapRatio = computeOverlapRatio(comparison.source_only.length, comparison.both_different.length);
+  const countsByExt = {
+    source_only: countByExt(comparison.source_only),
+    workspace_only: countByExt(comparison.workspace_only),
+    both_different: countByExt(comparison.both_different),
+  };
+  const largeFilesChanged = computeLargeFilesChanged(
+    workspaceManifest,
+    mainManifest,
+    comparison.source_only,
+    comparison.workspace_only,
+    comparison.both_different
+  );
+
   const prompt = buildDriftAnalysisPrompt(
     workspace.name,
     mainWorkspace.name,
-    comparison.main_only,
+    comparison.source_only,
     comparison.workspace_only,
-    comparison.both_different
+    comparison.both_different,
+    overlapRatio,
+    countsByExt,
+    largeFilesChanged
   );
 
   try {
@@ -651,7 +839,7 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
 
     // Return a fallback analysis
     const analysis: DriftAnalysis = {
-      main_changes_summary: `${comparison.main_only.length} new files in main`,
+      source_changes_summary: `${comparison.source_only.length} new files in source workspace`,
       workspace_changes_summary: `${comparison.workspace_only.length} files unique to workspace`,
       risk_level: comparison.both_different.length > 5 ? 'high' : comparison.both_different.length > 0 ? 'medium' : 'low',
       risk_explanation: comparison.both_different.length > 0
@@ -1870,13 +2058,20 @@ function generateULID(): string {
 // Helper: Build AI prompt for drift analysis
 function buildDriftAnalysisPrompt(
   workspaceName: string,
-  mainWorkspaceName: string,
-  mainOnly: string[],
+  sourceWorkspaceName: string,
+  sourceOnly: string[],
   workspaceOnly: string[],
-  bothDifferent: string[]
+  bothDifferent: string[],
+  overlapRatio: number,
+  countsByExt: {
+    source_only: Record<string, number>;
+    workspace_only: Record<string, number>;
+    both_different: Record<string, number>;
+  },
+  largeFilesChanged: boolean
 ): string {
-  const mainOnlyList = mainOnly.length > 0
-    ? mainOnly.slice(0, 20).join('\n') + (mainOnly.length > 20 ? `\n... and ${mainOnly.length - 20} more` : '')
+  const sourceOnlyList = sourceOnly.length > 0
+    ? sourceOnly.slice(0, 20).join('\n') + (sourceOnly.length > 20 ? `\n... and ${sourceOnly.length - 20} more` : '')
     : 'None';
 
   const workspaceOnlyList = workspaceOnly.length > 0
@@ -1890,12 +2085,12 @@ function buildDriftAnalysisPrompt(
   return `You are analyzing the differences between two workspaces in a software project.
 
 WORKSPACE: "${workspaceName}" (the workspace being analyzed)
-MAIN: "${mainWorkspaceName}" (the source of truth)
+SOURCE: "${sourceWorkspaceName}" (the workspace being compared against)
 
-## Files only in main (workspace is missing these):
-${mainOnlyList}
+## Files only in source (workspace is missing these):
+${sourceOnlyList}
 
-## Files only in workspace (not in main):
+## Files only in workspace (not in source):
 ${workspaceOnlyList}
 
 ## Files that differ between both:
@@ -1903,10 +2098,18 @@ ${bothDifferentList}
 
 ## Task
 
+Additional metrics:
+- overlap_ratio: ${overlapRatio.toFixed(2)}
+- total_drift_files: ${sourceOnly.length + bothDifferent.length}
+- counts_by_ext (source_only): ${JSON.stringify(countsByExt.source_only)}
+- counts_by_ext (workspace_only): ${JSON.stringify(countsByExt.workspace_only)}
+- counts_by_ext (both_different): ${JSON.stringify(countsByExt.both_different)}
+- large_files_changed: ${largeFilesChanged}
+
 Provide a concise analysis in this EXACT JSON format (no other text):
 
 {
-  "main_changes_summary": "1-2 sentence summary of what's new in main",
+  "source_changes_summary": "1-2 sentence summary of what's new in source",
   "workspace_changes_summary": "1-2 sentence summary of workspace-specific changes",
   "risk_level": "low" or "medium" or "high",
   "risk_explanation": "1 sentence explaining the risk level",
@@ -1925,7 +2128,7 @@ Guidelines:
 // Helper: Parse AI response into DriftAnalysis
 function parseAIAnalysisResponse(
   aiResponse: string,
-  comparison: { main_only: string[]; workspace_only: string[]; both_different: string[] }
+  comparison: { source_only: string[]; workspace_only: string[]; both_different: string[] }
 ): DriftAnalysis {
   try {
     // Try to extract JSON from the response
@@ -1934,7 +2137,7 @@ function parseAIAnalysisResponse(
       const parsed = JSON.parse(jsonMatch[0]);
 
       return {
-        main_changes_summary: parsed.main_changes_summary || `${comparison.main_only.length} new files in main`,
+        source_changes_summary: parsed.source_changes_summary || parsed.main_changes_summary || `${comparison.source_only.length} new files in source workspace`,
         workspace_changes_summary: parsed.workspace_changes_summary || `${comparison.workspace_only.length} files unique to workspace`,
         risk_level: ['low', 'medium', 'high'].includes(parsed.risk_level) ? parsed.risk_level : 'medium',
         risk_explanation: parsed.risk_explanation || 'Analysis could not determine specific risks',
@@ -1949,7 +2152,7 @@ function parseAIAnalysisResponse(
 
   // Fallback if parsing fails
   return {
-    main_changes_summary: `${comparison.main_only.length} new files in main`,
+    source_changes_summary: `${comparison.source_only.length} new files in source workspace`,
     workspace_changes_summary: `${comparison.workspace_only.length} files unique to workspace`,
     risk_level: comparison.both_different.length > 5 ? 'high' : comparison.both_different.length > 0 ? 'medium' : 'low',
     risk_explanation: comparison.both_different.length > 0
@@ -1961,6 +2164,68 @@ function parseAIAnalysisResponse(
       : 'Review the modified files before syncing',
     analyzed_at: new Date().toISOString(),
   };
+}
+
+function computeOverlapRatio(sourceOnlyCount: number, bothDifferentCount: number): number {
+  const total = sourceOnlyCount + bothDifferentCount;
+  if (total === 0) return 0;
+  return bothDifferentCount / total;
+}
+
+function computeRiskLevel(sourceOnlyCount: number, bothDifferentCount: number): 'low' | 'medium' | 'high' {
+  if (bothDifferentCount === 0) return 'low';
+  const ratio = computeOverlapRatio(sourceOnlyCount, bothDifferentCount);
+  if (bothDifferentCount >= 10 || ratio >= 0.6) return 'high';
+  return 'medium';
+}
+
+function computeStalenessHours(comparedAt: string): number {
+  const compared = Date.parse(comparedAt);
+  if (Number.isNaN(compared)) return 0;
+  const diffMs = Date.now() - compared;
+  return Math.max(0, Math.round((diffMs / 36e5) * 10) / 10);
+}
+
+function countByExt(paths: string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const path of paths) {
+    const ext = getExtension(path);
+    counts[ext] = (counts[ext] || 0) + 1;
+  }
+  return counts;
+}
+
+function getExtension(path: string): string {
+  const lastSlash = path.lastIndexOf('/');
+  const lastDot = path.lastIndexOf('.');
+  if (lastDot <= lastSlash) return 'none';
+  return path.slice(lastDot).toLowerCase();
+}
+
+function computeLargeFilesChanged(
+  workspaceManifest: Manifest,
+  sourceManifest: Manifest,
+  sourceOnly: string[],
+  workspaceOnly: string[],
+  bothDifferent: string[]
+): boolean {
+  const workspaceSizes = new Map<string, number>();
+  for (const f of workspaceManifest.files) {
+    workspaceSizes.set(f.path, f.size || 0);
+  }
+  const sourceSizes = new Map<string, number>();
+  for (const f of sourceManifest.files) {
+    sourceSizes.set(f.path, f.size || 0);
+  }
+
+  const all = [...sourceOnly, ...workspaceOnly, ...bothDifferent];
+  for (const path of all) {
+    const size = Math.max(workspaceSizes.get(path) || 0, sourceSizes.get(path) || 0);
+    if (size >= LARGE_FILE_BYTES) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Helper: Analyze file differences with AI

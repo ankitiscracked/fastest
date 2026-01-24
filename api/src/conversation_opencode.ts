@@ -1,5 +1,7 @@
 import type { DurableObjectState } from 'cloudflare:workers';
 import type { Env } from './index';
+import { createDb, workspaces, snapshots } from './db';
+import { desc, eq } from 'drizzle-orm';
 import type { ConversationState, SandboxRunner } from './conversation_types';
 import type { ConversationFiles } from './conversation_files';
 import type { ConversationSandbox } from './conversation_sandbox';
@@ -73,6 +75,12 @@ export class ConversationOpenCode {
     const workDir = this.sandbox.getSandboxWorkDir(sandbox);
 
     try {
+      const currentManifestHash = await this.getWorkspaceCurrentManifestHash(state.workspaceId);
+      if (currentManifestHash && currentManifestHash !== state.lastManifestHash) {
+        state.lastManifestHash = currentManifestHash;
+        await this.ctx.storage.put('state', state);
+      }
+
       if (state.lastManifestHash) {
         try {
           await this.files.restoreFiles(sandbox, apiUrl, apiToken, state.lastManifestHash, workDir);
@@ -138,6 +146,29 @@ export class ConversationOpenCode {
       });
       throw err;
     }
+  }
+
+  private async getWorkspaceCurrentManifestHash(workspaceId: string): Promise<string | undefined> {
+    const db = createDb(this.env.DB);
+    const workspaceResult = await db
+      .select({
+        current_manifest_hash: workspaces.currentManifestHash,
+      })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    const currentManifestHash = workspaceResult[0]?.current_manifest_hash || undefined;
+    if (currentManifestHash) {
+      return currentManifestHash;
+    }
+
+    const snapshotResult = await db
+      .select({ manifest_hash: snapshots.manifestHash })
+      .from(snapshots)
+      .where(eq(snapshots.workspaceId, workspaceId))
+      .orderBy(desc(snapshots.createdAt))
+      .limit(1);
+    return snapshotResult[0]?.manifest_hash;
   }
 
   /**

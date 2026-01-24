@@ -510,6 +510,13 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     createdAt: now,
   });
 
+  if (body.workspace_id) {
+    await db
+      .update(workspaces)
+      .set({ currentManifestHash: body.content_hash })
+      .where(eq(workspaces.id, body.workspace_id));
+  }
+
   // Update project's last_snapshot_id and updated_at
   await db
     .update(projects)

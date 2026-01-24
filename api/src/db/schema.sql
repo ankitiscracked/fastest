@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   name TEXT NOT NULL,
   machine_id TEXT,
   base_snapshot_id TEXT REFERENCES snapshots(id),
+  current_manifest_hash TEXT,
   local_path TEXT,
   last_seen_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -92,15 +93,15 @@ CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id, crea
 CREATE TABLE IF NOT EXISTS drift_reports (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  main_workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  source_workspace_id TEXT REFERENCES workspaces(id),
 
   -- What we compared
-  compared_at TEXT NOT NULL DEFAULT (datetime('now')),
+  reported_at TEXT NOT NULL DEFAULT (datetime('now')),
   workspace_snapshot_id TEXT REFERENCES snapshots(id),  -- null = current files
-  main_snapshot_id TEXT REFERENCES snapshots(id),       -- null = current files
+  source_snapshot_id TEXT REFERENCES snapshots(id),       -- null = current files
 
   -- File categorization (stored as JSON arrays)
-  main_only TEXT NOT NULL DEFAULT '[]',           -- JSON array of file paths
+  source_only TEXT NOT NULL DEFAULT '[]',         -- JSON array of file paths
   workspace_only TEXT NOT NULL DEFAULT '[]',      -- JSON array of file paths
   both_same TEXT NOT NULL DEFAULT '[]',           -- JSON array of file paths
   both_different TEXT NOT NULL DEFAULT '[]',      -- JSON array of file paths
@@ -113,7 +114,7 @@ CREATE TABLE IF NOT EXISTS drift_reports (
   summary TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_drift_reports_workspace ON drift_reports(workspace_id, compared_at DESC);
+CREATE INDEX IF NOT EXISTS idx_drift_reports_workspace ON drift_reports(workspace_id, reported_at DESC);
 
 -- Activity events
 CREATE TABLE IF NOT EXISTS activity_events (

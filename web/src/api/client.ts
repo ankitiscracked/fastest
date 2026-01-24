@@ -71,6 +71,7 @@ export type StreamEvent =
   | { type: 'deployment_started'; deployment: Deployment }
   | { type: 'deployment_log'; deploymentId: string; entry: DeploymentLogEntry }
   | { type: 'deployment_complete'; deployment: Deployment }
+  | { type: 'warning'; warning: string }
   | { type: 'error'; error: string };
 
 class ApiClient {

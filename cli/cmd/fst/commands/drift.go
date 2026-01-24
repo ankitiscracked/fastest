@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
+	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
@@ -28,25 +29,18 @@ func newDriftCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "drift [workspace]",
 		Short: "Show divergence from upstream or another workspace",
-		Long: `Show how this workspace has diverged from its upstream or another workspace.
+		Long: `Show drift between this workspace and another workspace.
 
-Without arguments, shows divergence from the upstream workspace (the workspace
-that created this workspace's base snapshot).
+By default, drift compares the latest snapshots for each workspace.
+Use --include-dirty to include uncommitted local changes (current files).
 
-With a workspace argument, shows divergence from that workspace:
+With a workspace argument, compares against that workspace:
   - If the argument contains '/' or starts with '.', it's treated as a path
   - Otherwise, it's treated as a workspace name (looked up in the registry)
 
-When comparing workspaces that share a common ancestor, shows:
-  - What we changed since the common base
-  - What they changed since the common base
-  - Which files overlap (potential merge conflicts)
-
-This helps you merge early to avoid complex conflicts in agentic workflows.
-
 Examples:
-  fst drift                    # Divergence from upstream workspace
-  fst drift main               # Divergence from workspace named "main"
+  fst drift                    # Drift vs main workspace (latest snapshots)
+  fst drift main               # Drift vs workspace named "main"
   fst drift ../other-project   # Divergence from workspace at path
   fst drift --json             # Output as JSON
   fst drift --summary          # Generate AI summary of divergence`,
@@ -185,30 +179,19 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 		return fmt.Errorf("workspace no longer exists: %s", otherRoot)
 	}
 
-	// Compute divergence
-	report, err := drift.ComputeDivergence(root, otherRoot, includeDirty)
+	ourManifest, ourRef, err := loadWorkspaceManifest(root, includeDirty)
 	if err != nil {
-		return fmt.Errorf("failed to compute divergence: %w", err)
+		return fmt.Errorf("failed to load current workspace manifest: %w", err)
+	}
+	theirManifest, theirRef, err := loadWorkspaceManifest(otherRoot, includeDirty)
+	if err != nil {
+		return fmt.Errorf("failed to load comparison workspace manifest: %w", err)
 	}
 
-	// Generate summary if requested
-	if generateSummary && (report.OurChanges.HasChanges() || (report.TheirChanges != nil && report.TheirChanges.HasChanges())) {
-		preferredAgent, err := agent.GetPreferredAgent()
-		if err != nil {
-			fmt.Printf("Warning: %v\n", err)
-		} else {
-			fmt.Printf("Generating summary with %s...\n", preferredAgent.Name)
-			summary, err := generateDivergenceSummary(root, report, preferredAgent)
-			if err != nil {
-				fmt.Printf("Warning: Failed to generate summary: %v\n", err)
-			} else {
-				report.Summary = summary
-			}
-		}
-	}
+	report := drift.CompareManifests(ourManifest, theirManifest)
 
 	// Sync to cloud if requested
-	if syncToCloud && report.OurChanges != nil {
+	if syncToCloud {
 		token, err := auth.GetToken()
 		if err != nil || token == "" {
 			return fmt.Errorf("not logged in - run 'fst login' first")
@@ -217,10 +200,10 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 		client := api.NewClient(token)
 		err = client.ReportDrift(
 			cfg.WorkspaceID,
-			len(report.OurChanges.FilesAdded),
-			len(report.OurChanges.FilesModified),
-			len(report.OurChanges.FilesDeleted),
-			report.OurChanges.BytesChanged,
+			len(report.FilesAdded),
+			len(report.FilesModified),
+			len(report.FilesDeleted),
+			report.BytesChanged,
 			report.Summary,
 		)
 		if err != nil {
@@ -244,72 +227,46 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 
 	// Human-readable output
 	fmt.Printf("Comparing: %s <-> %s\n", cfg.WorkspaceName, otherName)
-	if report.HasCommonAncestor {
-		fmt.Printf("Common ancestor: %s\n", report.CommonAncestorID)
+	if includeDirty {
+		fmt.Printf("Mode: current files (%s vs %s)\n", ourRef, theirRef)
 	} else {
-		fmt.Println()
-		fmt.Println("\033[33m⚠ No common ancestor found.\033[0m")
-		fmt.Println("  Cannot determine who changed what - showing file differences only.")
-		fmt.Println("  Merge may require manual conflict resolution.")
+		fmt.Printf("Mode: latest snapshots (%s vs %s)\n", ourRef, theirRef)
 	}
 	fmt.Println()
 
-	// Check if in sync
-	ourHasChanges := report.OurChanges != nil && report.OurChanges.HasChanges()
-	theirHasChanges := report.TheirChanges != nil && report.TheirChanges.HasChanges()
-
-	if !ourHasChanges && !theirHasChanges {
+	if !report.HasChanges() {
 		fmt.Println("Workspaces are in sync.")
 		return nil
 	}
 
-	if report.HasCommonAncestor {
-		// Show our changes
-		if ourHasChanges {
-			fmt.Printf("Our changes (since %s):\n", report.CommonAncestorID)
-			printChanges(report.OurChanges)
-			fmt.Println()
-		} else {
-			fmt.Println("We have no changes.")
-			fmt.Println()
-		}
+	printChanges(report)
 
-		// Show their changes
-		if theirHasChanges {
-			fmt.Printf("Their changes (since %s):\n", report.CommonAncestorID)
-			printChanges(report.TheirChanges)
-			fmt.Println()
-		} else {
-			fmt.Println("They have no changes.")
-			fmt.Println()
-		}
-	} else {
-		// No common ancestor - show simple diff
-		if ourHasChanges {
-			fmt.Println("Files different between workspaces:")
-			printChanges(report.OurChanges)
-			fmt.Println()
-		}
-	}
-
-	// Highlight overlapping files
-	if len(report.OverlappingFiles) > 0 {
-		fmt.Printf("⚠ Overlapping files (%d) - potential merge conflicts:\n", len(report.OverlappingFiles))
-		for _, f := range report.OverlappingFiles {
-			fmt.Printf("  \033[31m! %s\033[0m\n", f)
-		}
+	if generateSummary {
 		fmt.Println()
-		fmt.Println("Consider merging soon to avoid complex conflicts:")
-		fmt.Printf("  fst merge %s\n", target)
-	}
-
-	// Show summary if generated
-	if report.Summary != "" {
-		fmt.Println()
-		fmt.Printf("Summary:\n  %s\n", report.Summary)
+		fmt.Println("Summary generation is not supported for snapshot-based drift yet.")
 	}
 
 	return nil
+}
+
+func loadWorkspaceManifest(root string, includeDirty bool) (*manifest.Manifest, string, error) {
+	if includeDirty {
+		current, err := manifest.Generate(root, false)
+		if err != nil {
+			return nil, "", err
+		}
+		return current, "current", nil
+	}
+
+	snapshotID, _ := config.GetLatestSnapshotIDAt(root)
+	if snapshotID == "" {
+		return nil, "", fmt.Errorf("no snapshots found")
+	}
+	m, err := drift.LoadManifestFromSnapshots(root, snapshotID)
+	if err != nil {
+		return nil, "", err
+	}
+	return m, snapshotID, nil
 }
 
 // runDriftFromBase shows drift from base snapshot (when no upstream is available)

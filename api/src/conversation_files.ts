@@ -100,7 +100,14 @@ export class ConversationFiles {
 
     if (!wsResponse.ok) return;
 
-    const { workspace } = await wsResponse.json() as { workspace: { base_snapshot_id?: string } };
+    const { workspace } = await wsResponse.json() as { workspace: { base_snapshot_id?: string; current_manifest_hash?: string } };
+
+    if (workspace.current_manifest_hash) {
+      await this.restoreFiles(sandbox, apiUrl, apiToken, workspace.current_manifest_hash, workDir);
+      state.lastManifestHash = workspace.current_manifest_hash;
+      await this.persistState(state);
+      return;
+    }
 
     if (workspace.base_snapshot_id) {
       const snapResponse = await fetch(`${apiUrl}/v1/snapshots/${workspace.base_snapshot_id}`, {

@@ -13,6 +13,8 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './index';
 import type { TimelineItem, FileChange, DeploymentLogEntry, DeploymentLog } from '@fastest/shared';
 import type { ConversationState, Message, Deployment, ProjectInfo } from './conversation_types';
+import { createDb, workspaces, activityEvents } from './db';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import { ConversationFiles } from './conversation_files';
 import { ConversationDeployments } from './conversation_deploy';
 import { ConversationOpenCode } from './conversation_opencode';
@@ -36,6 +38,7 @@ type StreamEvent =
   | { type: 'deployment_started'; deployment: Deployment }
   | { type: 'deployment_log'; deploymentId: string; entry: DeploymentLogEntry }
   | { type: 'deployment_complete'; deployment: Deployment }
+  | { type: 'warning'; warning: string }
   | { type: 'error'; error: string };
 
 export class ConversationSession extends DurableObject<Env> {
@@ -97,7 +100,12 @@ export class ConversationSession extends DurableObject<Env> {
   /**
    * Initialize a new conversation
    */
-  async init(conversationId: string, workspaceId: string, projectId: string): Promise<ConversationState> {
+  async init(
+    conversationId: string,
+    workspaceId: string,
+    projectId: string,
+    initialManifestHash?: string
+  ): Promise<ConversationState> {
     const existing = await this.ctx.storage.get<ConversationState>('state');
     if (existing) {
       this.state = existing;
@@ -117,6 +125,7 @@ export class ConversationSession extends DurableObject<Env> {
       autoCommitOnClear: false,
       createdAt: now,
       updatedAt: now,
+      lastManifestHash: initialManifestHash,
     };
 
     await this.ctx.storage.put('state', this.state);
@@ -167,12 +176,13 @@ export class ConversationSession extends DurableObject<Env> {
 
     // REST endpoints
     if (url.pathname === '/init' && request.method === 'POST') {
-      const { conversationId, workspaceId, projectId } = await request.json() as {
+      const { conversationId, workspaceId, projectId, initialManifestHash } = await request.json() as {
         conversationId: string;
         workspaceId: string;
         projectId: string;
+        initialManifestHash?: string;
       };
-      const state = await this.init(conversationId, workspaceId, projectId);
+      const state = await this.init(conversationId, workspaceId, projectId, initialManifestHash);
       return Response.json({ state });
     }
 
@@ -446,6 +456,7 @@ export class ConversationSession extends DurableObject<Env> {
       assistantMessage.filesChanged = fileChanges.map(f => f.path);
       if (manifestHash) {
         state.lastManifestHash = manifestHash;
+        await this.updateWorkspaceCurrentManifest(state.workspaceId, manifestHash, previousManifestHash);
       }
 
       if (fileChanges.length > 0) {
@@ -575,6 +586,65 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
       // Still broadcast the fallback
       this.broadcast({ type: 'timeline_summary', itemId, summary: item.summary });
     }
+  }
+
+  private async updateWorkspaceCurrentManifest(
+    workspaceId: string,
+    manifestHash: string,
+    previousManifestHash?: string
+  ): Promise<void> {
+    const db = createDb(this.env.DB);
+    const now = new Date().toISOString();
+
+    const allowOverwrite = previousManifestHash
+      ? or(
+          isNull(workspaces.currentManifestHash),
+          eq(workspaces.currentManifestHash, previousManifestHash)
+        )
+      : isNull(workspaces.currentManifestHash);
+
+    const updateResult = await db
+      .update(workspaces)
+      .set({
+        currentManifestHash: manifestHash,
+        lastSeenAt: now,
+      })
+      .where(and(eq(workspaces.id, workspaceId), allowOverwrite))
+      .returning({ current_manifest_hash: workspaces.currentManifestHash });
+
+    if (updateResult.length > 0) {
+      return;
+    }
+
+    // Conflict: another session updated the workspace state first.
+    const currentResult = await db
+      .select({
+        current_manifest_hash: workspaces.currentManifestHash,
+      })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+
+    const latestHash = currentResult[0]?.current_manifest_hash || undefined;
+    if (!latestHash || latestHash === manifestHash) {
+      return;
+    }
+
+    const state = await this.ensureState();
+    state.lastManifestHash = latestHash;
+    await this.ctx.storage.put('state', state);
+
+    await db.insert(activityEvents).values({
+      id: crypto.randomUUID(),
+      projectId: state.projectId,
+      workspaceId,
+      actor: 'system',
+      type: 'workspace.out_of_date',
+      message: 'Workspace updated by another session. Reloaded latest workspace state.',
+      createdAt: now,
+    });
+
+    this.broadcast({ type: 'warning', warning: 'Workspace updated elsewhere. Reloaded latest state.' });
   }
 
   /**

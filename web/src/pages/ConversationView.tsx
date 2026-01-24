@@ -182,6 +182,7 @@ export function ConversationView() {
 
   // UI state
   const [loading, setLoading] = useState(true);
+  const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runningMessageId, setRunningMessageId] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState<string>('');
@@ -462,8 +463,13 @@ export function ConversationView() {
 
       case 'error':
         setError(formatErrorMessage(event.error));
+        setWarning(null);
         setRunningMessageId(null);
         setStreamingContent('');
+        break;
+
+      case 'warning':
+        setWarning(event.warning);
         break;
     }
   };
@@ -793,6 +799,13 @@ export function ConversationView() {
       {error && (
         <div className="bg-status-error/10 border-b border-status-error/20 px-4 py-3">
           <p className="text-sm text-status-error">{error}</p>
+        </div>
+      )}
+
+      {/* Warning banner */}
+      {warning && !error && (
+        <div className="bg-status-warning/10 border-b border-status-warning/20 px-4 py-3">
+          <p className="text-sm text-status-warning">{warning}</p>
         </div>
       )}
 

@@ -414,6 +414,20 @@ func LoadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, err
 	return manifest.FromJSON(data)
 }
 
+// CompareManifests compares two manifests and returns a drift report.
+// The comparison treats "current" as the upstream/source and "base" as the local workspace.
+// Added files are present in current but not in base (source_only).
+func CompareManifests(base, current *manifest.Manifest) *Report {
+	added, modified, deleted := manifest.Diff(base, current)
+	bytesChanged := calculateBytesChanged(base, current, added, modified, deleted)
+	return &Report{
+		FilesAdded:    added,
+		FilesModified: modified,
+		FilesDeleted:  deleted,
+		BytesChanged:  bytesChanged,
+	}
+}
+
 // HasChanges returns true if there are any changes
 func (r *Report) HasChanges() bool {
 	return len(r.FilesAdded) > 0 || len(r.FilesModified) > 0 || len(r.FilesDeleted) > 0

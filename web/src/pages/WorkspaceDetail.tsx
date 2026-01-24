@@ -642,8 +642,8 @@ export function WorkspaceDetail() {
                   <p className="text-surface-700">
                     {drift && drift.total_drift_files > 0 ? (
                       <>
-                        This workspace has <span className="font-medium">{drift.total_drift_files} file{drift.total_drift_files !== 1 ? 's' : ''}</span> different from main.
-                        {drift.main_only.length > 0 && ` ${drift.main_only.length} new in main.`}
+                        This workspace has <span className="font-medium">{drift.total_drift_files} file{drift.total_drift_files !== 1 ? 's' : ''}</span> different from the source workspace.
+                        {drift.source_only.length > 0 && ` ${drift.source_only.length} new in source.`}
                         {drift.both_different.length > 0 && ` ${drift.both_different.length} modified.`}
                         {drift.workspace_only.length > 0 && ` ${drift.workspace_only.length} only here.`}
                       </>
@@ -689,20 +689,20 @@ export function WorkspaceDetail() {
             )}
           </div>
 
-          {/* Differences from Main (for branch workspaces with differences) */}
+          {/* Differences from Source (for branch workspaces with differences) */}
           {!isMainWorkspace && drift && drift.total_drift_files > 0 && (
             <div className="bg-white rounded-md border border-yellow-200 p-6">
               <h2 className="text-lg font-medium text-surface-800 flex items-center gap-2 mb-4">
                 <AlertTriangle className="w-5 h-5 text-yellow-600" />
-                Differences from Main
+                Differences from Source
               </h2>
 
               {/* Summary counts */}
               <div className="flex gap-4 text-sm mb-4">
-                {drift.main_only.length > 0 && (
+                {drift.source_only.length > 0 && (
                   <div className="flex items-center gap-1.5 text-blue-600">
                     <FilePlus className="w-4 h-4" />
-                    <span>{drift.main_only.length} new in main</span>
+                    <span>{drift.source_only.length} new in source</span>
                   </div>
                 )}
                 {drift.both_different.length > 0 && (
@@ -721,22 +721,22 @@ export function WorkspaceDetail() {
 
               {/* Expandable file lists */}
               <div className="space-y-2">
-                {drift.main_only.length > 0 && (
+                {drift.source_only.length > 0 && (
                   <FileListSection
-                    title="New in main"
-                    description="Files added to main that you don't have"
-                    files={drift.main_only}
+                    title="New in source"
+                    description="Files added to the source workspace that you don't have"
+                    files={drift.source_only}
                     icon={<FilePlus className="w-4 h-4 text-blue-600" />}
                     bgColor="bg-blue-50"
                     textColor="text-blue-700"
-                    isExpanded={expandedDriftSection === 'main_only'}
-                    onToggle={() => setExpandedDriftSection(expandedDriftSection === 'main_only' ? null : 'main_only')}
+                    isExpanded={expandedDriftSection === 'source_only'}
+                    onToggle={() => setExpandedDriftSection(expandedDriftSection === 'source_only' ? null : 'source_only')}
                   />
                 )}
                 {drift.both_different.length > 0 && (
                   <FileListSection
                     title="Modified"
-                    description="Files that differ between workspace and main"
+                    description="Files that differ between workspace and source"
                     files={drift.both_different}
                     icon={<FileWarning className="w-4 h-4 text-yellow-600" />}
                     bgColor="bg-yellow-50"
@@ -748,7 +748,7 @@ export function WorkspaceDetail() {
                 {drift.workspace_only.length > 0 && (
                   <FileListSection
                     title="Only in workspace"
-                    description="Files you have that aren't in main"
+                    description="Files you have that aren't in source"
                     files={drift.workspace_only}
                     icon={<FileText className="w-4 h-4 text-surface-500" />}
                     bgColor="bg-surface-50"
@@ -822,7 +822,7 @@ export function WorkspaceDetail() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="p-3 bg-blue-50 rounded-md">
                         <div className="text-xs font-medium text-blue-700 mb-1">Changes in Main</div>
-                        <div className="text-sm text-surface-700">{analysis.main_changes_summary}</div>
+                      <div className="text-sm text-surface-700">{analysis.source_changes_summary}</div>
                       </div>
                       <div className="p-3 bg-purple-50 rounded-md">
                         <div className="text-xs font-medium text-purple-700 mb-1">Changes in Workspace</div>

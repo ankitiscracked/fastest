@@ -217,10 +217,10 @@ export function empty(): Manifest {
  * Result of comparing workspace vs main for drift detection
  */
 export interface DriftComparison {
-  main_only: string[];       // Files in main but not workspace
-  workspace_only: string[];  // Files in workspace but not main
-  both_same: string[];       // Same content in both
-  both_different: string[];  // Different content (potential conflicts)
+  source_only: string[];       // Files in source but not workspace
+  workspace_only: string[];    // Files in workspace but not source
+  both_same: string[];         // Same content in both
+  both_different: string[];    // Different content (potential conflicts)
 }
 
 /**
@@ -228,34 +228,34 @@ export interface DriftComparison {
  * This is different from diff() - it categorizes files into 4 buckets
  * rather than tracking changes from a base.
  */
-export function compareDrift(workspace: Manifest, main: Manifest): DriftComparison {
+export function compareDrift(workspace: Manifest, source: Manifest): DriftComparison {
   const workspaceMap = new Map<string, string>();  // path -> hash
   for (const f of workspace.files) {
     workspaceMap.set(f.path, f.hash);
   }
 
-  const mainMap = new Map<string, string>();  // path -> hash
-  for (const f of main.files) {
-    mainMap.set(f.path, f.hash);
+  const sourceMap = new Map<string, string>();  // path -> hash
+  for (const f of source.files) {
+    sourceMap.set(f.path, f.hash);
   }
 
-  const main_only: string[] = [];
+  const source_only: string[] = [];
   const workspace_only: string[] = [];
   const both_same: string[] = [];
   const both_different: string[] = [];
 
   // Process all paths from both manifests
-  const allPaths = new Set([...workspaceMap.keys(), ...mainMap.keys()]);
+  const allPaths = new Set([...workspaceMap.keys(), ...sourceMap.keys()]);
 
   for (const path of allPaths) {
     const inWorkspace = workspaceMap.has(path);
-    const inMain = mainMap.has(path);
+    const inSource = sourceMap.has(path);
 
-    if (!inWorkspace && inMain) {
-      main_only.push(path);
-    } else if (inWorkspace && !inMain) {
+    if (!inWorkspace && inSource) {
+      source_only.push(path);
+    } else if (inWorkspace && !inSource) {
       workspace_only.push(path);
-    } else if (workspaceMap.get(path) === mainMap.get(path)) {
+    } else if (workspaceMap.get(path) === sourceMap.get(path)) {
       both_same.push(path);
     } else {
       both_different.push(path);
@@ -263,10 +263,10 @@ export function compareDrift(workspace: Manifest, main: Manifest): DriftComparis
   }
 
   // Sort for consistent output
-  main_only.sort();
+  source_only.sort();
   workspace_only.sort();
   both_same.sort();
   both_different.sort();
 
-  return { main_only, workspace_only, both_same, both_different };
+  return { source_only, workspace_only, both_same, both_different };
 }

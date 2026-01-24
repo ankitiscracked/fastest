@@ -54,6 +54,7 @@ export async function runBackgroundJobs(env: Env): Promise<void> {
         workspace_name: workspaces.name,
         project_id: workspaces.projectId,
         base_snapshot_id: workspaces.baseSnapshotId,
+        current_manifest_hash: workspaces.currentManifestHash,
         conversation_id: conversations.id,
         conversation_updated_at: conversations.updatedAt,
         main_workspace_id: projects.mainWorkspaceId,
@@ -119,6 +120,7 @@ async function processWorkspace(
     workspace_name: string;
     project_id: string;
     base_snapshot_id: string | null;
+    current_manifest_hash: string | null;
     conversation_id: string;
     conversation_updated_at: string;
     main_workspace_id: string | null;
@@ -150,17 +152,15 @@ async function processWorkspace(
     return result;
   }
 
-  // Get the workspace's current snapshot manifest hash
+  // Get the workspace's latest snapshot manifest hash
   let existingManifestHash: string | null = null;
-  if (ws.base_snapshot_id) {
-    const snapshotResult = await db
-      .select({ manifest_hash: snapshots.manifestHash })
-      .from(snapshots)
-      .where(eq(snapshots.id, ws.base_snapshot_id))
-      .limit(1);
-
-    existingManifestHash = snapshotResult[0]?.manifest_hash ?? null;
-  }
+  const snapshotResult = await db
+    .select({ id: snapshots.id, manifest_hash: snapshots.manifestHash })
+    .from(snapshots)
+    .where(eq(snapshots.workspaceId, ws.workspace_id))
+    .orderBy(desc(snapshots.createdAt))
+    .limit(1);
+  existingManifestHash = snapshotResult[0]?.manifest_hash ?? null;
 
   // If manifest hasn't changed, nothing to do
   if (currentManifestHash === existingManifestHash) {
@@ -179,7 +179,7 @@ async function processWorkspace(
     projectId: ws.project_id,
     workspaceId: ws.workspace_id,
     manifestHash: currentManifestHash,
-    parentSnapshotId: ws.base_snapshot_id,
+    parentSnapshotId: snapshotResult[0]?.id || null,
     source: 'system', // Auto-created by background job
     createdAt: now,
   });
@@ -187,7 +187,10 @@ async function processWorkspace(
   // Update workspace's base_snapshot_id
   await db
     .update(workspaces)
-    .set({ baseSnapshotId: snapshotId })
+    .set({
+      baseSnapshotId: snapshotId,
+      currentManifestHash: currentManifestHash,
+    })
     .where(eq(workspaces.id, ws.workspace_id));
 
   result.snapshotCreated = true;
@@ -202,7 +205,8 @@ async function processWorkspace(
         ws.workspace_id,
         ws.main_workspace_id,
         ws.owner_user_id,
-        currentManifestHash
+        currentManifestHash,
+        snapshotId
       );
       result.driftUpdated = driftUpdated;
     } catch (err) {
@@ -234,33 +238,23 @@ async function calculateAndStoreDrift(
   workspaceId: string,
   mainWorkspaceId: string,
   userId: string,
-  workspaceManifestHash: string
+  workspaceManifestHash: string,
+  workspaceSnapshotId: string | null
 ): Promise<boolean> {
-  // Get main workspace's snapshot
-  const mainWorkspaceResult = await db
-    .select({
-      base_snapshot_id: workspaces.baseSnapshotId,
-    })
-    .from(workspaces)
-    .where(eq(workspaces.id, mainWorkspaceId))
-    .limit(1);
-
-  const mainSnapshotId = mainWorkspaceResult[0]?.base_snapshot_id;
-  if (!mainSnapshotId) {
-    console.log(`[BackgroundJobs] Main workspace has no snapshot`);
-    return false;
-  }
-
-  // Get main's manifest hash
+  // Get main workspace's latest snapshot manifest hash
   const mainSnapshotResult = await db
-    .select({ manifest_hash: snapshots.manifestHash })
+    .select({
+      id: snapshots.id,
+      manifest_hash: snapshots.manifestHash,
+    })
     .from(snapshots)
-    .where(eq(snapshots.id, mainSnapshotId))
+    .where(eq(snapshots.workspaceId, mainWorkspaceId))
+    .orderBy(desc(snapshots.createdAt))
     .limit(1);
 
   const mainManifestHash = mainSnapshotResult[0]?.manifest_hash;
   if (!mainManifestHash) {
-    console.log(`[BackgroundJobs] Main snapshot has no manifest`);
+    console.log(`[BackgroundJobs] Main workspace has no snapshot`);
     return false;
   }
 
@@ -298,7 +292,14 @@ async function calculateAndStoreDrift(
   await db.insert(driftReports).values({
     id: driftId,
     workspaceId: workspaceId,
-    filesAdded: comparison.main_only.length,
+    sourceWorkspaceId: mainWorkspaceId,
+    workspaceSnapshotId: workspaceSnapshotId,
+    sourceSnapshotId: mainSnapshotResult[0]?.id || null,
+    sourceOnly: JSON.stringify(comparison.source_only),
+    workspaceOnly: JSON.stringify(comparison.workspace_only),
+    bothSame: JSON.stringify(comparison.both_same),
+    bothDifferent: JSON.stringify(comparison.both_different),
+    filesAdded: comparison.source_only.length,
     filesModified: comparison.both_different.length,
     filesDeleted: 0,
     bytesChanged: 0,
@@ -306,7 +307,7 @@ async function calculateAndStoreDrift(
     reportedAt: now,
   });
 
-  console.log(`[BackgroundJobs] Updated drift for workspace ${workspaceId}: +${comparison.main_only.length}, ~${comparison.both_different.length}`);
+  console.log(`[BackgroundJobs] Updated drift for workspace ${workspaceId}: +${comparison.source_only.length}, ~${comparison.both_different.length}`);
   return true;
 }
 
