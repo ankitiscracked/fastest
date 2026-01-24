@@ -11,8 +11,9 @@ import type {
   AutoAction,
   ConflictDecision,
   DecisionOption,
+  MergeRecord,
 } from '@fastest/shared';
-import { compareDrift, fromJSON, getFile } from '@fastest/shared';
+import { compareDrift, fromJSON, getFile, empty as emptyManifest } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
 import { createDb, workspaces, projects, driftReports, activityEvents, snapshots } from '../db';
 import {
@@ -793,11 +794,28 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
     return c.json({ error: { code: 'PARSE_ERROR', message: 'Failed to parse manifest data' } }, 500);
   }
 
-  // Compare the manifests
-  const comparison = compareDrift(workspaceManifest, mainManifest);
+  // Determine merge base for three-way merge
+  const mergeBaseId = await getMergeBase(db, workspaceId, workspace.main_workspace_id);
+
+  let baseManifest: Manifest;
+  if (mergeBaseId) {
+    const loadedBase = await loadManifestBySnapshotId(db, c.env.BLOBS, user.id, mergeBaseId);
+    if (loadedBase) {
+      baseManifest = loadedBase;
+    } else {
+      // Could not load base, fall back to empty manifest (two-way merge)
+      baseManifest = emptyManifest();
+    }
+  } else {
+    // No merge base found, fall back to empty manifest (two-way merge)
+    baseManifest = emptyManifest();
+  }
+
+  // Compute three-way merge actions
+  const mergeActions = computeThreeWayMerge(baseManifest, workspaceManifest, mainManifest);
 
   // If nothing to sync, return empty preview
-  if (comparison.main_only.length === 0 && comparison.both_different.length === 0) {
+  if (mergeActions.toApply.length === 0 && mergeActions.conflicts.length === 0) {
     const preview: SyncPreview = {
       id: generateULID(),
       workspace_id: workspaceId,
@@ -806,7 +824,7 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
       decisions_needed: [],
       files_to_update: 0,
       files_to_add: 0,
-      files_unchanged: comparison.both_same.length,
+      files_unchanged: mergeActions.inSync.length,
       summary: 'Your workspace is already in sync with main.',
       created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
@@ -815,22 +833,24 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
     return c.json({ preview });
   }
 
-  // Build auto actions for main_only files (simple copy)
+  // Build auto actions for files that only source changed (can apply directly)
   const autoActions: AutoAction[] = [];
 
-  for (const path of comparison.main_only) {
+  for (const action of mergeActions.toApply) {
+    // Files where only source changed - can be applied without conflict
     autoActions.push({
-      path,
+      path: action.path,
       action: 'copy_from_main',
-      description: `Add ${path} from main`,
+      description: `Add/update ${action.path} from main`,
     });
   }
 
-  // Process both_different files with AI
+  // Process conflict files with AI
   const decisionsNeeded: ConflictDecision[] = [];
 
-  // For each file that differs, analyze with AI
-  for (const path of comparison.both_different) {
+  // For each conflicting file, analyze with AI
+  for (const mergeAction of mergeActions.conflicts) {
+    const path = mergeAction.path;
     const workspaceFile = getFile(workspaceManifest, path);
     const mainFile = getFile(mainManifest, path);
 
@@ -962,7 +982,7 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
     decisions_needed: decisionsNeeded,
     files_to_update: combineCount + decisionsNeeded.length,
     files_to_add: copyCount,
-    files_unchanged: comparison.both_same.length,
+    files_unchanged: mergeActions.inSync.length,
     summary,
     created_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
@@ -978,6 +998,7 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
       main_manifest_hash: mainSnapshot.manifest_hash,
       main_workspace_id: workspace.main_workspace_id,
       main_snapshot_id: mainSnapshotId,
+      merge_base_id: mergeBaseId, // Track merge base for history
     }),
     { expirationTtl: 30 * 60 } // 30 minutes
   );
@@ -1012,13 +1033,14 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     return c.json({ error: { code: 'PREVIEW_EXPIRED', message: 'Sync preview has expired. Please prepare sync again.' } }, 404);
   }
 
-  const { preview, user_id, main_manifest_hash, main_workspace_id, main_snapshot_id } = JSON.parse(previewData) as {
+  const { preview, user_id, main_manifest_hash, main_workspace_id, main_snapshot_id, merge_base_id } = JSON.parse(previewData) as {
     preview: SyncPreview;
     user_id: string;
     workspace_manifest_hash: string;
     main_manifest_hash: string;
     main_workspace_id: string;
     main_snapshot_id: string;
+    merge_base_id: string | null;
   };
 
   // Verify ownership
@@ -1523,6 +1545,295 @@ workspaceRoutes.post('/:workspaceId/sync/undo', async (c) => {
     restored_snapshot_id: body.snapshot_id,
   });
 });
+
+// ============================================================================
+// Three-Way Merge Support Functions
+// ============================================================================
+
+/**
+ * MergeAction represents what should happen to a single file during merge
+ */
+interface MergeAction {
+  path: string;
+  actionType: 'apply' | 'conflict' | 'in_sync' | 'skip';
+  currentHash?: string;
+  sourceHash?: string;
+  baseHash?: string;
+}
+
+/**
+ * MergeActions holds all computed merge actions from three-way comparison
+ */
+interface MergeActions {
+  toApply: MergeAction[];   // Non-conflicting changes to apply from source
+  conflicts: MergeAction[]; // Files with conflicting changes
+  inSync: MergeAction[];    // Files already in sync
+  skipped: MergeAction[];   // Files skipped (if cherry-pick filter used)
+}
+
+/**
+ * Compute three-way merge actions given base, current, and source manifests.
+ * This mirrors the CLI's computeMergeActions function.
+ */
+function computeThreeWayMerge(
+  base: Manifest,
+  current: Manifest,
+  source: Manifest
+): MergeActions {
+  const result: MergeActions = {
+    toApply: [],
+    conflicts: [],
+    inSync: [],
+    skipped: [],
+  };
+
+  // Build lookup maps
+  const baseFiles = new Map<string, string>();
+  for (const f of base.files) {
+    baseFiles.set(f.path, f.hash);
+  }
+
+  const currentFiles = new Map<string, string>();
+  for (const f of current.files) {
+    currentFiles.set(f.path, f.hash);
+  }
+
+  const sourceFiles = new Map<string, string>();
+  for (const f of source.files) {
+    sourceFiles.set(f.path, f.hash);
+  }
+
+  // Collect all unique paths
+  const allPaths = new Set([
+    ...baseFiles.keys(),
+    ...currentFiles.keys(),
+    ...sourceFiles.keys(),
+  ]);
+
+  for (const path of allPaths) {
+    const inBase = baseFiles.has(path);
+    const inCurrent = currentFiles.has(path);
+    const inSource = sourceFiles.has(path);
+
+    const baseHash = baseFiles.get(path);
+    const currentHash = currentFiles.get(path);
+    const sourceHash = sourceFiles.get(path);
+
+    const action: MergeAction = {
+      path,
+      actionType: 'in_sync',
+      baseHash,
+      currentHash,
+      sourceHash,
+    };
+
+    // Determine if each side changed from base
+    const currentChanged = (!inBase && inCurrent) || (inBase && inCurrent && baseHash !== currentHash);
+    const sourceChanged = (!inBase && inSource) || (inBase && inSource && baseHash !== sourceHash);
+    const currentDeleted = inBase && !inCurrent;
+    const sourceDeleted = inBase && !inSource;
+
+    // Determine action based on three-way comparison
+    if (!inSource && !sourceDeleted) {
+      // File only exists in current or was deleted in source but we have it
+      // Nothing to merge from source
+      continue;
+    }
+
+    if (!inCurrent && inSource) {
+      // File only in source (added in source) - apply
+      action.actionType = 'apply';
+      result.toApply.push(action);
+    } else if (currentDeleted && inSource) {
+      // We deleted, source has it - conflict
+      action.actionType = 'conflict';
+      result.conflicts.push(action);
+    } else if (sourceDeleted && inCurrent) {
+      // Source deleted, we have it - keep ours
+      action.actionType = 'in_sync';
+      result.inSync.push(action);
+    } else if (inCurrent && inSource && currentHash === sourceHash) {
+      // Same content - in sync
+      action.actionType = 'in_sync';
+      result.inSync.push(action);
+    } else if (!currentChanged && sourceChanged) {
+      // Only source changed - apply
+      action.actionType = 'apply';
+      result.toApply.push(action);
+    } else if (currentChanged && !sourceChanged) {
+      // Only current changed - keep ours (already have it)
+      action.actionType = 'in_sync';
+      result.inSync.push(action);
+    } else if (currentChanged && sourceChanged) {
+      // Both changed - conflict
+      action.actionType = 'conflict';
+      result.conflicts.push(action);
+    } else {
+      // No changes
+      action.actionType = 'in_sync';
+      result.inSync.push(action);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Determine the correct merge base (common ancestor) for three-way merge.
+ * This mirrors the CLI's getMergeBase function with its 4-step fallback:
+ *
+ * 1. Check merge history - if we've merged from this source before
+ * 2. Check if target was forked from source (via base_snapshot_id metadata)
+ * 3. Check if source was forked from target
+ * 4. Check if both are siblings (forked from same parent)
+ * 5. Fallback to target's base_snapshot_id
+ *
+ * @returns The merge base snapshot ID, or null if none found
+ */
+async function getMergeBase(
+  db: ReturnType<typeof createDb>,
+  targetWorkspaceId: string,
+  sourceWorkspaceId: string
+): Promise<string | null> {
+  // Get both workspaces with their merge history and base snapshot IDs
+  const [targetResult, sourceResult] = await Promise.all([
+    db.select({
+      id: workspaces.id,
+      base_snapshot_id: workspaces.baseSnapshotId,
+      merge_history: workspaces.mergeHistory,
+    })
+      .from(workspaces)
+      .where(eq(workspaces.id, targetWorkspaceId))
+      .limit(1),
+    db.select({
+      id: workspaces.id,
+      base_snapshot_id: workspaces.baseSnapshotId,
+      merge_history: workspaces.mergeHistory,
+    })
+      .from(workspaces)
+      .where(eq(workspaces.id, sourceWorkspaceId))
+      .limit(1),
+  ]);
+
+  const target = targetResult[0];
+  const source = sourceResult[0];
+
+  if (!target || !source) {
+    return null;
+  }
+
+  // Parse merge histories
+  const targetMergeHistory: Record<string, MergeRecord> = target.merge_history
+    ? JSON.parse(target.merge_history)
+    : {};
+
+  // 1. Check if we've merged from this source before
+  if (targetMergeHistory[sourceWorkspaceId]) {
+    return targetMergeHistory[sourceWorkspaceId].last_merged_snapshot;
+  }
+
+  // Helper to load snapshot metadata (workspace_id) from snapshot
+  async function getSnapshotWorkspaceId(snapshotId: string): Promise<string | null> {
+    const result = await db
+      .select({ workspace_id: snapshots.workspaceId })
+      .from(snapshots)
+      .where(eq(snapshots.id, snapshotId))
+      .limit(1);
+    return result[0]?.workspace_id || null;
+  }
+
+  // 2. Check if target was forked from source
+  if (target.base_snapshot_id) {
+    const targetBaseWorkspaceId = await getSnapshotWorkspaceId(target.base_snapshot_id);
+    if (targetBaseWorkspaceId === sourceWorkspaceId) {
+      // Target was forked from source, use target's base as common ancestor
+      return target.base_snapshot_id;
+    }
+  }
+
+  // 3. Check if source was forked from target
+  if (source.base_snapshot_id) {
+    const sourceBaseWorkspaceId = await getSnapshotWorkspaceId(source.base_snapshot_id);
+    if (sourceBaseWorkspaceId === targetWorkspaceId) {
+      // Source was forked from target, use source's base as common ancestor
+      return source.base_snapshot_id;
+    }
+  }
+
+  // 4. Check if both are siblings (forked from same parent workspace)
+  if (target.base_snapshot_id && source.base_snapshot_id) {
+    const [targetBaseWsId, sourceBaseWsId] = await Promise.all([
+      getSnapshotWorkspaceId(target.base_snapshot_id),
+      getSnapshotWorkspaceId(source.base_snapshot_id),
+    ]);
+
+    if (targetBaseWsId && sourceBaseWsId && targetBaseWsId === sourceBaseWsId) {
+      // Both forked from same workspace, use the earlier snapshot as common ancestor
+      // We need to compare created_at timestamps
+      const [targetSnapshotResult, sourceSnapshotResult] = await Promise.all([
+        db.select({ created_at: snapshots.createdAt })
+          .from(snapshots)
+          .where(eq(snapshots.id, target.base_snapshot_id!))
+          .limit(1),
+        db.select({ created_at: snapshots.createdAt })
+          .from(snapshots)
+          .where(eq(snapshots.id, source.base_snapshot_id!))
+          .limit(1),
+      ]);
+
+      if (targetSnapshotResult[0] && sourceSnapshotResult[0]) {
+        if (targetSnapshotResult[0].created_at < sourceSnapshotResult[0].created_at) {
+          return target.base_snapshot_id;
+        }
+        return source.base_snapshot_id;
+      }
+    }
+  }
+
+  // 5. Fallback to target's base_snapshot_id
+  if (target.base_snapshot_id) {
+    return target.base_snapshot_id;
+  }
+
+  return null;
+}
+
+/**
+ * Load a manifest from R2 storage by snapshot ID
+ */
+async function loadManifestBySnapshotId(
+  db: ReturnType<typeof createDb>,
+  blobs: R2Bucket,
+  userId: string,
+  snapshotId: string
+): Promise<Manifest | null> {
+  const snapshotResult = await db
+    .select({ manifest_hash: snapshots.manifestHash })
+    .from(snapshots)
+    .where(eq(snapshots.id, snapshotId))
+    .limit(1);
+
+  if (!snapshotResult[0]) {
+    return null;
+  }
+
+  const manifestKey = `${userId}/manifests/${snapshotResult[0].manifest_hash}.json`;
+  const manifestObj = await blobs.get(manifestKey);
+
+  if (!manifestObj) {
+    return null;
+  }
+
+  try {
+    return fromJSON(await manifestObj.text());
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
 // Helper: Compute SHA256 hash
 async function computeSha256(data: Uint8Array): Promise<string> {
