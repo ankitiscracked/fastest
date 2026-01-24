@@ -27,6 +27,12 @@ export interface Snapshot {
   created_at: string;
 }
 
+// MergeRecord tracks when a workspace was last merged from another workspace
+export interface MergeRecord {
+  last_merged_snapshot: string;
+  merged_at: string;
+}
+
 export interface Workspace {
   id: string;
   project_id: string;
@@ -36,6 +42,8 @@ export interface Workspace {
   local_path: string | null;
   last_seen_at: string | null;
   created_at: string;
+  // Tracks merge history per source workspace for proper three-way merge base selection
+  merge_history?: Record<string, MergeRecord> | null;
 }
 
 export interface DriftReport {

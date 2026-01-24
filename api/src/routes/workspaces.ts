@@ -47,6 +47,7 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
       local_path: workspaces.localPath,
       last_seen_at: workspaces.lastSeenAt,
       created_at: workspaces.createdAt,
+      merge_history: workspaces.mergeHistory,
       owner_user_id: projects.ownerUserId,
     })
     .from(workspaces)
@@ -69,6 +70,7 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
     local_path: row.local_path,
     last_seen_at: row.last_seen_at,
     created_at: row.created_at,
+    merge_history: row.merge_history ? JSON.parse(row.merge_history) : null,
   };
 
   // Fetch latest drift report
@@ -974,6 +976,8 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
       user_id: user.id,
       workspace_manifest_hash: workspaceSnapshot.manifest_hash,
       main_manifest_hash: mainSnapshot.manifest_hash,
+      main_workspace_id: workspace.main_workspace_id,
+      main_snapshot_id: mainSnapshotId,
     }),
     { expirationTtl: 30 * 60 } // 30 minutes
   );
@@ -1008,11 +1012,13 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     return c.json({ error: { code: 'PREVIEW_EXPIRED', message: 'Sync preview has expired. Please prepare sync again.' } }, 404);
   }
 
-  const { preview, user_id, main_manifest_hash } = JSON.parse(previewData) as {
+  const { preview, user_id, main_manifest_hash, main_workspace_id, main_snapshot_id } = JSON.parse(previewData) as {
     preview: SyncPreview;
     user_id: string;
     workspace_manifest_hash: string;
     main_manifest_hash: string;
+    main_workspace_id: string;
+    main_snapshot_id: string;
   };
 
   // Verify ownership
@@ -1359,6 +1365,57 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     .update(projects)
     .set({ lastSnapshotId: newSnapshotId })
     .where(eq(projects.id, workspace.project_id));
+
+  // Update merge history to track this sync for future three-way merges
+  if (main_workspace_id && main_snapshot_id) {
+    try {
+      // Get current workspace's merge history
+      const currentMergeHistoryResult = await db
+        .select({ merge_history: workspaces.mergeHistory })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const currentMergeHistory = currentMergeHistoryResult[0]?.merge_history
+        ? JSON.parse(currentMergeHistoryResult[0].merge_history)
+        : {};
+
+      // Get main workspace's merge history for transitive tracking
+      const mainMergeHistoryResult = await db
+        .select({ merge_history: workspaces.mergeHistory })
+        .from(workspaces)
+        .where(eq(workspaces.id, main_workspace_id))
+        .limit(1);
+
+      const mainMergeHistory = mainMergeHistoryResult[0]?.merge_history
+        ? JSON.parse(mainMergeHistoryResult[0].merge_history)
+        : {};
+
+      // Record direct merge from main
+      const now = new Date().toISOString();
+      currentMergeHistory[main_workspace_id] = {
+        last_merged_snapshot: main_snapshot_id,
+        merged_at: now,
+      };
+
+      // Inherit main's merge history (transitive tracking)
+      for (const [wsId, record] of Object.entries(mainMergeHistory)) {
+        const typedRecord = record as { last_merged_snapshot: string; merged_at: string };
+        if (!currentMergeHistory[wsId] || typedRecord.merged_at > currentMergeHistory[wsId].merged_at) {
+          currentMergeHistory[wsId] = typedRecord;
+        }
+      }
+
+      // Save updated merge history
+      await db
+        .update(workspaces)
+        .set({ mergeHistory: JSON.stringify(currentMergeHistory) })
+        .where(eq(workspaces.id, workspaceId));
+    } catch (err) {
+      console.error('Failed to update merge history:', err);
+      // Non-fatal - sync still succeeded
+    }
+  }
 
   // Delete the preview from KV
   await c.env.KV.delete(`sync_preview:${preview_id}`);

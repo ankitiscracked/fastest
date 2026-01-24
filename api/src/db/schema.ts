@@ -85,6 +85,8 @@ export const workspaces = sqliteTable('workspaces', {
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
   // Version for optimistic locking - prevents concurrent sync race conditions
   version: integer('version').notNull().default(1),
+  // JSON-serialized merge history: Record<workspaceId, { last_merged_snapshot, merged_at }>
+  mergeHistory: text('merge_history'),
 }, (table) => [
   index('idx_workspaces_project').on(table.projectId, table.createdAt),
 ]);
