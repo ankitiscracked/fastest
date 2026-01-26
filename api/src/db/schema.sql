@@ -158,3 +158,81 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at ASC);
+
+-- Project environment variables
+CREATE TABLE IF NOT EXISTS project_env_vars (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,  -- Encrypted for secrets
+  is_secret INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_env_vars_project_key ON project_env_vars(project_id, key);
+CREATE INDEX IF NOT EXISTS idx_env_vars_project ON project_env_vars(project_id);
+
+-- User API keys for model providers
+CREATE TABLE IF NOT EXISTS user_api_keys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,  -- 'anthropic', 'openai', 'google', etc.
+  key_name TEXT NOT NULL,
+  key_value TEXT NOT NULL,  -- Encrypted
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_user_provider ON user_api_keys(user_id, provider);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON user_api_keys(user_id);
+
+-- Refactoring suggestions from background analysis
+CREATE TABLE IF NOT EXISTS refactoring_suggestions (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  snapshot_id TEXT REFERENCES snapshots(id),
+  type TEXT NOT NULL,  -- 'security', 'duplication', 'performance', 'naming', 'structure'
+  severity TEXT NOT NULL DEFAULT 'info',  -- 'info', 'warning', 'critical'
+  title TEXT NOT NULL,
+  description TEXT,
+  affected_files TEXT,  -- JSON array
+  suggested_prompt TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending', 'applied', 'dismissed'
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_refactoring_workspace ON refactoring_suggestions(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_refactoring_status ON refactoring_suggestions(workspace_id, status);
+
+-- Provider credentials for infrastructure (Railway, Cloudflare, etc.)
+CREATE TABLE IF NOT EXISTS provider_credentials (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,  -- 'railway', 'cloudflare'
+  api_token TEXT NOT NULL,  -- Encrypted
+  metadata TEXT,  -- JSON: account_id, team_id, etc.
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_creds_user_provider ON provider_credentials(user_id, provider);
+CREATE INDEX IF NOT EXISTS idx_provider_creds_user ON provider_credentials(user_id);
+
+-- Infrastructure resources (provisioned databases, deployed apps, etc.)
+CREATE TABLE IF NOT EXISTS infrastructure_resources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,  -- 'compute', 'compute:edge', 'database:postgres', 'database:redis', 'storage:blob'
+  provider TEXT NOT NULL,  -- 'railway', 'cloudflare'
+  provider_resource_id TEXT,  -- External ID in provider system
+  name TEXT NOT NULL,
+  connection_info TEXT,  -- Encrypted JSON: { url, host, port, username, password }
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending', 'provisioning', 'ready', 'error', 'deleted'
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_infra_resources_project ON infrastructure_resources(project_id);
+CREATE INDEX IF NOT EXISTS idx_infra_resources_project_type ON infrastructure_resources(project_id, type);

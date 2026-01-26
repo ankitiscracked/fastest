@@ -9,6 +9,7 @@ import { workspaceRoutes } from './routes/workspaces';
 import { blobRoutes } from './routes/blobs';
 import { conversationRoutes } from './routes/conversations';
 import { actionItemRoutes } from './routes/action-items';
+import { infrastructureRoutes } from './routes/infrastructure';
 import { runBackgroundJobs } from './background-jobs';
 
 // Re-export Sandbox class for Durable Object binding (only when containers are enabled)
@@ -81,6 +82,7 @@ v1.route('/workspaces', workspaceRoutes);
 v1.route('/blobs', blobRoutes);
 v1.route('/conversations', conversationRoutes);
 v1.route('/action-items', actionItemRoutes);
+v1.route('/infrastructure', infrastructureRoutes);
 
 app.route('/v1', v1);
 

@@ -201,3 +201,35 @@ export const refactoringSuggestions = sqliteTable('refactoring_suggestions', {
   index('idx_refactoring_workspace').on(table.workspaceId, table.createdAt),
   index('idx_refactoring_status').on(table.workspaceId, table.status),
 ]);
+
+// Provider credentials for infrastructure (Railway, Cloudflare, etc.)
+export const providerCredentials = sqliteTable('provider_credentials', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(), // 'railway', 'cloudflare'
+  apiToken: text('api_token').notNull(), // Encrypted
+  metadata: text('metadata'), // JSON: account_id, team_id, etc.
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex('idx_provider_creds_user_provider').on(table.userId, table.provider),
+  index('idx_provider_creds_user').on(table.userId),
+]);
+
+// Infrastructure resources (provisioned databases, deployed apps, etc.)
+export const infrastructureResources = sqliteTable('infrastructure_resources', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(), // 'compute', 'compute:edge', 'database:postgres', 'database:redis', 'storage:blob'
+  provider: text('provider').notNull(), // 'railway', 'cloudflare'
+  providerResourceId: text('provider_resource_id'), // External ID in provider system
+  name: text('name').notNull(), // User-friendly display name
+  connectionInfo: text('connection_info'), // Encrypted JSON: { url, host, port, username, password }
+  status: text('status').notNull().default('pending'), // 'pending', 'provisioning', 'ready', 'error', 'deleted'
+  error: text('error'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_infra_resources_project').on(table.projectId),
+  index('idx_infra_resources_project_type').on(table.projectId, table.type),
+]);

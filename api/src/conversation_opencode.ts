@@ -102,7 +102,7 @@ export class ConversationOpenCode {
       const openCodeDirectory = this.getOpenCodeDirectory(workDir);
 
       if (sandbox.type === 'e2b') {
-        const port = await this.ensureOpenCodeServeE2B(sandbox, openCodeDirectory);
+        const port = await this.ensureOpenCodeServeE2B(sandbox, openCodeDirectory, apiUrl, apiToken);
         const host = sandbox.getHost ? sandbox.getHost(port) : '';
         if (!host) {
           throw new Error('Failed to resolve OpenCode host for E2B sandbox');
@@ -246,7 +246,7 @@ export class ConversationOpenCode {
     const openCodeDirectory = this.getOpenCodeDirectory(effectiveWorkDir);
 
     if (sandbox.type === 'e2b') {
-      const port = await this.ensureOpenCodeServeE2B(sandbox, openCodeDirectory);
+      const port = await this.ensureOpenCodeServeE2B(sandbox, openCodeDirectory, apiUrl, apiToken);
       const host = sandbox.getHost ? sandbox.getHost(port) : '';
       if (!host) {
         throw new Error('Failed to resolve OpenCode host for E2B sandbox');
@@ -757,6 +757,11 @@ export class ConversationOpenCode {
       }
     }
 
+    // Add Fastest API env vars for custom tools (deploy, etc.)
+    envVars.FASTEST_API_URL = apiUrl;
+    envVars.FASTEST_API_TOKEN = apiToken;
+    envVars.FASTEST_PROJECT_ID = state.projectId;
+
     const binaryCheck = await sandbox.exec(`which opencode && opencode --version 2>&1`);
     if (!binaryCheck.success) {
       const whichOut = await sandbox.exec(`which opencode 2>&1`);
@@ -795,8 +800,11 @@ export class ConversationOpenCode {
 
   private async ensureOpenCodeServeE2B(
     sandbox: SandboxRunner,
-    workDir: string
+    workDir: string,
+    apiUrl?: string,
+    apiToken?: string
   ): Promise<number> {
+    const state = await this.ensureState();
     const port = 4096;
 
     try {
@@ -826,10 +834,16 @@ export class ConversationOpenCode {
       throw new Error('E2B sandbox runner does not support background commands');
     }
 
+    // Build env vars for OpenCode tools
+    const envVars: Record<string, string> = {};
+    if (apiUrl) envVars.FASTEST_API_URL = apiUrl;
+    if (apiToken) envVars.FASTEST_API_TOKEN = apiToken;
+    if (state.projectId) envVars.FASTEST_PROJECT_ID = state.projectId;
+
     await sandbox.exec(`mkdir -p "${workDir}"`);
     await sandbox.runBackground(
       `nohup opencode serve --port ${port} --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &`,
-      { cwd: workDir }
+      { cwd: workDir, env: envVars }
     );
 
     for (let i = 0; i < 30; i++) {

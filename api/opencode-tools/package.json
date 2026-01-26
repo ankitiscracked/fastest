@@ -1,0 +1,9 @@
+{
+  "name": "fastest-opencode-tools",
+  "version": "1.0.0",
+  "description": "OpenCode custom tools for Fastest deployment",
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "^0.1.0"
+  }
+}

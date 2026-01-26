@@ -588,3 +588,139 @@ export const DOC_FILE_PATTERNS = [
   /^todo$/i,
   /^notes$/i,
 ];
+
+// Infrastructure types for multi-provider deployment
+
+export type ResourceType =
+  | 'compute'
+  | 'compute:edge'
+  | 'database:postgres'
+  | 'database:mysql'
+  | 'database:redis'
+  | 'storage:blob';
+
+export type ResourceStatus = 'pending' | 'provisioning' | 'ready' | 'error' | 'deleted';
+
+export type InfraProvider = 'railway' | 'cloudflare';
+
+export interface InfrastructureResource {
+  id: string;
+  project_id: string;
+  type: ResourceType;
+  provider: InfraProvider;
+  provider_resource_id: string | null;
+  name: string;
+  connection_info: string | null;  // Encrypted JSON, masked in API responses
+  status: ResourceStatus;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderCredential {
+  id: string;
+  user_id: string;
+  provider: InfraProvider;
+  metadata: string | null;  // JSON: account_id, team_id, etc.
+  created_at: string;
+  updated_at: string;
+  // Note: api_token is never exposed in API responses
+}
+
+// Detection types - what the code analysis determines
+
+export type DetectedRuntime = 'node' | 'python' | 'go' | 'static' | null;
+
+export interface DetectedDatabase {
+  type: 'postgres' | 'mysql' | 'redis';
+  envVar: string;  // Expected env var name (e.g., DATABASE_URL)
+}
+
+export interface DetectedRequirements {
+  runtime: DetectedRuntime;
+  runtimeVersion: string | null;
+  framework: string | null;  // 'express', 'hono', 'fastapi', etc.
+  databases: DetectedDatabase[];
+  isEdgeCompatible: boolean;
+  needsStorage: boolean;
+  buildCommand: string | null;
+  startCommand: string | null;
+}
+
+// Provider config - what each provider supports
+
+export interface ProviderInfo {
+  name: string;
+  displayName: string;
+  supportedTypes: ResourceType[];
+  description: string;
+}
+
+export const INFRA_PROVIDERS: Record<InfraProvider, ProviderInfo> = {
+  railway: {
+    name: 'railway',
+    displayName: 'Railway',
+    supportedTypes: ['compute', 'database:postgres', 'database:redis'],
+    description: 'Full-stack deployment platform with managed databases',
+  },
+  cloudflare: {
+    name: 'cloudflare',
+    displayName: 'Cloudflare',
+    supportedTypes: ['compute:edge', 'storage:blob'],
+    description: 'Edge computing and serverless workers',
+  },
+};
+
+// Default provider for each resource type
+export const DEFAULT_PROVIDER_FOR_TYPE: Partial<Record<ResourceType, InfraProvider>> = {
+  'compute': 'railway',
+  'compute:edge': 'cloudflare',
+  'database:postgres': 'railway',
+  'database:redis': 'railway',
+  'storage:blob': 'cloudflare',
+};
+
+// Infrastructure API request/response types
+
+export interface SetProviderCredentialRequest {
+  provider: InfraProvider;
+  api_token: string;
+  metadata?: Record<string, string>;  // account_id, team_id, etc.
+}
+
+export interface ListProviderCredentialsResponse {
+  credentials: ProviderCredential[];
+}
+
+export interface ListResourcesResponse {
+  resources: InfrastructureResource[];
+}
+
+export interface GetResourceResponse {
+  resource: InfrastructureResource;
+}
+
+export interface DetectRequirementsResponse {
+  requirements: DetectedRequirements;
+  suggested_resources: Array<{
+    type: ResourceType;
+    provider: InfraProvider;
+    name: string;
+    envVar?: string;
+  }>;
+}
+
+export interface DeployProjectRequest {
+  manifest_hash: string;
+  message?: string;
+  force?: boolean;  // Deploy even if no changes detected
+}
+
+export interface DeployProjectResponse {
+  success: boolean;
+  deployment_id: string;
+  url: string | null;
+  resources: InfrastructureResource[];
+  provisioned_resources: InfrastructureResource[];  // Newly created in this deploy
+  error: string | null;
+}
