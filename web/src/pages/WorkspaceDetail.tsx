@@ -22,6 +22,7 @@ import {
   History,
   Rocket,
   ExternalLink,
+  Settings2,
 } from 'lucide-react';
 import type { Workspace, ConversationWithContext, DriftReport, DriftAnalysis, SyncPreview, DeploymentLogEntry } from '@fastest/shared';
 import { api } from '../api/client';
@@ -610,6 +611,26 @@ export function WorkspaceDetail() {
                   </>
                 )}
               </button>
+
+              <Link
+                to="/workspaces/$workspaceId/deployments"
+                params={{ workspaceId }}
+                className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border border-surface-300 text-surface-600 hover:bg-surface-50 transition-colors"
+                title="View deployment history"
+              >
+                <History className="w-4 h-4" />
+                History
+              </Link>
+
+              <Link
+                to="/workspaces/$workspaceId/deployment-settings"
+                params={{ workspaceId }}
+                className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border border-surface-300 text-surface-600 hover:bg-surface-50 transition-colors"
+                title="Deployment settings"
+              >
+                <Settings2 className="w-4 h-4" />
+                Settings
+              </Link>
 
               {/* View logs button (when deployment exists) */}
               {currentDeployment && (

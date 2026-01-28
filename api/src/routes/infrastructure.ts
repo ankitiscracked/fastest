@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import type { Env } from '../index';
-import { createDb, providerCredentials, infrastructureResources, projects } from '../db';
+import { createDb, providerCredentials, infrastructureResources, projects, workspaces, deploymentSettings, deployments } from '../db';
 import { getAuthUser } from '../middleware/auth';
 import type {
   InfraProvider,
@@ -9,15 +9,18 @@ import type {
   SetProviderCredentialRequest,
   DeployProjectRequest,
   InfrastructureResource,
+  DeploymentSettings,
+  UpdateDeploymentSettingsRequest,
+  DeploymentRecord,
+  UpdateDeploymentStatusRequest,
 } from '@fastest/shared';
 import {
   getProvider,
-  getDefaultProviderNameForType,
   validateProviderCredentials,
-  ProviderError,
 } from '../providers';
 import type { ProviderCredentials } from '../providers';
-import { detectRequirements, suggestResources } from '../detection';
+import { detectRequirementsWithFallback, suggestResources } from '../detection';
+import { selectProviderForType } from '../providers/selection';
 
 export const infrastructureRoutes = new Hono<{ Bindings: Env }>();
 
@@ -57,6 +60,21 @@ async function verifyProjectOwnership(
     .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, userId)))
     .limit(1);
   return result.length > 0;
+}
+
+async function getWorkspaceProjectId(
+  db: ReturnType<typeof createDb>,
+  workspaceId: string,
+  userId: string
+): Promise<string | null> {
+  const result = await db
+    .select({ projectId: workspaces.projectId })
+    .from(workspaces)
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(workspaces.id, workspaceId), eq(projects.ownerUserId, userId)))
+    .limit(1);
+
+  return result.length > 0 ? result[0].projectId : null;
 }
 
 // ============================================================================
@@ -212,6 +230,201 @@ infrastructureRoutes.delete('/credentials/:provider', async (c) => {
 // ============================================================================
 // Resources
 // ============================================================================
+
+/**
+ * GET /infrastructure/workspaces/:workspaceId/deployment-settings
+ * Get deployment settings for a workspace
+ */
+infrastructureRoutes.get('/workspaces/:workspaceId/deployment-settings', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  const projectId = await getWorkspaceProjectId(db, workspaceId, user.id);
+  if (!projectId) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  const existing = await db
+    .select()
+    .from(deploymentSettings)
+    .where(eq(deploymentSettings.workspaceId, workspaceId))
+    .limit(1);
+
+  const now = new Date().toISOString();
+  const settings: DeploymentSettings = existing.length > 0
+    ? {
+      workspace_id: existing[0].workspaceId,
+      auto_deploy: existing[0].autoDeploy === 1,
+      runtime_override: (existing[0].runtimeOverride as DeploymentSettings['runtime_override']) ?? null,
+      build_command: existing[0].buildCommand ?? null,
+      start_command: existing[0].startCommand ?? null,
+      created_at: existing[0].createdAt,
+      updated_at: existing[0].updatedAt,
+    }
+    : {
+      workspace_id: workspaceId,
+      auto_deploy: false,
+      runtime_override: null,
+      build_command: null,
+      start_command: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+  return c.json({ settings });
+});
+
+/**
+ * PUT /infrastructure/workspaces/:workspaceId/deployment-settings
+ * Update deployment settings for a workspace
+ */
+infrastructureRoutes.put('/workspaces/:workspaceId/deployment-settings', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  const projectId = await getWorkspaceProjectId(db, workspaceId, user.id);
+  if (!projectId) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  const body = await c.req.json<UpdateDeploymentSettingsRequest>();
+  const now = new Date().toISOString();
+
+  const existing = await db
+    .select()
+    .from(deploymentSettings)
+    .where(eq(deploymentSettings.workspaceId, workspaceId))
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db
+      .update(deploymentSettings)
+      .set({
+        autoDeploy: body.auto_deploy !== undefined ? (body.auto_deploy ? 1 : 0) : existing[0].autoDeploy,
+        runtimeOverride: body.runtime_override ?? existing[0].runtimeOverride,
+        buildCommand: body.build_command ?? existing[0].buildCommand,
+        startCommand: body.start_command ?? existing[0].startCommand,
+        updatedAt: now,
+      })
+      .where(eq(deploymentSettings.workspaceId, workspaceId));
+  } else {
+    await db.insert(deploymentSettings).values({
+      workspaceId,
+      autoDeploy: body.auto_deploy ? 1 : 0,
+      runtimeOverride: body.runtime_override ?? null,
+      buildCommand: body.build_command ?? null,
+      startCommand: body.start_command ?? null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  const settings: DeploymentSettings = {
+    workspace_id: workspaceId,
+    auto_deploy: body.auto_deploy ?? (existing[0]?.autoDeploy === 1) ?? false,
+    runtime_override: body.runtime_override ?? existing[0]?.runtimeOverride ?? null,
+    build_command: body.build_command ?? existing[0]?.buildCommand ?? null,
+    start_command: body.start_command ?? existing[0]?.startCommand ?? null,
+    created_at: existing[0]?.createdAt ?? now,
+    updated_at: now,
+  };
+
+  return c.json({ settings });
+});
+
+/**
+ * GET /infrastructure/workspaces/:workspaceId/deployments
+ * List deployments for a workspace
+ */
+infrastructureRoutes.get('/workspaces/:workspaceId/deployments', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const workspaceId = c.req.param('workspaceId');
+  const db = createDb(c.env.DB);
+
+  const projectId = await getWorkspaceProjectId(db, workspaceId, user.id);
+  if (!projectId) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+  }
+
+  const limitParam = c.req.query('limit');
+  const limit = Math.min(100, Math.max(1, Number(limitParam || 30)));
+
+  const rows = await db
+    .select()
+    .from(deployments)
+    .where(eq(deployments.workspaceId, workspaceId))
+    .orderBy(desc(deployments.startedAt))
+    .limit(limit);
+
+  const results: DeploymentRecord[] = rows.map((row) => ({
+    id: row.id,
+    workspace_id: row.workspaceId,
+    project_id: row.projectId,
+    snapshot_id: row.snapshotId,
+    status: row.status as DeploymentRecord['status'],
+    trigger: row.trigger as DeploymentRecord['trigger'],
+    url: row.url,
+    error: row.error,
+    started_at: row.startedAt,
+    completed_at: row.completedAt,
+  }));
+
+  return c.json({ deployments: results });
+});
+
+/**
+ * POST /infrastructure/deployments/:deploymentId/status
+ * Update deployment status (internal callback)
+ */
+infrastructureRoutes.post('/deployments/:deploymentId/status', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const deploymentId = c.req.param('deploymentId');
+  const body = await c.req.json<UpdateDeploymentStatusRequest>();
+  const db = createDb(c.env.DB);
+
+  const result = await db
+    .select({ id: deployments.id })
+    .from(deployments)
+    .innerJoin(projects, eq(deployments.projectId, projects.id))
+    .where(and(eq(deployments.id, deploymentId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
+
+  if (result.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Deployment not found' } }, 404);
+  }
+
+  const completedAt = body.completed_at || (body.status !== 'deploying' ? new Date().toISOString() : null);
+
+  await db
+    .update(deployments)
+    .set({
+      status: body.status,
+      url: body.url ?? null,
+      error: body.error ?? null,
+      completedAt,
+    })
+    .where(eq(deployments.id, deploymentId));
+
+  return c.json({ success: true });
+});
 
 /**
  * GET /infrastructure/projects/:projectId/resources
@@ -413,12 +626,13 @@ infrastructureRoutes.get('/projects/:projectId/detect', async (c) => {
     // This is a simplified version - actual implementation would fetch from R2
   }
 
-  const requirements = await detectRequirements(files);
-  const suggestions = suggestResources(requirements);
+  const detection = await detectRequirementsWithFallback(files, c.env);
+  const suggestions = suggestResources(detection.requirements);
 
   return c.json({
-    requirements,
+    requirements: detection.requirements,
     suggested_resources: suggestions,
+    detection: detection.metadata,
   });
 });
 
@@ -443,7 +657,29 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
 
   const deploymentId = generateId();
   const now = new Date().toISOString();
+  const workspaceId = body.workspace_id || null;
+  const trigger = body.source || 'manual';
   const provisionedResources: InfrastructureResource[] = [];
+
+  if (workspaceId) {
+    const workspaceProjectId = await getWorkspaceProjectId(db, workspaceId, user.id);
+    if (!workspaceProjectId || workspaceProjectId !== projectId) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }, 404);
+    }
+  }
+
+  await db.insert(deployments).values({
+    id: deploymentId,
+    workspaceId,
+    projectId,
+    snapshotId: null,
+    status: 'deploying',
+    trigger,
+    url: null,
+    error: null,
+    startedAt: now,
+    completedAt: null,
+  });
 
   try {
     // 1. Get files from manifest
@@ -451,7 +687,8 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
     // TODO: Fetch files from R2 using manifest_hash
 
     // 2. Detect requirements
-    const requirements = await detectRequirements(files);
+    const detection = await detectRequirementsWithFallback(files, c.env);
+    const requirements = detection.requirements;
     const suggestions = suggestResources(requirements);
 
     // 3. Get existing resources
@@ -471,7 +708,7 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
       .from(providerCredentials)
       .where(eq(providerCredentials.userId, user.id));
 
-    const credsByProvider = new Map(
+    const userCredsByProvider = new Map(
       allCreds.map((c) => [
         c.provider,
         {
@@ -481,6 +718,22 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
         },
       ])
     );
+
+    const managedCredsByProvider = new Map<InfraProvider, ProviderCredentials>();
+    if (c.env.CLOUDFLARE_DEPLOY_TOKEN && c.env.CLOUDFLARE_ACCOUNT_ID) {
+      managedCredsByProvider.set('cloudflare', {
+        provider: 'cloudflare',
+        apiToken: c.env.CLOUDFLARE_DEPLOY_TOKEN,
+        metadata: { accountId: c.env.CLOUDFLARE_ACCOUNT_ID },
+      });
+    }
+    if (c.env.RAILWAY_DEPLOY_TOKEN) {
+      managedCredsByProvider.set('railway', {
+        provider: 'railway',
+        apiToken: c.env.RAILWAY_DEPLOY_TOKEN,
+        metadata: c.env.RAILWAY_PROJECT_ID ? { projectId: c.env.RAILWAY_PROJECT_ID } : {},
+      });
+    }
 
     // 5. Provision missing resources
     for (const suggestion of suggestions) {
@@ -497,15 +750,19 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
         continue;
       }
 
-      // Get credentials for this provider
-      const creds = credsByProvider.get(suggestion.provider);
-      if (!creds) {
-        console.warn(`No credentials for provider ${suggestion.provider}, skipping ${suggestion.type}`);
+      const selection = selectProviderForType(
+        suggestion.type,
+        suggestion.provider_candidates,
+        userCredsByProvider,
+        managedCredsByProvider
+      );
+      if (!selection) {
+        console.warn(`No credentials available for ${suggestion.type}, skipping`);
         continue;
       }
 
       // Provision the resource
-      const provider = getProvider(suggestion.provider);
+      const provider = getProvider(selection.provider);
       const resourceId = generateId();
 
       // Create resource record first (pending)
@@ -513,7 +770,7 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
         id: resourceId,
         projectId,
         type: suggestion.type,
-        provider: suggestion.provider,
+        provider: selection.provider,
         name: suggestion.name,
         status: 'provisioning',
         createdAt: now,
@@ -525,7 +782,7 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
           name: suggestion.name,
           projectId,
           envVarName: suggestion.envVar,
-        }, creds);
+        }, selection.creds);
 
         if (result.success) {
           // Update resource with provider ID and connection info
@@ -545,7 +802,7 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
             id: resourceId,
             project_id: projectId,
             type: suggestion.type,
-            provider: suggestion.provider,
+            provider: selection.provider,
             provider_resource_id: result.resourceId,
             name: suggestion.name,
             connection_info: null,
@@ -587,9 +844,14 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
     let deployUrl: string | null = null;
 
     if (computeSuggestion) {
-      const creds = credsByProvider.get(computeSuggestion.provider);
-      if (creds) {
-        const provider = getProvider(computeSuggestion.provider);
+        const computeSelection = selectProviderForType(
+          computeSuggestion.type,
+          computeSuggestion.provider_candidates,
+          userCredsByProvider,
+          managedCredsByProvider
+        );
+        if (computeSelection) {
+          const provider = getProvider(computeSelection.provider);
 
         // Check for existing compute resource
         const existingCompute = existingResources.find(
@@ -606,18 +868,18 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
         // TODO: Collect env vars from provisioned resources
         const envVars: Record<string, string> = {};
 
-        const deployResult = await provider.deploy(
-          existingCompute?.providerResourceId || null,
-          fileBuffers,
-          {
-            name: `fastest-${projectId.slice(0, 8)}`,
-            projectId,
-            envVars,
-            buildCommand: requirements.buildCommand || undefined,
-            startCommand: requirements.startCommand || undefined,
-          },
-          creds
-        );
+          const deployResult = await provider.deploy(
+            existingCompute?.providerResourceId || null,
+            fileBuffers,
+            {
+              name: `fastest-${projectId.slice(0, 8)}`,
+              projectId,
+              envVars,
+              buildCommand: requirements.buildCommand || undefined,
+              startCommand: requirements.startCommand || undefined,
+            },
+            computeSelection.creds
+          );
 
         if (deployResult.success) {
           deployUrl = deployResult.url || null;
@@ -634,7 +896,7 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
               id: computeResourceId,
               projectId,
               type: computeSuggestion.type,
-              provider: computeSuggestion.provider,
+              provider: computeSelection.provider,
               providerResourceId: deployResult.deploymentId || null,
               name: 'app',
               status: 'ready',
@@ -666,6 +928,16 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
       updated_at: r.updatedAt,
     }));
 
+    await db
+      .update(deployments)
+      .set({
+        status: 'success',
+        url: deployUrl,
+        error: null,
+        completedAt: new Date().toISOString(),
+      })
+      .where(eq(deployments.id, deploymentId));
+
     return c.json({
       success: true,
       deployment_id: deploymentId,
@@ -676,6 +948,15 @@ infrastructureRoutes.post('/projects/:projectId/deploy', async (c) => {
     });
   } catch (error) {
     console.error('Deployment failed:', error);
+    await db
+      .update(deployments)
+      .set({
+        status: 'failed',
+        url: null,
+        error: error instanceof Error ? error.message : String(error),
+        completedAt: new Date().toISOString(),
+      })
+      .where(eq(deployments.id, deploymentId));
     return c.json({
       success: false,
       deployment_id: deploymentId,

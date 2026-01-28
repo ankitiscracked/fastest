@@ -127,6 +127,10 @@ async function startOpenCode(port: number): Promise<Subprocess | null> {
     }
   }
 
+  const toolsDir = `${process.cwd()}/api/opencode-tools`;
+  env.OPENCODE_TOOLS_DIR = toolsDir;
+  log.info(`Passing OPENCODE_TOOLS_DIR=${toolsDir} to OpenCode`);
+
   log.info('Starting OpenCode server...');
   const opencode = Bun.spawn(['opencode', 'serve', '--hostname', '0.0.0.0', '--port', port.toString()], {
     stdio: ['ignore', 'pipe', 'pipe'],

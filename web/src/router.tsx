@@ -11,6 +11,8 @@ import { Home } from './pages/Home';
 import { ConversationView } from './pages/ConversationView';
 import { Settings } from './pages/Settings';
 import { DocsPage } from './pages/DocsPage';
+import { DeploymentSettingsPage } from './pages/DeploymentSettings';
+import { DeploymentHistoryPage } from './pages/DeploymentHistory';
 
 // Router context type
 interface RouterContext {
@@ -71,6 +73,18 @@ const workspaceDetailRoute = createRoute({
   getParentRoute: () => conversationLayoutRoute,
   path: '/workspaces/$workspaceId',
   component: WorkspaceDetail,
+});
+
+const deploymentSettingsRoute = createRoute({
+  getParentRoute: () => conversationLayoutRoute,
+  path: '/workspaces/$workspaceId/deployment-settings',
+  component: DeploymentSettingsPage,
+});
+
+const deploymentHistoryRoute = createRoute({
+  getParentRoute: () => conversationLayoutRoute,
+  path: '/workspaces/$workspaceId/deployments',
+  component: DeploymentHistoryPage,
 });
 
 // Authenticated layout route for admin/settings pages
@@ -152,6 +166,8 @@ const routeTree = rootRoute.addChildren([
     homeRoute,
     conversationRoute,
     workspaceDetailRoute,
+    deploymentSettingsRoute,
+    deploymentHistoryRoute,
     settingsConversationRoute,
     projectDetailConversationRoute,
     projectDocsConversationRoute,

@@ -13,6 +13,9 @@ EXPOSE 3000
 COPY startup.sh /workspace/startup.sh
 RUN chmod +x /workspace/startup.sh
 
+# Copy OpenCode tools into the sandbox image
+COPY opencode-tools /opt/fastest/opencode-tools
+
 # Start with the custom startup script
 # The startup script must end with 'exec bun /container-server/dist/index.js'
 # to properly replace the shell process and handle signals

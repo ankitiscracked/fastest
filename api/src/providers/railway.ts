@@ -1,3 +1,4 @@
+import { INFRA_PROVIDERS } from '@fastest/shared';
 import type { ResourceType } from '@fastest/shared';
 import type {
   ResourceProvider,
@@ -22,11 +23,7 @@ interface GraphQLResponse<T> {
  */
 export class RailwayProvider implements ResourceProvider {
   readonly name = 'railway' as const;
-  readonly supportedTypes: ResourceType[] = [
-    'compute',
-    'database:postgres',
-    'database:redis',
-  ];
+  readonly supportedTypes: ResourceType[] = INFRA_PROVIDERS.railway.supportedTypes;
 
   private async graphql<T>(
     query: string,

@@ -40,6 +40,8 @@ export interface Env {
   OPENCODE_URL?: string;
   // Optional directory to isolate OpenCode tool effects (host OpenCode)
   OPENCODE_WORKDIR?: string;
+  // Optional directory for OpenCode custom tools
+  OPENCODE_TOOLS_DIR?: string;
   // Sandbox provider (cloudflare | e2b)
   SANDBOX_PROVIDER?: string;
   // E2B template id (optional)
@@ -54,6 +56,9 @@ export interface Env {
   // Cloudflare deploy credentials (our account)
   CLOUDFLARE_DEPLOY_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  // Railway deploy credentials (our account)
+  RAILWAY_DEPLOY_TOKEN?: string;
+  RAILWAY_PROJECT_ID?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();

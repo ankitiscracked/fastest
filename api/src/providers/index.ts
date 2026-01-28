@@ -1,4 +1,7 @@
 import type { ResourceType, InfraProvider } from '@fastest/shared';
+import {
+  getDefaultProviderNameForType as getSharedDefaultProviderNameForType,
+} from '@fastest/shared';
 import type { ResourceProvider, ProviderCredentials } from './types';
 import { ProviderError } from './types';
 import { RailwayProvider } from './railway';
@@ -17,18 +20,6 @@ providers.set('railway', new RailwayProvider());
 providers.set('cloudflare', new CloudflareProvider());
 
 /**
- * Default provider for each resource type
- */
-const defaultProviders: Partial<Record<ResourceType, InfraProvider>> = {
-  'compute': 'railway',
-  'compute:edge': 'cloudflare',
-  'database:postgres': 'railway',
-  'database:mysql': 'railway',
-  'database:redis': 'railway',
-  'storage:blob': 'cloudflare',
-};
-
-/**
  * Get a provider by name
  */
 export function getProvider(name: InfraProvider): ResourceProvider {
@@ -43,7 +34,7 @@ export function getProvider(name: InfraProvider): ResourceProvider {
  * Get the default provider for a resource type
  */
 export function getDefaultProviderForType(type: ResourceType): ResourceProvider {
-  const providerName = defaultProviders[type];
+  const providerName = getSharedDefaultProviderNameForType(type);
   if (!providerName) {
     throw new ProviderError(
       'railway', // fallback
@@ -58,7 +49,7 @@ export function getDefaultProviderForType(type: ResourceType): ResourceProvider 
  * Get the default provider name for a resource type
  */
 export function getDefaultProviderNameForType(type: ResourceType): InfraProvider {
-  const providerName = defaultProviders[type];
+  const providerName = getSharedDefaultProviderNameForType(type);
   if (!providerName) {
     // Default to railway for unknown types
     return 'railway';

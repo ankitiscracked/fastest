@@ -4,8 +4,13 @@ import type {
   DetectedRuntime,
   ResourceType,
   InfraProvider,
+  DetectionMetadata,
+  DetectionSignal,
 } from '@fastest/shared';
-import { getDefaultProviderNameForType } from '../providers';
+import { getDefaultProviderNameForType, getProviderCandidatesForType } from '@fastest/shared';
+import { RUNTIME_RULES, FRAMEWORK_RULES, EDGE_RULES, EDGE_NEGATIVE_PATTERNS } from './rules';
+import { detectWithLLM } from './llm';
+import type { Env } from '../index';
 
 /**
  * Suggested resource based on detection
@@ -13,6 +18,7 @@ import { getDefaultProviderNameForType } from '../providers';
 export interface SuggestedResource {
   type: ResourceType;
   provider: InfraProvider;
+  provider_candidates?: InfraProvider[];
   name: string;
   envVar?: string;
 }
@@ -27,12 +33,105 @@ interface PackageJson {
   devDependencies?: Record<string, string>;
 }
 
+interface DetectionContext {
+  files: Map<string, string>;
+  filePaths: string[];
+  packageJson: PackageJson | null;
+  deps: Record<string, string>;
+  scripts: Record<string, string>;
+}
+
+interface DetectionResult {
+  requirements: DetectedRequirements;
+  metadata: DetectionMetadata;
+}
+
 /**
  * Detect requirements from project files
  */
 export async function detectRequirements(
   files: Map<string, string>
 ): Promise<DetectedRequirements> {
+  return (await detectRequirementsWithMetadata(files)).requirements;
+}
+
+export async function detectRequirementsWithMetadata(
+  files: Map<string, string>
+): Promise<DetectionResult> {
+  const { context, requirements } = buildBaseRequirements(files);
+  const signals: DetectionSignal[] = [];
+
+  const { runtime, runtimeConfidence, runtimeReasons } = detectRuntimeWithRules(context, signals);
+  const { framework, frameworkConfidence, frameworkReasons } = detectFrameworkWithRules(context, signals);
+
+  requirements.runtime = runtime;
+  requirements.framework = framework;
+
+  if (context.packageJson) {
+    requirements.buildCommand = context.scripts.build || null;
+    requirements.startCommand =
+      context.scripts.start ||
+      context.scripts.serve ||
+      null;
+  }
+
+  requirements.databases = detectDatabases(files, context.packageJson, signals);
+  requirements.isEdgeCompatible = detectEdgeCompatibility(context, signals);
+  requirements.needsStorage = detectStorageNeeds(context, signals);
+
+  const overallConfidence = Math.max(0, Math.min(1,
+    (runtimeConfidence * 0.6) + (frameworkConfidence * 0.25) + (requirements.runtime ? 0.15 : 0)
+  ));
+
+  const reasons = [...runtimeReasons, ...frameworkReasons];
+  const metadata: DetectionMetadata = {
+    confidence: overallConfidence,
+    reasons: reasons.slice(0, 6),
+    signals,
+    source: 'rules',
+  };
+
+  return { requirements, metadata };
+}
+
+export async function detectRequirementsWithFallback(
+  files: Map<string, string>,
+  env: Env
+): Promise<DetectionResult> {
+  const base = await detectRequirementsWithMetadata(files);
+  if (base.metadata.confidence >= 0.6) {
+    return base;
+  }
+
+  const llmResult = await detectWithLLM(env, files);
+  if (!llmResult) {
+    return base;
+  }
+
+  const requirements = { ...base.requirements };
+  if (!requirements.runtime && llmResult.runtime) requirements.runtime = llmResult.runtime;
+  if (!requirements.framework && llmResult.framework) requirements.framework = llmResult.framework;
+  if (!requirements.buildCommand && llmResult.buildCommand) requirements.buildCommand = llmResult.buildCommand;
+  if (!requirements.startCommand && llmResult.startCommand) requirements.startCommand = llmResult.startCommand;
+  if (requirements.databases.length === 0 && llmResult.databases.length > 0) {
+    requirements.databases = llmResult.databases;
+  }
+  if (!requirements.needsStorage && llmResult.needsStorage) requirements.needsStorage = true;
+  if (!requirements.isEdgeCompatible && llmResult.isEdgeCompatible) {
+    requirements.isEdgeCompatible = true;
+  }
+
+  const metadata: DetectionMetadata = {
+    confidence: Math.max(base.metadata.confidence, llmResult.confidence),
+    reasons: [...base.metadata.reasons, ...llmResult.reasons].slice(0, 6),
+    signals: base.metadata.signals,
+    source: 'rules+llm',
+  };
+
+  return { requirements, metadata };
+}
+
+function buildBaseRequirements(files: Map<string, string>) {
   const requirements: DetectedRequirements = {
     runtime: null,
     runtimeVersion: null,
@@ -44,7 +143,6 @@ export async function detectRequirements(
     startCommand: null,
   };
 
-  // Parse package.json if exists
   const packageJsonContent = files.get('package.json');
   let packageJson: PackageJson | null = null;
 
@@ -56,102 +154,141 @@ export async function detectRequirements(
     }
   }
 
-  // Detect runtime
-  requirements.runtime = detectRuntime(files, packageJson);
-
-  // Detect framework
-  if (packageJson) {
-    requirements.framework = detectFramework(packageJson);
-    requirements.buildCommand = packageJson.scripts?.build || null;
-    requirements.startCommand =
-      packageJson.scripts?.start ||
-      packageJson.scripts?.serve ||
-      null;
-  }
-
-  // Detect databases
-  requirements.databases = detectDatabases(files, packageJson);
-
-  // Check for edge compatibility
-  requirements.isEdgeCompatible = detectEdgeCompatibility(files, packageJson);
-
-  // Check for storage needs
-  requirements.needsStorage = detectStorageNeeds(files, packageJson);
-
-  return requirements;
-}
-
-/**
- * Detect runtime from files
- */
-function detectRuntime(
-  files: Map<string, string>,
-  packageJson: PackageJson | null
-): DetectedRuntime {
-  // Check for Node.js
-  if (packageJson || files.has('package.json')) {
-    return 'node';
-  }
-
-  // Check for Python
-  if (
-    files.has('requirements.txt') ||
-    files.has('pyproject.toml') ||
-    files.has('setup.py') ||
-    files.has('Pipfile')
-  ) {
-    return 'python';
-  }
-
-  // Check for Go
-  if (files.has('go.mod') || files.has('go.sum')) {
-    return 'go';
-  }
-
-  // Check for static site (HTML files at root)
-  if (files.has('index.html')) {
-    return 'static';
-  }
-
-  // Check file extensions
-  for (const path of files.keys()) {
-    if (path.endsWith('.ts') || path.endsWith('.js') || path.endsWith('.mjs')) {
-      return 'node';
-    }
-    if (path.endsWith('.py')) {
-      return 'python';
-    }
-    if (path.endsWith('.go')) {
-      return 'go';
-    }
-  }
-
-  return null;
-}
-
-/**
- * Detect framework from package.json
- */
-function detectFramework(packageJson: PackageJson): string | null {
   const deps = {
-    ...packageJson.dependencies,
-    ...packageJson.devDependencies,
+    ...(packageJson?.dependencies || {}),
+    ...(packageJson?.devDependencies || {}),
   };
 
-  // Node.js frameworks
-  if (deps['next']) return 'next';
-  if (deps['nuxt']) return 'nuxt';
-  if (deps['remix']) return 'remix';
-  if (deps['express']) return 'express';
-  if (deps['fastify']) return 'fastify';
-  if (deps['hono']) return 'hono';
-  if (deps['koa']) return 'koa';
-  if (deps['nestjs'] || deps['@nestjs/core']) return 'nestjs';
-  if (deps['react']) return 'react';
-  if (deps['vue']) return 'vue';
-  if (deps['svelte'] || deps['@sveltejs/kit']) return 'svelte';
+  const scripts = packageJson?.scripts || {};
 
-  return null;
+  const context: DetectionContext = {
+    files,
+    filePaths: Array.from(files.keys()),
+    packageJson,
+    deps,
+    scripts,
+  };
+
+  return { context, requirements };
+}
+
+function detectRuntimeWithRules(
+  context: DetectionContext,
+  signals: DetectionSignal[]
+): { runtime: DetectedRuntime; runtimeConfidence: number; runtimeReasons: string[] } {
+  const scores: Record<Exclude<DetectedRuntime, null>, number> = {
+    node: 0,
+    python: 0,
+    go: 0,
+    static: 0,
+  };
+  const reasons: Record<string, string[]> = { node: [], python: [], go: [], static: [] };
+
+  for (const rule of RUNTIME_RULES) {
+    if (!matchRule(rule.match, context)) continue;
+    const runtime = rule.effect.runtime;
+    if (!runtime) continue;
+    scores[runtime] += rule.confidence;
+    reasons[runtime].push(rule.reason);
+    signals.push({ id: rule.id, confidence: rule.confidence, reason: rule.reason });
+  }
+
+  let best: DetectedRuntime = null;
+  let bestScore = 0;
+  let totalScore = 0;
+
+  for (const runtime of Object.keys(scores) as Array<Exclude<DetectedRuntime, null>>) {
+    totalScore += scores[runtime];
+    if (scores[runtime] > bestScore) {
+      bestScore = scores[runtime];
+      best = runtime;
+    }
+  }
+
+  const runtimeConfidence = totalScore > 0 ? bestScore / totalScore : 0;
+  return { runtime: best, runtimeConfidence, runtimeReasons: best ? reasons[best] : [] };
+}
+
+function detectFrameworkWithRules(
+  context: DetectionContext,
+  signals: DetectionSignal[]
+): { framework: string | null; frameworkConfidence: number; frameworkReasons: string[] } {
+  const scores: Record<string, number> = {};
+  const reasons: Record<string, string[]> = {};
+
+  for (const rule of FRAMEWORK_RULES) {
+    if (!matchRule(rule.match, context)) continue;
+    const framework = rule.effect.framework;
+    if (!framework) continue;
+    scores[framework] = (scores[framework] || 0) + rule.confidence;
+    reasons[framework] = reasons[framework] || [];
+    reasons[framework].push(rule.reason);
+    signals.push({ id: rule.id, confidence: rule.confidence, reason: rule.reason });
+  }
+
+  let bestFramework: string | null = null;
+  let bestScore = 0;
+  let totalScore = 0;
+  for (const key of Object.keys(scores)) {
+    totalScore += scores[key];
+    if (scores[key] > bestScore) {
+      bestScore = scores[key];
+      bestFramework = key;
+    }
+  }
+
+  const frameworkConfidence = totalScore > 0 ? bestScore / totalScore : 0;
+  return {
+    framework: bestFramework,
+    frameworkConfidence,
+    frameworkReasons: bestFramework ? reasons[bestFramework] : [],
+  };
+}
+
+function matchRule(match: { filesAny?: string[]; filesAll?: string[]; depsAny?: string[]; scriptsAny?: string[]; contentIncludesAny?: string[] }, context: DetectionContext): boolean {
+  const { filesAny, filesAll, depsAny, scriptsAny, contentIncludesAny } = match;
+  const filePaths = context.filePaths;
+
+  if (filesAny && filesAny.length > 0) {
+    const matched = filesAny.some((pattern) => fileMatchesPattern(filePaths, pattern));
+    if (!matched) return false;
+  }
+
+  if (filesAll && filesAll.length > 0) {
+    const matchedAll = filesAll.every((pattern) => fileMatchesPattern(filePaths, pattern));
+    if (!matchedAll) return false;
+  }
+
+  if (depsAny && depsAny.length > 0) {
+    const matched = depsAny.some((dep) => context.deps[dep]);
+    if (!matched) return false;
+  }
+
+  if (scriptsAny && scriptsAny.length > 0) {
+    const matched = scriptsAny.some((script) => context.scripts[script]);
+    if (!matched) return false;
+  }
+
+  if (contentIncludesAny && contentIncludesAny.length > 0) {
+    const matched = contentIncludesAny.some((needle) => fileContentIncludes(context.files, needle));
+    if (!matched) return false;
+  }
+
+  return true;
+}
+
+function fileMatchesPattern(filePaths: string[], pattern: string): boolean {
+  if (pattern.startsWith('*.')) {
+    return filePaths.some((path) => path.endsWith(pattern.slice(1)));
+  }
+  return filePaths.includes(pattern);
+}
+
+function fileContentIncludes(files: Map<string, string>, needle: string): boolean {
+  for (const content of files.values()) {
+    if (content.includes(needle)) return true;
+  }
+  return false;
 }
 
 /**
@@ -159,7 +296,8 @@ function detectFramework(packageJson: PackageJson): string | null {
  */
 function detectDatabases(
   files: Map<string, string>,
-  packageJson: PackageJson | null
+  packageJson: PackageJson | null,
+  signals: DetectionSignal[]
 ): DetectedDatabase[] {
   const databases: DetectedDatabase[] = [];
   const deps = packageJson
@@ -179,6 +317,7 @@ function detectDatabases(
     files.has('prisma/schema.prisma');
 
   if (needsPostgres) {
+    signals.push({ id: 'db:postgres:deps', confidence: 0.7, reason: 'Detected Postgres-related dependencies' });
     // Check Prisma schema for specific database
     const prismaSchema = files.get('prisma/schema.prisma');
     if (prismaSchema) {
@@ -200,6 +339,7 @@ function detectDatabases(
     (deps['typeorm'] && !needsPostgres);
 
   if (needsMysql && !databases.some((d) => d.type === 'mysql')) {
+    signals.push({ id: 'db:mysql:deps', confidence: 0.6, reason: 'Detected MySQL-related dependencies' });
     databases.push({ type: 'mysql', envVar: 'DATABASE_URL' });
   }
 
@@ -212,6 +352,7 @@ function detectDatabases(
     deps['bullmq'];
 
   if (needsRedis) {
+    signals.push({ id: 'db:redis:deps', confidence: 0.6, reason: 'Detected Redis-related dependencies' });
     databases.push({ type: 'redis', envVar: 'REDIS_URL' });
   }
 
@@ -226,6 +367,7 @@ function detectDatabases(
       content.includes('DATABASE_URL') &&
       !databases.some((d) => d.envVar === 'DATABASE_URL')
     ) {
+      signals.push({ id: 'db:env:postgres', confidence: 0.5, reason: 'Found DATABASE_URL usage in code' });
       databases.push({ type: 'postgres', envVar: 'DATABASE_URL' });
     }
 
@@ -234,6 +376,7 @@ function detectDatabases(
       content.includes('REDIS_URL') &&
       !databases.some((d) => d.envVar === 'REDIS_URL')
     ) {
+      signals.push({ id: 'db:env:redis', confidence: 0.5, reason: 'Found REDIS_URL usage in code' });
       databases.push({ type: 'redis', envVar: 'REDIS_URL' });
     }
   }
@@ -245,49 +388,40 @@ function detectDatabases(
  * Detect if project is edge-compatible (can run on Cloudflare Workers)
  */
 function detectEdgeCompatibility(
-  files: Map<string, string>,
-  packageJson: PackageJson | null
+  context: DetectionContext,
+  signals: DetectionSignal[]
 ): boolean {
-  // Check for wrangler config
-  if (files.has('wrangler.toml') || files.has('wrangler.jsonc') || files.has('wrangler.json')) {
-    return true;
+  let score = 0;
+
+  for (const rule of EDGE_RULES) {
+    if (!matchRule(rule.match, context)) continue;
+    score += rule.confidence;
+    signals.push({ id: rule.id, confidence: rule.confidence, reason: rule.reason });
   }
 
-  // Check for Cloudflare-specific dependencies
-  const deps = packageJson
-    ? { ...packageJson.dependencies, ...packageJson.devDependencies }
-    : {};
-
-  if (
-    deps['@cloudflare/workers-types'] ||
-    deps['hono'] ||  // Hono is edge-first
-    deps['itty-router']
-  ) {
-    return true;
-  }
-
-  // Check for Next.js edge runtime
-  for (const [path, content] of files) {
-    if (path.endsWith('.ts') || path.endsWith('.tsx') || path.endsWith('.js')) {
-      if (content.includes("runtime = 'edge'") || content.includes('runtime: "edge"')) {
-        return true;
-      }
+  for (const needle of EDGE_NEGATIVE_PATTERNS) {
+    if (fileContentIncludes(context.files, needle)) {
+      score -= 0.6;
+      signals.push({
+        id: 'edge:negative',
+        confidence: 0.6,
+        reason: 'Detected Node-only APIs that are not edge-compatible',
+      });
+      break;
     }
   }
 
-  return false;
+  return score >= 0.6;
 }
 
 /**
  * Detect if project needs blob storage
  */
 function detectStorageNeeds(
-  files: Map<string, string>,
-  packageJson: PackageJson | null
+  context: DetectionContext,
+  signals: DetectionSignal[]
 ): boolean {
-  const deps = packageJson
-    ? { ...packageJson.dependencies, ...packageJson.devDependencies }
-    : {};
+  const deps = context.deps;
 
   // Check for storage-related dependencies
   if (
@@ -297,16 +431,18 @@ function detectStorageNeeds(
     deps['multer'] ||
     deps['formidable']
   ) {
+    signals.push({ id: 'storage:deps', confidence: 0.6, reason: 'Detected storage-related dependencies' });
     return true;
   }
 
   // Check for R2 bindings in wrangler config
   const wranglerConfig =
-    files.get('wrangler.toml') ||
-    files.get('wrangler.jsonc') ||
-    files.get('wrangler.json');
+    context.files.get('wrangler.toml') ||
+    context.files.get('wrangler.jsonc') ||
+    context.files.get('wrangler.json');
 
   if (wranglerConfig && wranglerConfig.includes('r2_buckets')) {
+    signals.push({ id: 'storage:r2', confidence: 0.7, reason: 'Detected R2 bucket configuration' });
     return true;
   }
 
@@ -326,32 +462,46 @@ export function suggestResources(
     const computeType: ResourceType = requirements.isEdgeCompatible
       ? 'compute:edge'
       : 'compute';
-
-    suggestions.push({
-      type: computeType,
-      provider: getDefaultProviderNameForType(computeType),
-      name: 'app',
-    });
+    const providerCandidates = getProviderCandidatesForType(computeType);
+    const provider = getDefaultProviderNameForType(computeType) || providerCandidates[0];
+    if (provider) {
+      suggestions.push({
+        type: computeType,
+        provider,
+        provider_candidates: providerCandidates,
+        name: 'app',
+      });
+    }
   }
 
   // Suggest databases
   for (const db of requirements.databases) {
     const dbType: ResourceType = `database:${db.type}` as ResourceType;
-    suggestions.push({
-      type: dbType,
-      provider: getDefaultProviderNameForType(dbType),
-      name: db.type,
-      envVar: db.envVar,
-    });
+    const providerCandidates = getProviderCandidatesForType(dbType);
+    const provider = getDefaultProviderNameForType(dbType) || providerCandidates[0];
+    if (provider) {
+      suggestions.push({
+        type: dbType,
+        provider,
+        provider_candidates: providerCandidates,
+        name: db.type,
+        envVar: db.envVar,
+      });
+    }
   }
 
   // Suggest storage if needed
   if (requirements.needsStorage) {
-    suggestions.push({
-      type: 'storage:blob',
-      provider: getDefaultProviderNameForType('storage:blob'),
-      name: 'storage',
-    });
+    const providerCandidates = getProviderCandidatesForType('storage:blob');
+    const provider = getDefaultProviderNameForType('storage:blob') || providerCandidates[0];
+    if (provider) {
+      suggestions.push({
+        type: 'storage:blob',
+        provider,
+        provider_candidates: providerCandidates,
+        name: 'storage',
+      });
+    }
   }
 
   return suggestions;

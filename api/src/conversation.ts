@@ -277,9 +277,9 @@ export class ConversationSession extends DurableObject<Env> {
     }
 
     if (url.pathname === '/deploy' && request.method === 'POST') {
-      const { apiUrl, apiToken } = await request.json() as { apiUrl: string; apiToken: string };
+      const { apiUrl, apiToken, deploymentId: providedId } = await request.json() as { apiUrl: string; apiToken: string; deploymentId?: string };
       // Trigger async deployment - returns immediately
-      const deploymentId = crypto.randomUUID();
+      const deploymentId = providedId || crypto.randomUUID();
       this.deployments.deploy(deploymentId, apiUrl, apiToken).catch(console.error);
       return Response.json({ deploymentId, message: 'Deployment started' });
     }
@@ -421,9 +421,18 @@ export class ConversationSession extends DurableObject<Env> {
         }
       };
 
+      // OpenCode policy: require explicit user approval before deployment tools
+      const policyPreamble = [
+        'Policy:',
+        '- If deployment is requested, ask the user for explicit approval before calling any deploy tool.',
+        '- Only call the deploy tool after the user has clearly approved deployment in this conversation.',
+      ].join('\n');
+
+      const openCodePrompt = `${policyPreamble}\n\nUser request:\n${prompt}`;
+
       // Run in sandbox with streaming
       const result = await this.openCode.runInSandboxWithStreaming(
-        prompt,
+        openCodePrompt,
         apiUrl,
         apiToken,
         assistantMessage.id,

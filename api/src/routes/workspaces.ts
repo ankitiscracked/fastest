@@ -15,7 +15,7 @@ import type {
 } from '@fastest/shared';
 import { compareDrift, fromJSON, getFile, empty as emptyManifest } from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
-import { createDb, workspaces, projects, driftReports, activityEvents, snapshots } from '../db';
+import { createDb, workspaces, projects, driftReports, activityEvents, snapshots, conversations, deployments } from '../db';
 import {
   createRollbackContext,
   executeRollback,
@@ -2545,6 +2545,22 @@ workspaceRoutes.post('/:workspaceId/deploy', async (c) => {
     }, 400);
   }
 
+  const deploymentId = generateULID();
+  const now = new Date().toISOString();
+
+  await db.insert(deployments).values({
+    id: deploymentId,
+    workspaceId,
+    projectId: workspace.project_id,
+    snapshotId: latestSnapshot.id,
+    status: 'deploying',
+    trigger: 'manual',
+    url: null,
+    error: null,
+    startedAt: now,
+    completedAt: null,
+  });
+
   // Get or create a conversation for deployment
   // Use the most recent conversation for this workspace
   const conversationResult = await db
@@ -2593,13 +2609,14 @@ workspaceRoutes.post('/:workspaceId/deploy', async (c) => {
   const response = await stub.fetch(new Request('http://do/deploy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiUrl, apiToken }),
+    body: JSON.stringify({ apiUrl, apiToken, deploymentId }),
   }));
 
   const data = await response.json();
 
   return c.json({
     ...data,
+    deploymentId,
     snapshot_id: latestSnapshot.id,
     conversation_id: conversationId,
   });

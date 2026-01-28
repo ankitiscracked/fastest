@@ -9,6 +9,7 @@
  * - FASTEST_API_URL: The base URL of the Fastest API
  * - FASTEST_API_TOKEN: Authentication token
  * - FASTEST_PROJECT_ID: The current project ID
+ * - FASTEST_WORKSPACE_ID: The current workspace ID (optional, used for history)
  */
 
 import { tool } from '@opencode-ai/plugin';
@@ -23,6 +24,9 @@ export default tool({
 Use this when the user wants to deploy, ship, or make their app live.`,
 
   args: {
+    confirm: tool.schema
+      .string()
+      .describe('Must be set to "approve" after the user explicitly approves deployment'),
     message: tool.schema
       .string()
       .optional()
@@ -30,9 +34,14 @@ Use this when the user wants to deploy, ship, or make their app live.`,
   },
 
   async execute(args, ctx) {
+    if (args.confirm !== 'approve') {
+      return 'Deployment requires explicit user approval. Ask the user to confirm deployment, then call this tool with confirm: "approve".';
+    }
+
     const apiUrl = process.env.FASTEST_API_URL;
     const apiToken = process.env.FASTEST_API_TOKEN;
     const projectId = process.env.FASTEST_PROJECT_ID;
+    const workspaceId = process.env.FASTEST_WORKSPACE_ID;
 
     // Validate required environment variables
     if (!apiUrl) {
@@ -75,6 +84,8 @@ Use this when the user wants to deploy, ship, or make their app live.`,
           body: JSON.stringify({
             manifest_hash: manifestHash,
             message: args.message,
+            workspace_id: workspaceId || undefined,
+            source: 'chat',
           }),
         }
       );

@@ -1,3 +1,4 @@
+import { INFRA_PROVIDERS } from '@fastest/shared';
 import type { ResourceType } from '@fastest/shared';
 import type {
   ResourceProvider,
@@ -18,10 +19,7 @@ import { ProviderError } from './types';
  */
 export class CloudflareProvider implements ResourceProvider {
   readonly name = 'cloudflare' as const;
-  readonly supportedTypes: ResourceType[] = [
-    'compute:edge',
-    'storage:blob',
-  ];
+  readonly supportedTypes: ResourceType[] = INFRA_PROVIDERS.cloudflare.supportedTypes;
 
   private readonly apiBase = 'https://api.cloudflare.com/client/v4';
 

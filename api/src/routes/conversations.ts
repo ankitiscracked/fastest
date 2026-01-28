@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import { eq, and, desc } from 'drizzle-orm';
 import type { Env } from '../index';
 import { authMiddleware, getAuthUser } from '../middleware/auth';
-import { createDb, conversations, workspaces, projects, snapshots } from '../db';
+import { createDb, conversations, workspaces, projects, snapshots, deployments } from '../db';
 import type { Conversation, ConversationWithContext } from '@fastest/shared';
 
 // Helper: Generate ULID
@@ -698,23 +698,39 @@ conversationRoutes.post('/:conversationId/deploy', async (c) => {
   }
 
   const { conversationId } = c.req.param();
-  const db = c.env.DB;
+  const db = createDb(c.env.DB);
 
-  // Verify ownership
   const existing = await db
-    .prepare(`
-      SELECT c.id
-      FROM conversations c
-      JOIN workspaces w ON c.workspace_id = w.id
-      JOIN projects p ON w.project_id = p.id
-      WHERE c.id = ? AND p.owner_user_id = ?
-    `)
-    .bind(conversationId, user.id)
-    .first();
+    .select({
+      id: conversations.id,
+      workspaceId: conversations.workspaceId,
+      projectId: workspaces.projectId,
+    })
+    .from(conversations)
+    .innerJoin(workspaces, eq(conversations.workspaceId, workspaces.id))
+    .innerJoin(projects, eq(workspaces.projectId, projects.id))
+    .where(and(eq(conversations.id, conversationId), eq(projects.ownerUserId, user.id)))
+    .limit(1);
 
-  if (!existing) {
+  if (!existing[0]) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } }, 404);
   }
+
+  const deploymentId = generateULID();
+  const now = new Date().toISOString();
+
+  await db.insert(deployments).values({
+    id: deploymentId,
+    workspaceId: existing[0].workspaceId,
+    projectId: existing[0].projectId,
+    snapshotId: null,
+    status: 'deploying',
+    trigger: 'chat',
+    url: null,
+    error: null,
+    startedAt: now,
+    completedAt: null,
+  });
 
   const doId = getConversationDOId(c.env, conversationId);
   const stub = c.env.ConversationSession.get(doId);
@@ -726,7 +742,7 @@ conversationRoutes.post('/:conversationId/deploy', async (c) => {
   const response = await stub.fetch(new Request('http://do/deploy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiUrl, apiToken }),
+    body: JSON.stringify({ apiUrl, apiToken, deploymentId }),
   }));
 
   const data = await response.json();

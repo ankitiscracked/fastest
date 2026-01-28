@@ -190,6 +190,13 @@ export class ConversationDeployments {
       await this.ctx.storage.put(`deployment_log:${deploymentId}`, deploymentLog);
       await this.ctx.storage.put('state', state);
 
+      await this.reportDeploymentStatus(apiUrl, apiToken, deploymentId, {
+        status: 'success',
+        url: deployedUrl,
+        error: null,
+        completed_at: deployment.completedAt,
+      });
+
       await appendLog('deploy', 'stdout', `\nDeployed successfully to ${deployedUrl}\n`);
       this.broadcast({ type: 'deployment_complete', deployment });
     } catch (error) {
@@ -201,8 +208,36 @@ export class ConversationDeployments {
       await this.ctx.storage.put(`deployment_log:${deploymentId}`, deploymentLog);
       await this.ctx.storage.put('state', state);
 
+      await this.reportDeploymentStatus(apiUrl, apiToken, deploymentId, {
+        status: 'failed',
+        url: null,
+        error: deployment.error,
+        completed_at: deployment.completedAt,
+      });
+
       await appendLog('deploy', 'stderr', `\nDeployment failed: ${deployment.error}\n`);
       this.broadcast({ type: 'deployment_complete', deployment });
+    }
+  }
+
+  private async reportDeploymentStatus(
+    apiUrl: string,
+    apiToken: string,
+    deploymentId: string,
+    update: { status: 'deploying' | 'success' | 'failed'; url: string | null; error: string | null; completed_at?: string }
+  ) {
+    if (!apiUrl || !apiToken) return;
+    try {
+      await fetch(`${apiUrl}/v1/infrastructure/deployments/${deploymentId}/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiToken}`,
+        },
+        body: JSON.stringify(update),
+      });
+    } catch (err) {
+      console.warn('Failed to report deployment status:', err);
     }
   }
 

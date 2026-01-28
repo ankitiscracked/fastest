@@ -761,6 +761,15 @@ export class ConversationOpenCode {
     envVars.FASTEST_API_URL = apiUrl;
     envVars.FASTEST_API_TOKEN = apiToken;
     envVars.FASTEST_PROJECT_ID = state.projectId;
+    if (state.workspaceId) envVars.FASTEST_WORKSPACE_ID = state.workspaceId;
+
+    const toolsDir = (this.env.OPENCODE_TOOLS_DIR || '/opt/fastest/opencode-tools').trim();
+    if (toolsDir) {
+      const toolsCheck = await sandbox.exec(`test -d ${toolsDir} && echo "ok"`);
+      if (toolsCheck.success && toolsCheck.stdout.includes('ok')) {
+        envVars.OPENCODE_TOOLS_DIR = toolsDir;
+      }
+    }
 
     const binaryCheck = await sandbox.exec(`which opencode && opencode --version 2>&1`);
     if (!binaryCheck.success) {
@@ -839,6 +848,14 @@ export class ConversationOpenCode {
     if (apiUrl) envVars.FASTEST_API_URL = apiUrl;
     if (apiToken) envVars.FASTEST_API_TOKEN = apiToken;
     if (state.projectId) envVars.FASTEST_PROJECT_ID = state.projectId;
+    if (state.workspaceId) envVars.FASTEST_WORKSPACE_ID = state.workspaceId;
+    const toolsDir = (this.env.OPENCODE_TOOLS_DIR || '/opt/fastest/opencode-tools').trim();
+    if (toolsDir) {
+      const toolsCheck = await sandbox.exec(`test -d ${toolsDir} && echo "ok"`);
+      if (toolsCheck.success && toolsCheck.stdout.includes('ok')) {
+        envVars.OPENCODE_TOOLS_DIR = toolsDir;
+      }
+    }
 
     await sandbox.exec(`mkdir -p "${workDir}"`);
     await sandbox.runBackground(
