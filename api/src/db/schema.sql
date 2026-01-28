@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   owner_user_id TEXT NOT NULL REFERENCES users(id),
   name TEXT NOT NULL,
+  intent TEXT,
+  brief TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_snapshot_id TEXT,
@@ -205,6 +207,27 @@ CREATE TABLE IF NOT EXISTS refactoring_suggestions (
 CREATE INDEX IF NOT EXISTS idx_refactoring_workspace ON refactoring_suggestions(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_refactoring_status ON refactoring_suggestions(workspace_id, status);
 
+-- Build suggestions for product guidance
+CREATE TABLE IF NOT EXISTS build_suggestions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  rationale TEXT,
+  category TEXT NOT NULL,  -- 'feature', 'validation', 'launch', 'technical', 'user_research'
+  priority INTEGER DEFAULT 2,
+  effort TEXT,  -- 'small', 'medium', 'large'
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending', 'started', 'completed', 'dismissed'
+  helpful_count INTEGER NOT NULL DEFAULT 0,
+  not_helpful_count INTEGER NOT NULL DEFAULT 0,
+  model TEXT,
+  generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  acted_on_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_suggestions_project ON build_suggestions(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_suggestions_priority ON build_suggestions(project_id, priority);
+
 -- Provider credentials for infrastructure (Railway, Cloudflare, etc.)
 CREATE TABLE IF NOT EXISTS provider_credentials (
   id TEXT PRIMARY KEY,
@@ -236,3 +259,32 @@ CREATE TABLE IF NOT EXISTS infrastructure_resources (
 
 CREATE INDEX IF NOT EXISTS idx_infra_resources_project ON infrastructure_resources(project_id);
 CREATE INDEX IF NOT EXISTS idx_infra_resources_project_type ON infrastructure_resources(project_id, type);
+
+-- Deployment settings per workspace
+CREATE TABLE IF NOT EXISTS deployment_settings (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  auto_deploy INTEGER NOT NULL DEFAULT 0,
+  runtime_override TEXT,
+  build_command TEXT,
+  start_command TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Deployments history
+CREATE TABLE IF NOT EXISTS deployments (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  snapshot_id TEXT REFERENCES snapshots(id) ON DELETE SET NULL,
+  status TEXT NOT NULL, -- 'deploying' | 'success' | 'failed'
+  trigger TEXT NOT NULL, -- 'manual' | 'chat' | 'auto'
+  url TEXT,
+  error TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_deployments_workspace ON deployments(workspace_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status, started_at DESC);

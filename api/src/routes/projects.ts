@@ -1,9 +1,75 @@
 import { Hono } from 'hono';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import type { Env } from '../index';
-import type { Project, Workspace, Snapshot, CreateProjectRequest, CreateWorkspaceRequest, SetEnvVarRequest, ProjectEnvVar, ListProjectDocsResponse, GetDocContentResponse, WorkspaceDocs, DocFile } from '@fastest/shared';
+import type {
+  Project,
+  Workspace,
+  Snapshot,
+  CreateProjectRequest,
+  CreateWorkspaceRequest,
+  SetEnvVarRequest,
+  ProjectEnvVar,
+  ListProjectDocsResponse,
+  GetDocContentResponse,
+  WorkspaceDocs,
+  DocFile,
+  ProjectBrief,
+  ProjectIntent,
+  BuildSuggestion,
+  BuildSuggestionCategory,
+  BuildSuggestionEffort,
+  BuildSuggestionStatus,
+} from '@fastest/shared';
 import { getAuthUser } from '../middleware/auth';
-import { createDb, projects, workspaces, snapshots, activityEvents, driftReports, projectEnvVars } from '../db';
+import { createDb, projects, workspaces, snapshots, activityEvents, driftReports, projectEnvVars, conversations, buildSuggestions } from '../db';
+
+const SUGGESTIONS_MODEL = '@cf/meta/llama-3.1-8b-instruct';
+
+function parseBrief(value: string | null): ProjectBrief | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as ProjectBrief;
+  } catch {
+    return null;
+  }
+}
+
+function toProjectIntent(value: unknown): ProjectIntent | null {
+  if (typeof value !== 'string') return null;
+  const allowed: ProjectIntent[] = [
+    'startup',
+    'personal_tool',
+    'learning',
+    'fun',
+    'portfolio',
+    'creative',
+    'exploration',
+    'open_source',
+  ];
+  return allowed.includes(value as ProjectIntent) ? (value as ProjectIntent) : null;
+}
+
+function normalizeSuggestionStatus(status: unknown): BuildSuggestionStatus | null {
+  if (typeof status !== 'string') return null;
+  const allowed: BuildSuggestionStatus[] = ['pending', 'started', 'completed', 'dismissed'];
+  return allowed.includes(status as BuildSuggestionStatus) ? (status as BuildSuggestionStatus) : null;
+}
+
+function normalizeCategory(value: unknown): BuildSuggestionCategory {
+  const allowed: BuildSuggestionCategory[] = ['feature', 'validation', 'launch', 'technical', 'user_research'];
+  if (typeof value === 'string' && allowed.includes(value as BuildSuggestionCategory)) {
+    return value as BuildSuggestionCategory;
+  }
+  return 'feature';
+}
+
+function normalizeEffort(value: unknown): BuildSuggestionEffort | null {
+  const allowed: BuildSuggestionEffort[] = ['small', 'medium', 'large'];
+  if (typeof value === 'string' && allowed.includes(value as BuildSuggestionEffort)) {
+    return value as BuildSuggestionEffort;
+  }
+  return null;
+}
 
 // Doc file patterns - files that are considered documentation
 const DOC_PATTERNS = [
@@ -66,6 +132,8 @@ projectRoutes.post('/', async (c) => {
     id: projectId,
     owner_user_id: user.id,
     name: body.name.trim(),
+    intent: null,
+    brief: null,
     created_at: now,
     updated_at: now,
     last_snapshot_id: null,
@@ -89,6 +157,8 @@ projectRoutes.get('/', async (c) => {
       id: projects.id,
       owner_user_id: projects.ownerUserId,
       name: projects.name,
+      intent: projects.intent,
+      brief: projects.brief,
       created_at: projects.createdAt,
       updated_at: projects.updatedAt,
       last_snapshot_id: projects.lastSnapshotId,
@@ -98,7 +168,13 @@ projectRoutes.get('/', async (c) => {
     .where(eq(projects.ownerUserId, user.id))
     .orderBy(desc(projects.updatedAt));
 
-  return c.json({ projects: result });
+  const formatted = result.map((project) => ({
+    ...project,
+    intent: project.intent ? toProjectIntent(project.intent) : null,
+    brief: parseBrief(project.brief),
+  }));
+
+  return c.json({ projects: formatted });
 });
 
 // Get project by ID
@@ -117,6 +193,8 @@ projectRoutes.get('/:projectId', async (c) => {
       id: projects.id,
       owner_user_id: projects.ownerUserId,
       name: projects.name,
+      intent: projects.intent,
+      brief: projects.brief,
       created_at: projects.createdAt,
       updated_at: projects.updatedAt,
       last_snapshot_id: projects.lastSnapshotId,
@@ -126,11 +204,17 @@ projectRoutes.get('/:projectId', async (c) => {
     .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))
     .limit(1);
 
-  const project = projectResult[0];
+  const projectRaw = projectResult[0];
 
-  if (!project) {
+  if (!projectRaw) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
   }
+
+  const project = {
+    ...projectRaw,
+    intent: projectRaw.intent ? toProjectIntent(projectRaw.intent) : null,
+    brief: parseBrief(projectRaw.brief),
+  };
 
   // Fetch workspaces
   const workspacesResult = await db
@@ -1029,6 +1113,445 @@ projectRoutes.get('/:projectId/docs/content', async (c) => {
     console.error('Failed to get doc content:', err);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get doc content' } }, 500);
   }
+});
+
+// Project brief
+projectRoutes.get('/:projectId/brief', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const db = createDb(c.env.DB);
+
+  const [project] = await db
+    .select({
+      id: projects.id,
+      owner_user_id: projects.ownerUserId,
+      intent: projects.intent,
+      brief: projects.brief,
+    })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)));
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  return c.json({
+    intent: project.intent ? toProjectIntent(project.intent) : null,
+    brief: parseBrief(project.brief),
+  });
+});
+
+projectRoutes.patch('/:projectId/brief', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const body = await c.req.json<{ intent?: unknown; brief?: unknown }>();
+  const intent = toProjectIntent(body.intent);
+
+  if (!intent || !body.brief || typeof body.brief !== 'object') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Valid intent and brief are required' } }, 422);
+  }
+
+  const brief = body.brief as ProjectBrief;
+  if (brief.intent !== intent) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Brief intent must match intent field' } }, 422);
+  }
+
+  const db = createDb(c.env.DB);
+  const now = new Date().toISOString();
+
+  const result = await db
+    .update(projects)
+    .set({
+      intent,
+      brief: JSON.stringify(brief),
+      updatedAt: now,
+    })
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)))
+    .returning({
+      intent: projects.intent,
+      brief: projects.brief,
+    });
+
+  if (result.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  return c.json({
+    intent: intent,
+    brief,
+  });
+});
+
+// Build suggestions (product guidance)
+projectRoutes.get('/:projectId/suggestions', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const status = c.req.query('status');
+  const statusFilter = status ? normalizeSuggestionStatus(status) : null;
+  if (status && !statusFilter) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status filter' } }, 422);
+  }
+
+  const db = createDb(c.env.DB);
+
+  const [project] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)));
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  const selectFields = {
+    id: buildSuggestions.id,
+    project_id: buildSuggestions.projectId,
+    title: buildSuggestions.title,
+    description: buildSuggestions.description,
+    rationale: buildSuggestions.rationale,
+    category: buildSuggestions.category,
+    priority: buildSuggestions.priority,
+    effort: buildSuggestions.effort,
+    status: buildSuggestions.status,
+    helpful_count: buildSuggestions.helpfulCount,
+    not_helpful_count: buildSuggestions.notHelpfulCount,
+    model: buildSuggestions.model,
+    generated_at: buildSuggestions.generatedAt,
+    acted_on_at: buildSuggestions.actedOnAt,
+  };
+
+  const rows = statusFilter
+    ? await db
+        .select(selectFields)
+        .from(buildSuggestions)
+        .where(and(eq(buildSuggestions.projectId, projectId), eq(buildSuggestions.status, statusFilter)))
+        .orderBy(desc(buildSuggestions.generatedAt))
+    : await db
+        .select(selectFields)
+        .from(buildSuggestions)
+        .where(eq(buildSuggestions.projectId, projectId))
+        .orderBy(desc(buildSuggestions.generatedAt));
+
+  return c.json({ suggestions: rows });
+});
+
+projectRoutes.post('/:projectId/suggestions/generate', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  if (!c.env.AI) {
+    return c.json({ error: { code: 'NOT_IMPLEMENTED', message: 'AI provider not configured' } }, 501);
+  }
+
+  const projectId = c.req.param('projectId');
+  const db = createDb(c.env.DB);
+
+  const [project] = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      intent: projects.intent,
+      brief: projects.brief,
+    })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)));
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  const intent = project.intent ? toProjectIntent(project.intent) : null;
+  const brief = parseBrief(project.brief);
+
+  if (!intent || !brief) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Project brief is required to generate suggestions' } }, 422);
+  }
+
+  const workspaceIds = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(eq(workspaces.projectId, projectId));
+
+  const workspaceIdList = workspaceIds.map((w) => w.id);
+
+  const recentConversations = workspaceIdList.length
+    ? await db
+        .select({
+          title: conversations.title,
+          updated_at: conversations.updatedAt,
+        })
+        .from(conversations)
+        .where(inArray(conversations.workspaceId, workspaceIdList))
+        .orderBy(desc(conversations.updatedAt))
+        .limit(6)
+    : [];
+
+  const snapshotStats = await db
+    .select({
+      total: sql<number>`count(*)`.as('total'),
+      last: sql<string | null>`max(${snapshots.createdAt})`.as('last'),
+    })
+    .from(snapshots)
+    .where(eq(snapshots.projectId, projectId));
+
+  const previousSuggestions = await db
+    .select({
+      title: buildSuggestions.title,
+      status: buildSuggestions.status,
+    })
+    .from(buildSuggestions)
+    .where(eq(buildSuggestions.projectId, projectId))
+    .orderBy(desc(buildSuggestions.generatedAt))
+    .limit(20);
+
+  const context = {
+    project: {
+      id: project.id,
+      name: project.name,
+      intent,
+      brief,
+    },
+    activity: {
+      snapshots_total: snapshotStats[0]?.total || 0,
+      last_snapshot_at: snapshotStats[0]?.last || null,
+      recent_conversations: recentConversations
+        .filter((conv) => conv.title)
+        .map((conv) => ({ title: conv.title, updated_at: conv.updated_at })),
+    },
+    previous_suggestions: previousSuggestions,
+  };
+
+  const prompt = `You are a product strategist. Using only the provided project context, generate 3-6 build suggestions.\n\nRules:\n- Align with intent and current stage\n- Be specific and actionable\n- Avoid duplicates with previous suggestions\n- Respect non-goals and decisions\n- Output JSON array only\n\nJSON shape:\n[{\"title\":\"...\",\"description\":\"...\",\"rationale\":\"...\",\"category\":\"feature|validation|launch|technical|user_research\",\"priority\":1|2|3,\"effort\":\"small|medium|large\"}]\n\nContext:\n${JSON.stringify(context, null, 2)}`;
+
+  let responseText = '';
+  try {
+    const response = await c.env.AI.run(SUGGESTIONS_MODEL, {
+      messages: [
+        { role: 'system', content: 'Return only valid JSON. Do not include commentary.' },
+        { role: 'user', content: prompt },
+      ],
+      max_tokens: 1600,
+    });
+    responseText = typeof response === 'string' ? response : (response as { response?: string }).response || '';
+  } catch (err) {
+    console.error('Suggestion generation failed:', err);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to generate suggestions' } }, 500);
+  }
+
+  const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Invalid AI response' } }, 500);
+  }
+
+  let parsed: Array<Record<string, unknown>> = [];
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Invalid AI response' } }, 500);
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return c.json({ suggestions: [] });
+  }
+
+  const existingTitles = new Set(
+    previousSuggestions.map((s) => s.title.trim().toLowerCase())
+  );
+
+  const now = new Date().toISOString();
+  const model = SUGGESTIONS_MODEL;
+  const inserts = parsed
+    .map((item) => {
+      const title = typeof item.title === 'string' ? item.title.trim() : '';
+      if (!title) return null;
+      if (existingTitles.has(title.toLowerCase())) return null;
+      const priority = item.priority === 1 || item.priority === 2 || item.priority === 3 ? item.priority : 2;
+      return {
+        id: generateULID(),
+        projectId,
+        title: title.slice(0, 140),
+        description: typeof item.description === 'string' ? item.description.slice(0, 1000) : null,
+        rationale: typeof item.rationale === 'string' ? item.rationale.slice(0, 1000) : null,
+        category: normalizeCategory(item.category),
+        priority,
+        effort: normalizeEffort(item.effort),
+        status: 'pending' as BuildSuggestionStatus,
+        helpfulCount: 0,
+        notHelpfulCount: 0,
+        model,
+        generatedAt: now,
+        actedOnAt: null,
+      };
+    })
+    .filter(Boolean) as Array<{
+      id: string;
+      projectId: string;
+      title: string;
+      description: string | null;
+      rationale: string | null;
+      category: BuildSuggestionCategory;
+      priority: 1 | 2 | 3;
+      effort: BuildSuggestionEffort | null;
+      status: BuildSuggestionStatus;
+      model: string;
+      generatedAt: string;
+      actedOnAt: string | null;
+    }>;
+
+  if (inserts.length === 0) {
+    return c.json({ suggestions: [] });
+  }
+
+  await db.insert(buildSuggestions).values(inserts);
+
+  const suggestions: BuildSuggestion[] = inserts.map((item) => ({
+    id: item.id,
+    project_id: item.projectId,
+    title: item.title,
+    description: item.description,
+    rationale: item.rationale,
+    category: item.category,
+    priority: item.priority,
+    effort: item.effort,
+    status: item.status,
+    helpful_count: item.helpfulCount,
+    not_helpful_count: item.notHelpfulCount,
+    model: item.model,
+    generated_at: item.generatedAt,
+    acted_on_at: item.actedOnAt,
+  }));
+
+  return c.json({ suggestions });
+});
+
+projectRoutes.patch('/:projectId/suggestions/:suggestionId', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const suggestionId = c.req.param('suggestionId');
+  const body = await c.req.json<{ status?: unknown }>();
+  const status = normalizeSuggestionStatus(body.status);
+
+  if (!status) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Valid status is required' } }, 422);
+  }
+
+  const db = createDb(c.env.DB);
+
+  const [project] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)));
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  const now = new Date().toISOString();
+  const actedOnAt = status === 'pending' ? null : now;
+
+  const updated = await db
+    .update(buildSuggestions)
+    .set({
+      status,
+      actedOnAt,
+    })
+    .where(and(eq(buildSuggestions.id, suggestionId), eq(buildSuggestions.projectId, projectId)))
+    .returning({
+      id: buildSuggestions.id,
+      project_id: buildSuggestions.projectId,
+      title: buildSuggestions.title,
+      description: buildSuggestions.description,
+      rationale: buildSuggestions.rationale,
+      category: buildSuggestions.category,
+      priority: buildSuggestions.priority,
+      effort: buildSuggestions.effort,
+      status: buildSuggestions.status,
+      helpful_count: buildSuggestions.helpfulCount,
+      not_helpful_count: buildSuggestions.notHelpfulCount,
+      model: buildSuggestions.model,
+      generated_at: buildSuggestions.generatedAt,
+      acted_on_at: buildSuggestions.actedOnAt,
+    });
+
+  if (updated.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Suggestion not found' } }, 404);
+  }
+
+  return c.json({ suggestion: updated[0] });
+});
+
+projectRoutes.post('/:projectId/suggestions/:suggestionId/feedback', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+
+  const projectId = c.req.param('projectId');
+  const suggestionId = c.req.param('suggestionId');
+  const body = await c.req.json<{ helpful?: unknown }>();
+
+  if (typeof body.helpful !== 'boolean') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'helpful boolean is required' } }, 422);
+  }
+
+  const db = createDb(c.env.DB);
+
+  const [project] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.ownerUserId, user.id)));
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+  }
+
+  const updated = await db
+    .update(buildSuggestions)
+    .set({
+      helpfulCount: body.helpful ? sql`helpful_count + 1` : buildSuggestions.helpfulCount,
+      notHelpfulCount: body.helpful ? buildSuggestions.notHelpfulCount : sql`not_helpful_count + 1`,
+    })
+    .where(and(eq(buildSuggestions.id, suggestionId), eq(buildSuggestions.projectId, projectId)))
+    .returning({
+      id: buildSuggestions.id,
+      project_id: buildSuggestions.projectId,
+      title: buildSuggestions.title,
+      description: buildSuggestions.description,
+      rationale: buildSuggestions.rationale,
+      category: buildSuggestions.category,
+      priority: buildSuggestions.priority,
+      effort: buildSuggestions.effort,
+      status: buildSuggestions.status,
+      helpful_count: buildSuggestions.helpfulCount,
+      not_helpful_count: buildSuggestions.notHelpfulCount,
+      model: buildSuggestions.model,
+      generated_at: buildSuggestions.generatedAt,
+      acted_on_at: buildSuggestions.actedOnAt,
+    });
+
+  if (updated.length === 0) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Suggestion not found' } }, 404);
+  }
+
+  return c.json({ suggestion: updated[0] });
 });
 
 // Helper: Generate ULID

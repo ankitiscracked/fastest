@@ -37,8 +37,23 @@ export type {
   SetEnvVarRequest,
   DeploymentLogEntry,
   DeploymentLog,
+  DeploymentSettings,
+  DeploymentRecord,
+  UpdateDeploymentSettingsRequest,
+  BuildSuggestion,
+  ProjectBrief,
+  ProjectIntent,
+  UpdateProjectBriefRequest,
 } from '@fastest/shared';
-import type { TimelineItem, DeploymentLogEntry } from '@fastest/shared';
+import type {
+  TimelineItem,
+  DeploymentLogEntry,
+  DeploymentSettings,
+  DeploymentRecord,
+  UpdateDeploymentSettingsRequest,
+  BuildSuggestion,
+  UpdateProjectBriefRequest,
+} from '@fastest/shared';
 import type { OpenCodeGlobalEvent } from './opencode';
 
 // Deployment types
@@ -177,6 +192,52 @@ class ApiClient {
       workspaces: import('@fastest/shared').Workspace[];
       snapshots: import('@fastest/shared').Snapshot[];
     }>('GET', `/projects/${projectId}`);
+  }
+
+  async getProjectBrief(projectId: string) {
+    return this.request<import('@fastest/shared').GetProjectBriefResponse>(
+      'GET',
+      `/projects/${projectId}/brief`
+    );
+  }
+
+  async updateProjectBrief(projectId: string, payload: UpdateProjectBriefRequest) {
+    return this.request<import('@fastest/shared').GetProjectBriefResponse>(
+      'PATCH',
+      `/projects/${projectId}/brief`,
+      payload
+    );
+  }
+
+  async listBuildSuggestions(projectId: string, status?: string) {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    return this.request<import('@fastest/shared').ListBuildSuggestionsResponse>(
+      'GET',
+      `/projects/${projectId}/suggestions${query}`
+    );
+  }
+
+  async generateBuildSuggestions(projectId: string) {
+    return this.request<import('@fastest/shared').GenerateBuildSuggestionsResponse>(
+      'POST',
+      `/projects/${projectId}/suggestions/generate`
+    );
+  }
+
+  async updateBuildSuggestion(projectId: string, suggestionId: string, status: BuildSuggestion['status']) {
+    return this.request<{ suggestion: BuildSuggestion }>(
+      'PATCH',
+      `/projects/${projectId}/suggestions/${suggestionId}`,
+      { status }
+    );
+  }
+
+  async submitBuildSuggestionFeedback(projectId: string, suggestionId: string, helpful: boolean) {
+    return this.request<{ suggestion: BuildSuggestion }>(
+      'POST',
+      `/projects/${projectId}/suggestions/${suggestionId}/feedback`,
+      { helpful }
+    );
   }
 
   // Project Docs
@@ -449,6 +510,28 @@ class ApiClient {
     }>(
       'POST',
       `/workspaces/${workspaceId}/deploy`
+    );
+  }
+
+  async getDeploymentSettings(workspaceId: string) {
+    return this.request<{ settings: DeploymentSettings }>(
+      'GET',
+      `/infrastructure/workspaces/${workspaceId}/deployment-settings`
+    );
+  }
+
+  async updateDeploymentSettings(workspaceId: string, update: UpdateDeploymentSettingsRequest) {
+    return this.request<{ settings: DeploymentSettings }>(
+      'PUT',
+      `/infrastructure/workspaces/${workspaceId}/deployment-settings`,
+      update
+    );
+  }
+
+  async getDeploymentHistory(workspaceId: string, limit = 30) {
+    return this.request<{ deployments: DeploymentRecord[] }>(
+      'GET',
+      `/infrastructure/workspaces/${workspaceId}/deployments?limit=${limit}`
     );
   }
 

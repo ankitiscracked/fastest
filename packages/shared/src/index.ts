@@ -10,11 +10,50 @@ export interface Project {
   id: string;
   owner_user_id: string;
   name: string;
+  intent: ProjectIntent | null;
+  brief: ProjectBrief | null;
   created_at: string;
   updated_at: string;
   last_snapshot_id: string | null;
   main_workspace_id: string | null;
 }
+
+export type ProjectIntent =
+  | 'startup'
+  | 'personal_tool'
+  | 'learning'
+  | 'fun'
+  | 'portfolio'
+  | 'creative'
+  | 'exploration'
+  | 'open_source';
+
+export interface StartupBrief {
+  intent: 'startup';
+  problem: string;
+  target_users: string[];
+  unique_angle?: string;
+  mvp_features: string[];
+  non_goals: string[];
+  reference_projects?: string[];
+  tech_preferences?: string[];
+  current_stage: 'idea' | 'building_mvp' | 'pre_launch' | 'launched' | 'growing';
+  has_users: boolean;
+  has_revenue: boolean;
+}
+
+export interface PersonalToolBrief {
+  intent: 'personal_tool';
+  problem: string;
+  current_workaround?: string;
+  must_have: string[];
+  nice_to_have: string[];
+  platforms: string[];
+  tech_preferences?: string[];
+  polish_level: 'hacky' | 'functional' | 'polished';
+}
+
+export type ProjectBrief = StartupBrief | PersonalToolBrief;
 
 export interface Snapshot {
   id: string;
@@ -373,6 +412,28 @@ export interface ListEnvVarsResponse {
   variables: ProjectEnvVar[];
 }
 
+// Build suggestions (product guidance)
+export type BuildSuggestionCategory = 'feature' | 'validation' | 'launch' | 'technical' | 'user_research';
+export type BuildSuggestionEffort = 'small' | 'medium' | 'large';
+export type BuildSuggestionStatus = 'pending' | 'started' | 'completed' | 'dismissed';
+
+export interface BuildSuggestion {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  rationale: string | null;
+  category: BuildSuggestionCategory;
+  priority: 1 | 2 | 3;
+  effort: BuildSuggestionEffort | null;
+  status: BuildSuggestionStatus;
+  helpful_count: number;
+  not_helpful_count: number;
+  model: string | null;
+  generated_at: string;
+  acted_on_at: string | null;
+}
+
 // Deployment logs
 
 export interface DeploymentLogEntry {
@@ -547,6 +608,32 @@ export interface ListActionItemsResponse {
   items: ActionItem[];
 }
 
+export interface GetProjectBriefResponse {
+  intent: ProjectIntent | null;
+  brief: ProjectBrief | null;
+}
+
+export interface UpdateProjectBriefRequest {
+  intent: ProjectIntent;
+  brief: ProjectBrief;
+}
+
+export interface GenerateBuildSuggestionsResponse {
+  suggestions: BuildSuggestion[];
+}
+
+export interface ListBuildSuggestionsResponse {
+  suggestions: BuildSuggestion[];
+}
+
+export interface UpdateBuildSuggestionRequest {
+  status: BuildSuggestionStatus;
+}
+
+export interface BuildSuggestionFeedbackRequest {
+  helpful: boolean;
+}
+
 // Project Docs - documentation files across workspaces
 
 export interface DocFile {
@@ -647,38 +734,20 @@ export interface DetectedRequirements {
   startCommand: string | null;
 }
 
-// Provider config - what each provider supports
-
-export interface ProviderInfo {
-  name: string;
-  displayName: string;
-  supportedTypes: ResourceType[];
-  description: string;
+export interface DetectionSignal {
+  id: string;
+  confidence: number; // 0-1
+  reason: string;
 }
 
-export const INFRA_PROVIDERS: Record<InfraProvider, ProviderInfo> = {
-  railway: {
-    name: 'railway',
-    displayName: 'Railway',
-    supportedTypes: ['compute', 'database:postgres', 'database:redis'],
-    description: 'Full-stack deployment platform with managed databases',
-  },
-  cloudflare: {
-    name: 'cloudflare',
-    displayName: 'Cloudflare',
-    supportedTypes: ['compute:edge', 'storage:blob'],
-    description: 'Edge computing and serverless workers',
-  },
-};
+export interface DetectionMetadata {
+  confidence: number; // 0-1 overall
+  reasons: string[];
+  signals: DetectionSignal[];
+  source: 'rules' | 'rules+llm';
+}
 
-// Default provider for each resource type
-export const DEFAULT_PROVIDER_FOR_TYPE: Partial<Record<ResourceType, InfraProvider>> = {
-  'compute': 'railway',
-  'compute:edge': 'cloudflare',
-  'database:postgres': 'railway',
-  'database:redis': 'railway',
-  'storage:blob': 'cloudflare',
-};
+// Provider config - what each provider supports
 
 // Infrastructure API request/response types
 
@@ -705,15 +774,19 @@ export interface DetectRequirementsResponse {
   suggested_resources: Array<{
     type: ResourceType;
     provider: InfraProvider;
+    provider_candidates?: InfraProvider[];
     name: string;
     envVar?: string;
   }>;
+  detection?: DetectionMetadata;
 }
 
 export interface DeployProjectRequest {
   manifest_hash: string;
   message?: string;
   force?: boolean;  // Deploy even if no changes detected
+  workspace_id?: string;
+  source?: 'manual' | 'chat' | 'auto';
 }
 
 export interface DeployProjectResponse {
@@ -724,3 +797,50 @@ export interface DeployProjectResponse {
   provisioned_resources: InfrastructureResource[];  // Newly created in this deploy
   error: string | null;
 }
+
+// Deployment settings/history
+
+export interface DeploymentSettings {
+  workspace_id: string;
+  auto_deploy: boolean;
+  runtime_override: DetectedRuntime;
+  build_command: string | null;
+  start_command: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateDeploymentSettingsRequest {
+  auto_deploy?: boolean;
+  runtime_override?: DetectedRuntime;
+  build_command?: string | null;
+  start_command?: string | null;
+}
+
+export type DeploymentStatus = 'deploying' | 'success' | 'failed';
+
+export interface DeploymentRecord {
+  id: string;
+  workspace_id: string | null;
+  project_id: string;
+  snapshot_id: string | null;
+  status: DeploymentStatus;
+  trigger: 'manual' | 'chat' | 'auto';
+  url: string | null;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface ListDeploymentsResponse {
+  deployments: DeploymentRecord[];
+}
+
+export interface UpdateDeploymentStatusRequest {
+  status: DeploymentStatus;
+  url?: string | null;
+  error?: string | null;
+  completed_at?: string | null;
+}
+
+export * from './providers';

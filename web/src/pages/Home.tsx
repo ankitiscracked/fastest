@@ -4,6 +4,7 @@ import type { Project, Workspace, ConversationWithContext } from '@fastest/share
 import { api } from '../api/client';
 import { PromptInput, ContextBar } from '../components/conversation';
 import { ActionItems } from '../components/conversation/ActionItems';
+import { BuildSuggestions, ProjectBriefWizard } from '../components/suggestions';
 
 export function Home() {
   const navigate = useNavigate();
@@ -20,6 +21,7 @@ export function Home() {
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [showBriefWizard, setShowBriefWizard] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -256,6 +258,33 @@ export function Home() {
             />
           </div>
 
+          {/* Build Suggestions */}
+          {currentProject?.brief && (
+            <div className="mb-8">
+              <BuildSuggestions
+                projectId={currentProject.id}
+                onStartSuggestion={(_suggestionId, prompt) => {
+                  void handleSubmitPrompt(prompt);
+                }}
+              />
+            </div>
+          )}
+
+          {/* Project Brief CTA */}
+          {currentProject && !currentProject.brief && (
+            <div className="mb-8 p-4 bg-accent-50 border border-accent-200 rounded-md">
+              <p className="text-sm text-accent-800 mb-2">
+                Set up your project brief to get tailored build suggestions.
+              </p>
+              <button
+                onClick={() => setShowBriefWizard(true)}
+                className="text-sm font-medium text-accent-600 hover:text-accent-700"
+              >
+                Set up project →
+              </button>
+            </div>
+          )}
+
           {/* Recent Conversations */}
           <div>
             <h2 className="text-sm font-medium text-surface-500 mb-3">
@@ -319,7 +348,26 @@ export function Home() {
         </div>
       </div>
 
+      {showBriefWizard && currentProject && (
+        <ProjectBriefWizard
+          projectId={currentProject.id}
+          onClose={() => setShowBriefWizard(false)}
+          onComplete={(brief) => {
+            setShowBriefWizard(false);
+            setCurrentProject((prev) =>
+              prev ? { ...prev, brief, intent: brief.intent } : prev
+            );
+            setProjects((prev) =>
+              prev.map((project) =>
+                project.id === currentProject.id
+                  ? { ...project, brief, intent: brief.intent }
+                  : project
+              )
+            );
+          }}
+        />
+      )}
+
     </div>
   );
 }
-

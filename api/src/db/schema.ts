@@ -49,6 +49,8 @@ export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
   ownerUserId: text('owner_user_id').notNull().references(() => users.id),
   name: text('name').notNull(),
+  intent: text('intent'),
+  brief: text('brief'),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
   lastSnapshotId: text('last_snapshot_id'),
@@ -202,6 +204,27 @@ export const refactoringSuggestions = sqliteTable('refactoring_suggestions', {
   index('idx_refactoring_status').on(table.workspaceId, table.status),
 ]);
 
+// Build suggestions for product guidance
+export const buildSuggestions = sqliteTable('build_suggestions', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  description: text('description'),
+  rationale: text('rationale'),
+  category: text('category').notNull(), // 'feature' | 'validation' | 'launch' | 'technical' | 'user_research'
+  priority: integer('priority').default(2), // 1=high,2=medium,3=low
+  effort: text('effort'), // 'small' | 'medium' | 'large'
+  status: text('status').notNull().default('pending'), // 'pending' | 'started' | 'completed' | 'dismissed'
+  helpfulCount: integer('helpful_count').notNull().default(0),
+  notHelpfulCount: integer('not_helpful_count').notNull().default(0),
+  model: text('model'),
+  generatedAt: text('generated_at').notNull().default(sql`(datetime('now'))`),
+  actedOnAt: text('acted_on_at'),
+}, (table) => [
+  index('idx_suggestions_project').on(table.projectId, table.status),
+  index('idx_suggestions_priority').on(table.projectId, table.priority),
+]);
+
 // Provider credentials for infrastructure (Railway, Cloudflare, etc.)
 export const providerCredentials = sqliteTable('provider_credentials', {
   id: text('id').primaryKey(),
@@ -232,4 +255,33 @@ export const infrastructureResources = sqliteTable('infrastructure_resources', {
 }, (table) => [
   index('idx_infra_resources_project').on(table.projectId),
   index('idx_infra_resources_project_type').on(table.projectId, table.type),
+]);
+
+// Deployment settings per workspace
+export const deploymentSettings = sqliteTable('deployment_settings', {
+  workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
+  autoDeploy: integer('auto_deploy').notNull().default(0),
+  runtimeOverride: text('runtime_override'),
+  buildCommand: text('build_command'),
+  startCommand: text('start_command'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+});
+
+// Deployments history
+export const deployments = sqliteTable('deployments', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  snapshotId: text('snapshot_id').references(() => snapshots.id, { onDelete: 'set null' }),
+  status: text('status').notNull(), // 'deploying' | 'success' | 'failed'
+  trigger: text('trigger').notNull(), // 'manual' | 'chat' | 'auto'
+  url: text('url'),
+  error: text('error'),
+  startedAt: text('started_at').notNull(),
+  completedAt: text('completed_at'),
+}, (table) => [
+  index('idx_deployments_workspace').on(table.workspaceId, table.startedAt),
+  index('idx_deployments_project').on(table.projectId, table.startedAt),
+  index('idx_deployments_status').on(table.status, table.startedAt),
 ]);
