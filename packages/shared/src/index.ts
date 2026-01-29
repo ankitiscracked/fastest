@@ -66,6 +66,13 @@ export interface Snapshot {
   created_at: string;
 }
 
+export interface ProjectSnapshotInsights {
+  last_merge_at: string | null;
+  last_deploy_at: string | null;
+  snapshots_since_last_merge: number | null;
+  snapshots_since_last_deploy: number | null;
+}
+
 // MergeRecord tracks when a workspace was last merged from another workspace
 export interface MergeRecord {
   last_merged_snapshot: string;
@@ -413,25 +420,37 @@ export interface ListEnvVarsResponse {
 }
 
 // Build suggestions (product guidance)
-export type BuildSuggestionCategory = 'feature' | 'validation' | 'launch' | 'technical' | 'user_research';
-export type BuildSuggestionEffort = 'small' | 'medium' | 'large';
-export type BuildSuggestionStatus = 'pending' | 'started' | 'completed' | 'dismissed';
+export type NextStepCategory = 'feature' | 'validation' | 'launch' | 'technical' | 'user_research';
+export type NextStepEffort = 'small' | 'medium' | 'large';
+export type NextStepStatus = 'pending' | 'started' | 'completed' | 'dismissed';
 
-export interface BuildSuggestion {
+export interface NextStep {
   id: string;
   project_id: string;
   title: string;
   description: string | null;
   rationale: string | null;
-  category: BuildSuggestionCategory;
+  category: NextStepCategory;
   priority: 1 | 2 | 3;
-  effort: BuildSuggestionEffort | null;
-  status: BuildSuggestionStatus;
+  effort: NextStepEffort | null;
+  status: NextStepStatus;
   helpful_count: number;
   not_helpful_count: number;
   model: string | null;
   generated_at: string;
   acted_on_at: string | null;
+}
+
+export type ProjectDecisionCategory = 'architecture' | 'scope' | 'tech_choice' | 'approach' | 'process' | 'product';
+
+export interface ProjectDecision {
+  id: string;
+  project_id: string;
+  conversation_id: string | null;
+  decision: string;
+  rationale: string | null;
+  category: ProjectDecisionCategory | null;
+  decided_at: string;
 }
 
 // Deployment logs
@@ -575,7 +594,7 @@ export interface ExecuteSyncResponse {
 
 // Action Items - cross-workspace insights from background agents
 
-export type ActionItemType = 'drift' | 'refactoring' | 'security' | 'test_coverage';
+export type ActionItemType = 'drift' | 'refactoring' | 'security' | 'test_coverage' | 'build_failure';
 export type ActionItemSeverity = 'info' | 'warning' | 'critical';
 
 export interface ActionItem {
@@ -608,6 +627,47 @@ export interface ListActionItemsResponse {
   items: ActionItem[];
 }
 
+// Action Item Runs - background fixes with patches
+
+export type ActionItemRunStatus = 'queued' | 'running' | 'ready' | 'failed' | 'applied';
+
+export interface ActionItemRun {
+  id: string;
+  action_item_id: string;
+  workspace_id: string;
+  project_id: string;
+  status: ActionItemRunStatus;
+  attempt_count: number;
+  max_attempts: number;
+  base_manifest_hash?: string;
+  summary?: string;
+  report?: string;
+  patch?: string;
+  checks?: Array<{
+    kind: 'install' | 'build' | 'typecheck' | 'test';
+    command: string;
+    success: boolean;
+    output?: string;
+  }>;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateActionItemRunResponse {
+  run: ActionItemRun;
+}
+
+export interface GetActionItemRunResponse {
+  run: ActionItemRun;
+}
+
+export interface ListActionItemRunsResponse {
+  runs: ActionItemRun[];
+}
+
 export interface GetProjectBriefResponse {
   intent: ProjectIntent | null;
   brief: ProjectBrief | null;
@@ -618,19 +678,103 @@ export interface UpdateProjectBriefRequest {
   brief: ProjectBrief;
 }
 
-export interface GenerateBuildSuggestionsResponse {
-  suggestions: BuildSuggestion[];
+export interface GenerateNextStepsResponse {
+  next_steps: NextStep[];
 }
 
-export interface ListBuildSuggestionsResponse {
-  suggestions: BuildSuggestion[];
+export interface ListNextStepsResponse {
+  next_steps: NextStep[];
 }
 
-export interface UpdateBuildSuggestionRequest {
-  status: BuildSuggestionStatus;
+export interface ListProjectDecisionsResponse {
+  decisions: ProjectDecision[];
 }
 
-export interface BuildSuggestionFeedbackRequest {
+export interface ExtractProjectDecisionsResponse {
+  decisions: ProjectDecision[];
+}
+
+export interface AtlasSearchResult {
+  id: string;
+  name: string;
+  description: string;
+  layer: 'narrative' | 'capability' | 'system' | 'module' | 'code';
+}
+
+export interface AtlasSearchResponse {
+  results: AtlasSearchResult[];
+}
+
+export interface AtlasConcept {
+  id: string;
+  project_id: string;
+  name: string;
+  layer: 'narrative' | 'capability' | 'system' | 'module' | 'code';
+  type: string | null;
+  description: string | null;
+  source_snapshot_id: string | null;
+  source_manifest_hash: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AtlasEdge {
+  id: string;
+  project_id: string;
+  from_concept_id: string;
+  to_concept_id: string;
+  type: string;
+  weight: number | null;
+  created_at: string;
+}
+
+export interface AtlasDecisionLink {
+  id: string;
+  project_id: string;
+  decision_id: string;
+  concept_id: string;
+  confidence: number | null;
+  created_at: string;
+}
+
+export interface GetAtlasIndexResponse {
+  concepts: AtlasConcept[];
+  edges: AtlasEdge[];
+  decision_links?: AtlasDecisionLink[];
+}
+
+export interface BuildAtlasIndexResponse {
+  concepts: number;
+  edges: number;
+  chunks: number;
+  embeddings: number;
+}
+
+export type AtlasDiagramType = 'flow' | 'dependency' | 'component' | 'sequence';
+
+export interface AtlasDiagram {
+  id: string;
+  project_id: string;
+  concept_id: string | null;
+  type: AtlasDiagramType;
+  data: string;
+  created_at: string;
+}
+
+export interface GetAtlasDiagramsResponse {
+  diagrams: AtlasDiagram[];
+}
+
+export interface CreateAtlasDiagramResponse {
+  diagram: AtlasDiagram;
+}
+
+export interface UpdateNextStepRequest {
+  status: NextStepStatus;
+}
+
+export interface NextStepFeedbackRequest {
   helpful: boolean;
 }
 

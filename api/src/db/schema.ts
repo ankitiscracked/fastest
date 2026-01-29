@@ -191,7 +191,7 @@ export const refactoringSuggestions = sqliteTable('refactoring_suggestions', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   snapshotId: text('snapshot_id').references(() => snapshots.id),
-  type: text('type').notNull(), // 'security' | 'duplication' | 'performance' | 'naming' | 'structure'
+  type: text('type').notNull(), // 'security' | 'duplication' | 'performance' | 'naming' | 'structure' | 'test_coverage'
   severity: text('severity').notNull().default('info'), // 'info' | 'warning' | 'critical'
   title: text('title').notNull(),
   description: text('description'),
@@ -204,8 +204,55 @@ export const refactoringSuggestions = sqliteTable('refactoring_suggestions', {
   index('idx_refactoring_status').on(table.workspaceId, table.status),
 ]);
 
+// Action items from background analysis
+export const actionItems = sqliteTable('action_items', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(), // 'refactoring' | 'security' | 'test_coverage' | 'build_failure'
+  severity: text('severity').notNull().default('info'), // 'info' | 'warning' | 'critical'
+  title: text('title').notNull(),
+  description: text('description'),
+  affectedFiles: text('affected_files'),
+  suggestedPrompt: text('suggested_prompt'),
+  metadata: text('metadata'),
+  status: text('status').notNull().default('pending'), // 'pending' | 'running' | 'ready' | 'applied' | 'dismissed'
+  source: text('source').notNull().default('analysis'), // 'analysis' | 'import' | 'manual'
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_action_items_workspace').on(table.workspaceId, table.createdAt),
+  index('idx_action_items_project').on(table.projectId, table.createdAt),
+  index('idx_action_items_status').on(table.workspaceId, table.status),
+]);
+
+// Action item runs (patch generation + checks)
+export const actionItemRuns = sqliteTable('action_item_runs', {
+  id: text('id').primaryKey(),
+  actionItemId: text('action_item_id').notNull().references(() => actionItems.id, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  status: text('status').notNull().default('queued'), // 'queued' | 'running' | 'ready' | 'failed' | 'applied'
+  attemptCount: integer('attempt_count').notNull().default(0),
+  maxAttempts: integer('max_attempts').notNull().default(3),
+  baseManifestHash: text('base_manifest_hash'),
+  summary: text('summary'),
+  report: text('report'),
+  patch: text('patch'),
+  checks: text('checks'),
+  error: text('error'),
+  startedAt: text('started_at'),
+  completedAt: text('completed_at'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_action_item_runs_item').on(table.actionItemId, table.createdAt),
+  index('idx_action_item_runs_workspace').on(table.workspaceId, table.createdAt),
+  index('idx_action_item_runs_status').on(table.status, table.createdAt),
+]);
+
 // Build suggestions for product guidance
-export const buildSuggestions = sqliteTable('build_suggestions', {
+export const nextSteps = sqliteTable('next_steps', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
@@ -221,8 +268,108 @@ export const buildSuggestions = sqliteTable('build_suggestions', {
   generatedAt: text('generated_at').notNull().default(sql`(datetime('now'))`),
   actedOnAt: text('acted_on_at'),
 }, (table) => [
-  index('idx_suggestions_project').on(table.projectId, table.status),
-  index('idx_suggestions_priority').on(table.projectId, table.priority),
+  index('idx_next_steps_project').on(table.projectId, table.status),
+  index('idx_next_steps_priority').on(table.projectId, table.priority),
+]);
+
+// Project decisions extracted from conversations
+export const projectDecisions = sqliteTable('project_decisions', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  conversationId: text('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+  decision: text('decision').notNull(),
+  rationale: text('rationale'),
+  category: text('category'),
+  decidedAt: text('decided_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_project_decisions_project').on(table.projectId, table.decidedAt),
+  uniqueIndex('idx_project_decisions_unique').on(table.projectId, table.decision),
+]);
+
+// Atlas concepts derived from snapshots/conversations
+export const atlasConcepts = sqliteTable('atlas_concepts', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  layer: text('layer').notNull(), // 'narrative' | 'capability' | 'system' | 'module' | 'code'
+  type: text('type'), // optional concept subtype
+  description: text('description'),
+  sourceSnapshotId: text('source_snapshot_id').references(() => snapshots.id, { onDelete: 'set null' }),
+  sourceManifestHash: text('source_manifest_hash'),
+  metadata: text('metadata'), // JSON payload
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_atlas_concepts_project').on(table.projectId, table.layer),
+  uniqueIndex('idx_atlas_concepts_unique').on(table.projectId, table.id),
+]);
+
+// Relationships between concepts
+export const atlasEdges = sqliteTable('atlas_edges', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  fromConceptId: text('from_concept_id').notNull(),
+  toConceptId: text('to_concept_id').notNull(),
+  type: text('type').notNull(), // 'contains' | 'depends_on' | 'used_by' | 'relates'
+  weight: integer('weight'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_atlas_edges_from').on(table.projectId, table.fromConceptId),
+  index('idx_atlas_edges_to').on(table.projectId, table.toConceptId),
+  index('idx_atlas_edges_type').on(table.projectId, table.type),
+]);
+
+// Atlas chunks (code/decision/conversation)
+export const atlasChunks = sqliteTable('atlas_chunks', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  conceptId: text('concept_id'),
+  kind: text('kind').notNull(), // 'code' | 'decision' | 'conversation'
+  content: text('content').notNull(),
+  filePath: text('file_path'),
+  symbol: text('symbol'),
+  sourceHash: text('source_hash'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_atlas_chunks_project').on(table.projectId, table.kind),
+  index('idx_atlas_chunks_concept').on(table.projectId, table.conceptId),
+]);
+
+// Embeddings for chunks
+export const atlasEmbeddings = sqliteTable('atlas_embeddings', {
+  id: text('id').primaryKey(),
+  chunkId: text('chunk_id').notNull().references(() => atlasChunks.id, { onDelete: 'cascade' }),
+  model: text('model').notNull(),
+  vector: text('vector').notNull(), // JSON array of floats
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_atlas_embeddings_chunk').on(table.chunkId),
+]);
+
+// Links between decisions and concepts
+export const atlasDecisionLinks = sqliteTable('atlas_decision_links', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  decisionId: text('decision_id').notNull().references(() => projectDecisions.id, { onDelete: 'cascade' }),
+  conceptId: text('concept_id').notNull(),
+  confidence: integer('confidence'), // 0-100
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_atlas_decision_links_project').on(table.projectId, table.decisionId),
+  index('idx_atlas_decision_links_concept').on(table.projectId, table.conceptId),
+]);
+
+// Stored diagram outputs for Atlas canvas
+export const atlasDiagrams = sqliteTable('atlas_diagrams', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  conceptId: text('concept_id'),
+  type: text('type').notNull(), // 'flow' | 'dependency' | 'component' | 'sequence'
+  data: text('data').notNull(), // JSON
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_atlas_diagrams_project').on(table.projectId, table.createdAt),
+  index('idx_atlas_diagrams_concept').on(table.projectId, table.conceptId),
 ]);
 
 // Provider credentials for infrastructure (Railway, Cloudflare, etc.)

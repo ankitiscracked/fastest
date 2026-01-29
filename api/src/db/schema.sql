@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS refactoring_suggestions (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   snapshot_id TEXT REFERENCES snapshots(id),
-  type TEXT NOT NULL,  -- 'security', 'duplication', 'performance', 'naming', 'structure'
+  type TEXT NOT NULL,  -- 'security', 'duplication', 'performance', 'naming', 'structure', 'test_coverage'
   severity TEXT NOT NULL DEFAULT 'info',  -- 'info', 'warning', 'critical'
   title TEXT NOT NULL,
   description TEXT,
@@ -207,8 +207,55 @@ CREATE TABLE IF NOT EXISTS refactoring_suggestions (
 CREATE INDEX IF NOT EXISTS idx_refactoring_workspace ON refactoring_suggestions(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_refactoring_status ON refactoring_suggestions(workspace_id, status);
 
+-- Action items from background analysis
+CREATE TABLE IF NOT EXISTS action_items (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,  -- 'refactoring', 'security', 'test_coverage', 'build_failure'
+  severity TEXT NOT NULL DEFAULT 'info',  -- 'info', 'warning', 'critical'
+  title TEXT NOT NULL,
+  description TEXT,
+  affected_files TEXT,  -- JSON array
+  suggested_prompt TEXT,
+  metadata TEXT,  -- JSON object
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending', 'running', 'ready', 'applied', 'dismissed'
+  source TEXT NOT NULL DEFAULT 'analysis',  -- 'analysis', 'import', 'manual'
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_action_items_workspace ON action_items(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_action_items_project ON action_items(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_action_items_status ON action_items(workspace_id, status);
+
+-- Action item runs (patch generation + checks)
+CREATE TABLE IF NOT EXISTS action_item_runs (
+  id TEXT PRIMARY KEY,
+  action_item_id TEXT NOT NULL REFERENCES action_items(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'queued',  -- 'queued', 'running', 'ready', 'failed', 'applied'
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  base_manifest_hash TEXT,
+  summary TEXT,
+  report TEXT,
+  patch TEXT,
+  checks TEXT,  -- JSON array
+  error TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_action_item_runs_item ON action_item_runs(action_item_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_action_item_runs_workspace ON action_item_runs(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_action_item_runs_status ON action_item_runs(status, created_at DESC);
+
 -- Build suggestions for product guidance
-CREATE TABLE IF NOT EXISTS build_suggestions (
+CREATE TABLE IF NOT EXISTS next_steps (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
@@ -225,8 +272,108 @@ CREATE TABLE IF NOT EXISTS build_suggestions (
   acted_on_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_suggestions_project ON build_suggestions(project_id, status);
-CREATE INDEX IF NOT EXISTS idx_suggestions_priority ON build_suggestions(project_id, priority);
+CREATE INDEX IF NOT EXISTS idx_next_steps_project ON next_steps(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_next_steps_priority ON next_steps(project_id, priority);
+
+-- Project decisions extracted from conversations
+CREATE TABLE IF NOT EXISTS project_decisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+  decision TEXT NOT NULL,
+  rationale TEXT,
+  category TEXT,
+  decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_decisions_project ON project_decisions(project_id, decided_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_decisions_unique ON project_decisions(project_id, decision);
+
+-- Atlas concepts derived from snapshots/conversations
+CREATE TABLE IF NOT EXISTS atlas_concepts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  layer TEXT NOT NULL,
+  type TEXT,
+  description TEXT,
+  source_snapshot_id TEXT REFERENCES snapshots(id) ON DELETE SET NULL,
+  source_manifest_hash TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_concepts_project ON atlas_concepts(project_id, layer);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_atlas_concepts_unique ON atlas_concepts(project_id, id);
+
+-- Relationships between concepts
+CREATE TABLE IF NOT EXISTS atlas_edges (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  from_concept_id TEXT NOT NULL,
+  to_concept_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  weight INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_edges_from ON atlas_edges(project_id, from_concept_id);
+CREATE INDEX IF NOT EXISTS idx_atlas_edges_to ON atlas_edges(project_id, to_concept_id);
+CREATE INDEX IF NOT EXISTS idx_atlas_edges_type ON atlas_edges(project_id, type);
+
+-- Atlas chunks (code/decision/conversation)
+CREATE TABLE IF NOT EXISTS atlas_chunks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  concept_id TEXT,
+  kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  file_path TEXT,
+  symbol TEXT,
+  source_hash TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_chunks_project ON atlas_chunks(project_id, kind);
+CREATE INDEX IF NOT EXISTS idx_atlas_chunks_concept ON atlas_chunks(project_id, concept_id);
+
+-- Embeddings for chunks
+CREATE TABLE IF NOT EXISTS atlas_embeddings (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES atlas_chunks(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  vector TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_embeddings_chunk ON atlas_embeddings(chunk_id);
+
+-- Links between decisions and concepts
+CREATE TABLE IF NOT EXISTS atlas_decision_links (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  decision_id TEXT NOT NULL REFERENCES project_decisions(id) ON DELETE CASCADE,
+  concept_id TEXT NOT NULL,
+  confidence INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_decision_links_project ON atlas_decision_links(project_id, decision_id);
+CREATE INDEX IF NOT EXISTS idx_atlas_decision_links_concept ON atlas_decision_links(project_id, concept_id);
+
+-- Stored diagram outputs for Atlas canvas
+CREATE TABLE IF NOT EXISTS atlas_diagrams (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  concept_id TEXT,
+  type TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_diagrams_project ON atlas_diagrams(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_atlas_diagrams_concept ON atlas_diagrams(project_id, concept_id);
 
 -- Provider credentials for infrastructure (Railway, Cloudflare, etc.)
 CREATE TABLE IF NOT EXISTS provider_credentials (

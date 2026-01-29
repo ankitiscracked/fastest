@@ -40,10 +40,22 @@ export type {
   DeploymentSettings,
   DeploymentRecord,
   UpdateDeploymentSettingsRequest,
-  BuildSuggestion,
+  NextStep,
   ProjectBrief,
   ProjectIntent,
   UpdateProjectBriefRequest,
+  ProjectDecision,
+  ListProjectDecisionsResponse,
+  ExtractProjectDecisionsResponse,
+  AtlasSearchResponse,
+  AtlasConcept,
+  AtlasEdge,
+  AtlasDecisionLink,
+  GetAtlasIndexResponse,
+  BuildAtlasIndexResponse,
+  AtlasDiagram,
+  GetAtlasDiagramsResponse,
+  CreateAtlasDiagramResponse,
 } from '@fastest/shared';
 import type {
   TimelineItem,
@@ -51,8 +63,19 @@ import type {
   DeploymentSettings,
   DeploymentRecord,
   UpdateDeploymentSettingsRequest,
-  BuildSuggestion,
+  NextStep,
   UpdateProjectBriefRequest,
+} from '@fastest/shared';
+import type {
+  Manifest,
+  Snapshot,
+  AtlasSearchResponse,
+  ListProjectDecisionsResponse,
+  ExtractProjectDecisionsResponse,
+  GetAtlasIndexResponse,
+  BuildAtlasIndexResponse,
+  GetAtlasDiagramsResponse,
+  CreateAtlasDiagramResponse,
 } from '@fastest/shared';
 import type { OpenCodeGlobalEvent } from './opencode';
 
@@ -136,6 +159,31 @@ class ApiClient {
     return res.json();
   }
 
+  private async requestRaw(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<Response> {
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(getApiUrl(path), {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: { message: 'Request failed' } }));
+      throw new Error(error.error?.message || 'Request failed');
+    }
+
+    return res;
+  }
+
   // Auth
   async startLogin(email: string) {
     return this.request<{ session_id: string }>('POST', '/auth/start', { email });
@@ -191,7 +239,22 @@ class ApiClient {
       project: import('@fastest/shared').Project;
       workspaces: import('@fastest/shared').Workspace[];
       snapshots: import('@fastest/shared').Snapshot[];
+      events: import('@fastest/shared').ActivityEvent[];
+      snapshot_insights: import('@fastest/shared').ProjectSnapshotInsights;
     }>('GET', `/projects/${projectId}`);
+  }
+
+  async getSnapshot(snapshotId: string) {
+    return this.request<{ snapshot: Snapshot }>('GET', `/snapshots/${snapshotId}`);
+  }
+
+  async getManifest(manifestHash: string) {
+    return this.request<Manifest>('GET', `/blobs/manifests/${manifestHash}`);
+  }
+
+  async downloadBlob(hash: string) {
+    const res = await this.requestRaw('GET', `/blobs/download/${hash}`);
+    return res.arrayBuffer();
   }
 
   async getProjectBrief(projectId: string) {
@@ -209,35 +272,72 @@ class ApiClient {
     );
   }
 
-  async listBuildSuggestions(projectId: string, status?: string) {
+  async listNextSteps(projectId: string, status?: string) {
     const query = status ? `?status=${encodeURIComponent(status)}` : '';
-    return this.request<import('@fastest/shared').ListBuildSuggestionsResponse>(
+    return this.request<import('@fastest/shared').ListNextStepsResponse>(
       'GET',
-      `/projects/${projectId}/suggestions${query}`
+      `/projects/${projectId}/next-steps${query}`
     );
   }
 
-  async generateBuildSuggestions(projectId: string) {
-    return this.request<import('@fastest/shared').GenerateBuildSuggestionsResponse>(
+  async generateNextSteps(projectId: string) {
+    return this.request<import('@fastest/shared').GenerateNextStepsResponse>(
       'POST',
-      `/projects/${projectId}/suggestions/generate`
+      `/projects/${projectId}/next-steps/generate`
     );
   }
 
-  async updateBuildSuggestion(projectId: string, suggestionId: string, status: BuildSuggestion['status']) {
-    return this.request<{ suggestion: BuildSuggestion }>(
+  async updateNextStep(projectId: string, nextStepId: string, status: NextStep['status']) {
+    return this.request<{ next_step: NextStep }>(
       'PATCH',
-      `/projects/${projectId}/suggestions/${suggestionId}`,
+      `/projects/${projectId}/next-steps/${nextStepId}`,
       { status }
     );
   }
 
-  async submitBuildSuggestionFeedback(projectId: string, suggestionId: string, helpful: boolean) {
-    return this.request<{ suggestion: BuildSuggestion }>(
+  async submitNextStepFeedback(projectId: string, nextStepId: string, helpful: boolean) {
+    return this.request<{ next_step: NextStep }>(
       'POST',
-      `/projects/${projectId}/suggestions/${suggestionId}/feedback`,
+      `/projects/${projectId}/next-steps/${nextStepId}/feedback`,
       { helpful }
     );
+  }
+
+  async listProjectDecisions(projectId: string): Promise<ListProjectDecisionsResponse> {
+    return this.request<ListProjectDecisionsResponse>('GET', `/projects/${projectId}/decisions`);
+  }
+
+  async extractProjectDecisions(projectId: string, options?: { maxConversations?: number; messagesPerConversation?: number }): Promise<ExtractProjectDecisionsResponse> {
+    return this.request<ExtractProjectDecisionsResponse>('POST', `/projects/${projectId}/decisions/extract`, {
+      max_conversations: options?.maxConversations,
+      messages_per_conversation: options?.messagesPerConversation,
+    });
+  }
+
+  async searchAtlas(projectId: string, query: string, limit = 8): Promise<AtlasSearchResponse> {
+    return this.request<AtlasSearchResponse>('POST', `/projects/${projectId}/atlas/search`, { query, limit });
+  }
+
+  async getAtlasIndex(projectId: string): Promise<GetAtlasIndexResponse> {
+    return this.request<GetAtlasIndexResponse>('GET', `/projects/${projectId}/atlas`);
+  }
+
+  async buildAtlasIndex(projectId: string, options?: { maxFiles?: number }) {
+    return this.request<BuildAtlasIndexResponse>('POST', `/projects/${projectId}/atlas/index`, {
+      max_files: options?.maxFiles,
+    });
+  }
+
+  async listAtlasDiagrams(projectId: string, conceptId?: string): Promise<GetAtlasDiagramsResponse> {
+    const query = conceptId ? `?concept_id=${encodeURIComponent(conceptId)}` : '';
+    return this.request<GetAtlasDiagramsResponse>('GET', `/projects/${projectId}/atlas/diagrams${query}`);
+  }
+
+  async createAtlasDiagram(projectId: string, payload: { conceptId?: string; type: string }) {
+    return this.request<CreateAtlasDiagramResponse>('POST', `/projects/${projectId}/atlas/diagrams`, {
+      concept_id: payload.conceptId || null,
+      type: payload.type,
+    });
   }
 
   // Project Docs
@@ -587,6 +687,34 @@ class ApiClient {
     return this.request<{ success: boolean }>(
       'POST',
       `/action-items/${itemId}/dismiss`
+    );
+  }
+
+  async createActionItemRun(itemId: string) {
+    return this.request<{ run: import('@fastest/shared').ActionItemRun }>(
+      'POST',
+      `/action-items/${itemId}/runs`
+    );
+  }
+
+  async listActionItemRuns(itemId: string) {
+    return this.request<{ runs: import('@fastest/shared').ActionItemRun[] }>(
+      'GET',
+      `/action-items/${itemId}/runs`
+    );
+  }
+
+  async getActionItemRun(runId: string) {
+    return this.request<{ run: import('@fastest/shared').ActionItemRun }>(
+      'GET',
+      `/action-items/runs/${runId}`
+    );
+  }
+
+  async applyActionItemRun(runId: string) {
+    return this.request<{ success: boolean }>(
+      'POST',
+      `/action-items/runs/${runId}/apply`
     );
   }
 
