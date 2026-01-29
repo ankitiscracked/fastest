@@ -58,6 +58,11 @@ Our **workspace model solves this by design**:
 
 4. **Main is special**: The main workspace has additional protections, is the target for merges, and may have deployment integrations.
 
+## Deployment Safety (Chat)
+- Deployment tools must require explicit user approval.
+- The agent should ask for confirmation before invoking deploy.
+- Deploy tool calls must include `confirm: "approve"`.
+
 5. **Clear = Visual Reset**: "Clear conversation" clears messages from the UI but the underlying session continues. Optional: create a code commit on clear.
 
 ---

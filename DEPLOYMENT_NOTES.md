@@ -62,6 +62,16 @@ The error message will now include:
 
 If the multi-stage build doesn't work in your environment, use the `OPENCODE_URL` environment variable to point to an external OpenCode server. This is set in `api/src/conversation.ts` line 449.
 
+### 3. **OpenCode Tools (Deploy)**
+
+- Custom tools live in `api/opencode-tools` and are mounted into sandbox images at `/opt/fastest/opencode-tools`.
+- Set `OPENCODE_TOOLS_DIR` to point OpenCode at that tools folder.
+  - Local dev sets this automatically in `api/scripts/dev-server.ts`.
+  - Sandbox images copy tools in `api/Dockerfile` and `api/e2b.Dockerfile`.
+- The deploy tool requires explicit user approval:
+  - The agent must ask the user to deploy first.
+  - The tool only executes when called with `confirm: "approve"`.
+
 ## Next Steps
 
 1. Commit these changes to your repository
