@@ -4,7 +4,7 @@ import type { Project, Workspace, ConversationWithContext } from '@fastest/share
 import { api } from '../api/client';
 import { PromptInput, ContextBar } from '../components/conversation';
 import { ActionItems } from '../components/conversation/ActionItems';
-import { BuildSuggestions, ProjectBriefWizard } from '../components/suggestions';
+import { NextSteps, ProjectBriefWizard } from '../components/suggestions';
 
 export function Home() {
   const navigate = useNavigate();
@@ -258,10 +258,10 @@ export function Home() {
             />
           </div>
 
-          {/* Build Suggestions */}
+          {/* Next Steps */}
           {currentProject?.brief && (
             <div className="mb-8">
-              <BuildSuggestions
+              <NextSteps
                 projectId={currentProject.id}
                 onStartSuggestion={(_suggestionId, prompt) => {
                   void handleSubmitPrompt(prompt);
@@ -274,7 +274,7 @@ export function Home() {
           {currentProject && !currentProject.brief && (
             <div className="mb-8 p-4 bg-accent-50 border border-accent-200 rounded-md">
               <p className="text-sm text-accent-800 mb-2">
-                Set up your project brief to get tailored build suggestions.
+                Set up your project brief to get tailored next steps.
               </p>
               <button
                 onClick={() => setShowBriefWizard(true)}

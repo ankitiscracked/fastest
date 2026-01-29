@@ -128,7 +128,7 @@ export function ProjectBriefWizard({ projectId, onComplete, onClose }: ProjectBr
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <h3 className="text-lg font-semibold text-surface-800">Project Brief</h3>
-            <p className="text-sm text-surface-500">Set context to unlock tailored build suggestions.</p>
+            <p className="text-sm text-surface-500">Set context to unlock tailored next steps.</p>
           </div>
           <button
             onClick={onClose}

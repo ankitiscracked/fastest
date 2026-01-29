@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react';
-import type { BuildSuggestion } from '@fastest/shared';
+import type { NextStep } from '@fastest/shared';
 import { api } from '../../api/client';
 
-interface BuildSuggestionsProps {
+interface NextStepsProps {
   projectId: string;
   onStartSuggestion: (suggestionId: string, prompt: string) => void;
 }
 
-function buildPrompt(suggestion: BuildSuggestion): string {
-  const description = suggestion.description ? `\n\nDetails: ${suggestion.description}` : '';
-  const rationale = suggestion.rationale ? `\n\nWhy now: ${suggestion.rationale}` : '';
-  return `Work on this product suggestion: ${suggestion.title}.${description}${rationale}`.trim();
+function buildPrompt(nextStep: NextStep): string {
+  const description = nextStep.description ? `\n\nDetails: ${nextStep.description}` : '';
+  const rationale = nextStep.rationale ? `\n\nWhy now: ${nextStep.rationale}` : '';
+  return `Work on this next step: ${nextStep.title}.${description}${rationale}`.trim();
 }
 
 function priorityLabel(priority: number): string {
@@ -19,8 +19,8 @@ function priorityLabel(priority: number): string {
   return 'Medium';
 }
 
-export function BuildSuggestions({ projectId, onStartSuggestion }: BuildSuggestionsProps) {
-  const [suggestions, setSuggestions] = useState<BuildSuggestion[]>([]);
+export function NextSteps({ projectId, onStartSuggestion }: NextStepsProps) {
+  const [suggestions, setSuggestions] = useState<NextStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -35,10 +35,10 @@ export function BuildSuggestions({ projectId, onStartSuggestion }: BuildSuggesti
     setLoading(true);
     setError(null);
     try {
-      const res = await api.listBuildSuggestions(projectId);
-      setSuggestions(res.suggestions || []);
+      const res = await api.listNextSteps(projectId);
+      setSuggestions(res.next_steps || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load suggestions');
+      setError(err instanceof Error ? err.message : 'Failed to load next steps');
     } finally {
       setLoading(false);
     }
@@ -48,32 +48,32 @@ export function BuildSuggestions({ projectId, onStartSuggestion }: BuildSuggesti
     setIsGenerating(true);
     setError(null);
     try {
-      await api.generateBuildSuggestions(projectId);
+      await api.generateNextSteps(projectId);
       await loadSuggestions();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate suggestions');
+      setError(err instanceof Error ? err.message : 'Failed to generate next steps');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const updateStatus = async (suggestion: BuildSuggestion, status: BuildSuggestion['status']) => {
+  const updateStatus = async (suggestion: NextStep, status: NextStep['status']) => {
     setUpdatingId(suggestion.id);
     try {
-      const res = await api.updateBuildSuggestion(projectId, suggestion.id, status);
-      setSuggestions((prev) => prev.map((item) => (item.id === suggestion.id ? res.suggestion : item)));
+      const res = await api.updateNextStep(projectId, suggestion.id, status);
+      setSuggestions((prev) => prev.map((item) => (item.id === suggestion.id ? res.next_step : item)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update suggestion');
+      setError(err instanceof Error ? err.message : 'Failed to update next step');
     } finally {
       setUpdatingId(null);
     }
   };
 
-  const submitFeedback = async (suggestion: BuildSuggestion, helpful: boolean) => {
+  const submitFeedback = async (suggestion: NextStep, helpful: boolean) => {
     setFeedbackId(suggestion.id);
     try {
-      const res = await api.submitBuildSuggestionFeedback(projectId, suggestion.id, helpful);
-      setSuggestions((prev) => prev.map((item) => (item.id === suggestion.id ? res.suggestion : item)));
+      const res = await api.submitNextStepFeedback(projectId, suggestion.id, helpful);
+      setSuggestions((prev) => prev.map((item) => (item.id === suggestion.id ? res.next_step : item)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to record feedback');
     } finally {
@@ -84,7 +84,7 @@ export function BuildSuggestions({ projectId, onStartSuggestion }: BuildSuggesti
   if (loading) {
     return (
       <div className="bg-white rounded-md border border-surface-200 p-4">
-        <div className="text-sm text-surface-500">Loading suggestions...</div>
+        <div className="text-sm text-surface-500">Loading next steps...</div>
       </div>
     );
   }
@@ -93,8 +93,8 @@ export function BuildSuggestions({ projectId, onStartSuggestion }: BuildSuggesti
     <div className="bg-white rounded-md border border-surface-200">
       <div className="flex items-center justify-between px-4 py-3 border-b border-surface-200">
         <div>
-          <h3 className="text-sm font-medium text-surface-800">Build Suggestions</h3>
-          <p className="text-xs text-surface-500">Product-focused ideas tailored to this project</p>
+          <h3 className="text-sm font-medium text-surface-800">Next Steps</h3>
+          <p className="text-xs text-surface-500">Product-focused guidance tailored to this project</p>
         </div>
         <button
           onClick={handleGenerate}
@@ -113,13 +113,13 @@ export function BuildSuggestions({ projectId, onStartSuggestion }: BuildSuggesti
 
       {suggestions.length === 0 ? (
         <div className="p-4">
-          <p className="text-sm text-surface-600">No suggestions yet.</p>
+          <p className="text-sm text-surface-600">No next steps yet.</p>
           <button
             onClick={handleGenerate}
             disabled={isGenerating}
             className="mt-3 px-3 py-1.5 text-xs font-medium text-accent-700 bg-accent-50 hover:bg-accent-100 rounded-sm border border-accent-200 disabled:opacity-50"
           >
-            {isGenerating ? 'Generating...' : 'Generate suggestions'}
+            {isGenerating ? 'Generating...' : 'Generate next steps'}
           </button>
         </div>
       ) : (

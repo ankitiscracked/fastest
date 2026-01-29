@@ -1,6 +1,6 @@
-# Build Suggestions Feature - Implementation Plan
+# Next Steps Feature - Implementation Plan
 
-> **Goal**: Surface intelligent, contextual suggestions for what to build next based on project intent, current state, and battle-tested wisdom from successful builders.
+> **Goal**: Surface intelligent, contextual next steps for what to build next based on project intent, current state, and battle-tested wisdom from successful builders.
 
 ## Overview
 
@@ -147,10 +147,10 @@ CREATE TABLE project_research (
 CREATE INDEX idx_research_project ON project_research(project_id);
 ```
 
-### 4. Build Suggestions Table
+### 4. Next Steps Table
 
 ```sql
-CREATE TABLE build_suggestions (
+CREATE TABLE next_steps (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
 
@@ -177,8 +177,8 @@ CREATE TABLE build_suggestions (
   acted_on_at TEXT
 );
 
-CREATE INDEX idx_suggestions_project ON build_suggestions(project_id, status);
-CREATE INDEX idx_suggestions_priority ON build_suggestions(project_id, priority);
+CREATE INDEX idx_next_steps_project ON next_steps(project_id, status);
+CREATE INDEX idx_next_steps_priority ON next_steps(project_id, priority);
 ```
 
 ### 5. Decision Log Table
@@ -246,31 +246,31 @@ GET /v1/projects/:id/research
   Response: { research: ProjectResearch[] }
 ```
 
-### Build Suggestions
+### Next Steps
 
 ```
-POST /v1/projects/:id/suggestions/generate
+POST /v1/projects/:id/next-steps/generate
   Body: { force?: boolean }  -- Force regenerate even if recent
-  Response: { suggestions: BuildSuggestion[] }
+  Response: { next_steps: NextStep[] }
   Note: This is the main intelligence endpoint
 
-GET /v1/projects/:id/suggestions
+GET /v1/projects/:id/next-steps
   Query: ?status=pending&limit=10
-  Response: { suggestions: BuildSuggestion[] }
+  Response: { next_steps: NextStep[] }
 
-PATCH /v1/projects/:id/suggestions/:suggestionId
+PATCH /v1/projects/:id/next-steps/:nextStepId
   Body: { status: 'started' | 'completed' | 'dismissed' }
-  Response: { suggestion: BuildSuggestion }
+  Response: { next_step: NextStep }
 ```
 
 ---
 
-## Suggestion Generation Logic
+## Next Steps Generation Logic
 
 ### Input Assembly
 
 ```typescript
-interface SuggestionContext {
+interface NextStepContext {
   // Project identity
   project: Project;
   brief: StartupBrief | PersonalToolBrief;
@@ -284,8 +284,8 @@ interface SuggestionContext {
   similar_projects: ProjectResearch[];  // GitHub research
   relevant_wisdom: WisdomSource[];      // Matched wisdom
 
-  // Previous suggestions
-  past_suggestions: BuildSuggestion[];  // What was already suggested
+  // Previous next steps
+  past_next_steps: NextStep[];  // What was already suggested
 }
 ```
 
@@ -362,13 +362,13 @@ Relevant quote: "{wisdom.quotable_lines[0].quote}"
 {/foreach}
 
 ## Already Suggested (don't repeat)
-{past_suggestions.map(s => s.title)}
+{past_next_steps.map(s => s.title)}
 
 ---
 
 Based on all this context, suggest 3-5 things to build or do next.
 
-For each suggestion:
+For each next step:
 1. Be specific and actionable
 2. Explain WHY this matters at this stage
 3. Reference relevant wisdom when applicable
@@ -383,7 +383,7 @@ Prioritize ruthlessly based on the current stage:
 
 Format as JSON:
 {
-  "suggestions": [
+  "next_steps": [
     {
       "title": "...",
       "description": "...",
@@ -443,7 +443,7 @@ Be practical:
 
 Format as JSON:
 {
-  "suggestions": [
+  "next_steps": [
     {
       "title": "...",
       "description": "...",
@@ -594,17 +594,17 @@ interface ProjectBriefWizardProps {
 // Step 3: Review & confirm
 ```
 
-#### 2. BuildSuggestions
+#### 2. NextSteps
 
 ```typescript
-// web/src/components/suggestions/BuildSuggestions.tsx
-interface BuildSuggestionsProps {
+// web/src/components/next-steps/NextSteps.tsx
+interface NextStepsProps {
   projectId: string;
-  onStartSuggestion: (suggestionId: string, prompt: string) => void;
+  onStartSuggestion: (nextStepId: string, prompt: string) => void;
 }
 
 // Displays:
-// - List of suggestions with priority badges
+// - List of next steps with priority badges
 // - Expandable rationale with wisdom citations
 // - "Start working on this" button -> creates conversation with context
 // - Dismiss/complete actions
@@ -613,7 +613,7 @@ interface BuildSuggestionsProps {
 #### 3. WisdomCard
 
 ```typescript
-// web/src/components/suggestions/WisdomCard.tsx
+// web/src/components/next-steps/WisdomCard.tsx
 interface WisdomCardProps {
   source: WisdomSource;
   context?: string;  // Why this is relevant now
@@ -642,13 +642,13 @@ export function Home() {
         <div className="max-w-3xl mx-auto px-4 py-8">
           {/* Hero / Prompt Section - existing */}
 
-          {/* NEW: Build Suggestions - prominent placement */}
+          {/* NEW: Next Steps - prominent placement */}
           {currentProject?.brief && (
             <div className="mb-8">
-              <BuildSuggestions
+              <NextSteps
                 projectId={currentProject.id}
-                onStartSuggestion={(suggestionId, prompt) => {
-                  // Create conversation with suggestion context
+                onStartSuggestion={(nextStepId, prompt) => {
+                  // Create conversation with next step context
                   handleSubmitPrompt(prompt);
                 }}
               />
@@ -659,7 +659,7 @@ export function Home() {
           {currentProject && !currentProject.brief && (
             <div className="mb-8 p-4 bg-accent-50 border border-accent-200 rounded-md">
               <p className="text-sm text-accent-800 mb-2">
-                Set up your project brief to get intelligent suggestions
+                Set up your project brief to get intelligent next steps
               </p>
               <button
                 onClick={() => setShowBriefWizard(true)}
@@ -685,7 +685,7 @@ export function Home() {
           projectId={currentProject.id}
           onComplete={(brief) => {
             setShowBriefWizard(false);
-            // Trigger research + suggestion generation
+            // Trigger research + next step generation
           }}
         />
       )}
@@ -698,18 +698,36 @@ export function Home() {
 
 ## Implementation Phases
 
+### Current V0 (Implemented)
+
+**Database:**
+- [x] Add `intent` and `brief` columns to projects table
+- [x] Create `next_steps` table
+- [x] Add feedback counters on next steps (helpful / not helpful)
+
+**API:**
+- [x] `PATCH /projects/:id/brief` - Save project brief
+- [x] `GET /projects/:id/brief` - Get project brief
+- [x] `POST /projects/:id/next-steps/generate` - Generate next steps
+- [x] `GET /projects/:id/next-steps` - List next steps
+- [x] `PATCH /projects/:id/next-steps/:nextStepId` - Update status
+- [x] `POST /projects/:id/next-steps/:nextStepId/feedback` - Record helpful / not helpful
+
+**Frontend:**
+- [x] `ProjectBriefWizard` component
+- [x] `NextSteps` component
+- [x] Update Home page with next steps
+- [x] Brief setup flow
+- [x] Suggestion → Conversation flow
+
 ### Phase 1: Foundation (Week 1)
 
 **Database:**
-- [ ] Add `intent` and `brief` columns to projects table
 - [ ] Create `wisdom_sources` table
-- [ ] Create `build_suggestions` table
 - [ ] Create `project_research` table
 - [ ] Create `project_decisions` table
 
-**API:**
-- [ ] `PATCH /projects/:id/brief` - Save project brief
-- [ ] `GET /projects/:id/brief` - Get project brief
+**API (Admin / Research):**
 - [ ] `POST /admin/wisdom-sources` - Add wisdom source
 - [ ] `GET /admin/wisdom-sources` - List wisdom sources
 
@@ -726,43 +744,36 @@ export function Home() {
 - [ ] LLM-based analysis of found repos
 
 **Suggestions:**
-- [ ] `POST /projects/:id/suggestions/generate` - Generate suggestions
 - [ ] Wisdom matching algorithm
 - [ ] Generation prompts for both intents
-- [ ] `GET /projects/:id/suggestions` - List suggestions
 
 ### Phase 3: Frontend (Week 3)
 
 **Components:**
-- [ ] `ProjectBriefWizard` component
-- [ ] `BuildSuggestions` component
 - [ ] `WisdomCard` component
 
 **Integration:**
-- [ ] Update Home page with suggestions
-- [ ] Brief setup flow
-- [ ] Suggestion → Conversation flow
+- [ ] Wisdom citations in next steps UI
+- [ ] Suggestion refresh on project changes
 
 ### Phase 4: Polish (Week 4)
 
 **Quality:**
 - [ ] Add remaining wisdom sources (50 startup, 30 personal tool)
-- [ ] Tune suggestion quality
-- [ ] Add feedback mechanism (helpful/not helpful)
+- [ ] Tune next step quality
 
 **Features:**
 - [ ] Decision extraction from conversations
-- [ ] Suggestion refresh on project changes
-- [ ] "Why this suggestion" explainer
+- [ ] "Why this next step" explainer
 
 ---
 
 ## Success Metrics
 
 1. **Engagement**: % of projects with briefs set up
-2. **Quality**: User feedback on suggestions (helpful/not helpful)
-3. **Action**: % of suggestions that lead to conversations
-4. **Retention**: Do users with suggestions active return more?
+2. **Quality**: User feedback on next steps (helpful/not helpful)
+3. **Action**: % of next steps that lead to conversations
+4. **Retention**: Do users with next steps active return more?
 
 ---
 

@@ -1,2 +1,2 @@
-export { BuildSuggestions } from './BuildSuggestions';
+export { NextSteps } from './NextSteps';
 export { ProjectBriefWizard } from './ProjectBriefWizard';
