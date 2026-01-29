@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
-import type { Project, Workspace, Snapshot, ProjectEnvVar } from '@fastest/shared';
+import type { Project, Workspace, Snapshot, ProjectEnvVar, ProjectSnapshotInsights } from '@fastest/shared';
 import { api } from '../api/client';
 
-type Tab = 'workspaces' | 'snapshots' | 'environment';
+type Tab = 'workspaces' | 'environment';
 
 export function ProjectDetail() {
   const { projectId } = useParams({ strict: false }) as { projectId: string };
   const [project, setProject] = useState<Project | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [snapshotInsights, setSnapshotInsights] = useState<ProjectSnapshotInsights | null>(null);
   const [envVars, setEnvVars] = useState<ProjectEnvVar[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +38,7 @@ export function ProjectDetail() {
       setProject(data.project);
       setWorkspaces(data.workspaces || []);
       setSnapshots(data.snapshots || []);
+      setSnapshotInsights(data.snapshot_insights || null);
     } catch (err) {
       console.error('Failed to fetch project:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch project');
@@ -128,11 +130,24 @@ export function ProjectDetail() {
     );
   }
 
+  const sortedSnapshots = [...snapshots].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+  const lastSnapshot = sortedSnapshots[0] || null;
+  const recentSnapshots = sortedSnapshots.slice(0, 3);
+
   const tabs: { key: Tab; label: string; count: number }[] = [
     { key: 'workspaces', label: 'Workspaces', count: workspaces.length },
-    { key: 'snapshots', label: 'Snapshots', count: snapshots.length },
     { key: 'environment', label: 'Environment', count: envVars.length },
   ];
+
+  const formatTimestamp = (value?: string | null) =>
+    value ? new Date(value).toLocaleString() : null;
+
+  const lastMergeAt = formatTimestamp(snapshotInsights?.last_merge_at);
+  const lastDeployAt = formatTimestamp(snapshotInsights?.last_deploy_at);
+  const snapshotsSinceMerge = snapshotInsights?.snapshots_since_last_merge;
+  const snapshotsSinceDeploy = snapshotInsights?.snapshots_since_last_deploy;
 
   return (
     <div className="h-full flex flex-col bg-surface-50">
@@ -149,16 +164,28 @@ export function ProjectDetail() {
               <span>{snapshots.length} snapshots</span>
             </div>
           </div>
-          <Link
-            to="/projects/$projectId/docs"
-            params={{ projectId: projectId! }}
-            className="px-4 py-2 border border-surface-300 text-surface-700 rounded-md hover:bg-surface-50 text-sm font-medium flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            Docs
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/projects/$projectId/atlas"
+              params={{ projectId: projectId! }}
+              className="px-4 py-2 border border-surface-300 text-surface-700 rounded-md hover:bg-surface-50 text-sm font-medium flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12m6-6H6" />
+              </svg>
+              Atlas
+            </Link>
+            <Link
+              to="/projects/$projectId/docs"
+              params={{ projectId: projectId! }}
+              className="px-4 py-2 border border-surface-300 text-surface-700 rounded-md hover:bg-surface-50 text-sm font-medium flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Docs
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -256,6 +283,82 @@ export function ProjectDetail() {
             )}
           </div>
 
+          {/* Snapshot Activity */}
+          <div className="bg-white rounded-md border border-surface-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-surface-200 bg-surface-50">
+              <div className="text-sm font-medium text-surface-800">Snapshot activity</div>
+            </div>
+            <div className="p-4 grid gap-4 md:grid-cols-3">
+              <div>
+                <div className="text-xs text-surface-500">Last snapshot</div>
+                {lastSnapshot ? (
+                  <>
+                    <div className="text-sm text-surface-800 mt-1">
+                      {formatTimestamp(lastSnapshot.created_at)}
+                    </div>
+                    <div className="text-xs text-surface-500 font-mono">
+                      {lastSnapshot.id.slice(0, 8)}...
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-surface-600 mt-1">No snapshots yet</div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-surface-500">Since last merge</div>
+                {lastMergeAt ? (
+                  <>
+                    <div className="text-sm text-surface-800 mt-1">
+                      {snapshotsSinceMerge ?? 0} snapshot{snapshotsSinceMerge === 1 ? '' : 's'}
+                    </div>
+                    <div className="text-xs text-surface-500">since {lastMergeAt}</div>
+                  </>
+                ) : (
+                  <div className="text-sm text-surface-600 mt-1">No merges yet</div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-surface-500">Since last deploy</div>
+                {lastDeployAt ? (
+                  <>
+                    <div className="text-sm text-surface-800 mt-1">
+                      {snapshotsSinceDeploy ?? 0} snapshot{snapshotsSinceDeploy === 1 ? '' : 's'}
+                    </div>
+                    <div className="text-xs text-surface-500">since {lastDeployAt}</div>
+                  </>
+                ) : (
+                  <div className="text-sm text-surface-600 mt-1">No deploys yet</div>
+                )}
+              </div>
+            </div>
+            <div className="border-t border-surface-200">
+              <div className="px-4 py-3 text-xs text-surface-500">Recent snapshot summaries</div>
+              {recentSnapshots.length === 0 ? (
+                <div className="px-4 pb-4 text-sm text-surface-500">No snapshots yet.</div>
+              ) : (
+                <ul className="divide-y divide-surface-200">
+                  {recentSnapshots.map((snapshot) => (
+                    <li key={snapshot.id} className="px-4 py-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs text-surface-500 font-mono">
+                            {snapshot.id.slice(0, 8)}...
+                          </div>
+                          <div className="text-sm text-surface-700 mt-1">
+                            {snapshot.summary || 'No summary'}
+                          </div>
+                        </div>
+                        <div className="text-xs text-surface-400">
+                          {formatTimestamp(snapshot.created_at)}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
           {/* Tabs */}
           <div className="border-b border-surface-200">
             <nav className="flex gap-6">
@@ -306,46 +409,6 @@ export function ProjectDetail() {
                               : 'Never seen'}
                           </span>
                         </Link>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'snapshots' && (
-              <div className="bg-white rounded-md border border-surface-200 overflow-hidden">
-                {snapshots.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-surface-500 text-sm">
-                    No snapshots yet. Run <code className="bg-surface-100 px-1 py-0.5 rounded">fst snapshot</code> to create one.
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-surface-200">
-                    {snapshots.map((snapshot) => (
-                      <li key={snapshot.id} className="px-4 py-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-sm text-surface-800">{snapshot.id}</span>
-                              <span className="text-xs bg-surface-100 text-surface-600 px-1.5 py-0.5 rounded">
-                                {snapshot.source}
-                              </span>
-                              {project.last_snapshot_id === snapshot.id && (
-                                <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
-                                  latest
-                                </span>
-                              )}
-                            </div>
-                            {(snapshot as Snapshot & { summary?: string }).summary && (
-                              <div className="text-sm text-surface-600 mt-1">
-                                {(snapshot as Snapshot & { summary?: string }).summary}
-                              </div>
-                            )}
-                          </div>
-                          <span className="text-xs text-surface-400">
-                            {new Date(snapshot.created_at).toLocaleString()}
-                          </span>
-                        </div>
                       </li>
                     ))}
                   </ul>

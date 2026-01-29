@@ -571,6 +571,14 @@ function ProjectItem({
       {/* Workspaces */}
       {project.isExpanded && (
         <div className="ml-4 mt-0.5 space-y-0.5">
+          <Link
+            to="/projects/$projectId/atlas"
+            params={{ projectId: project.id }}
+            className="flex items-center gap-2 px-2 py-1 rounded-md text-sm text-surface-600 hover:bg-surface-100"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-surface-300" />
+            Atlas
+          </Link>
           {project.isLoadingWorkspaces ? (
             <div className="px-2 py-1 text-xs text-surface-400">Loading...</div>
           ) : project.workspaces?.length === 0 ? (

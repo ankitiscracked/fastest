@@ -6,7 +6,7 @@
 
 ## Vision
 
-Atlas is not just a view—it's the **project model** itself. The Atlas View is one interface to this model, but the model serves the entire application: coding agent sessions, build suggestions, action items, deployments, and future collaboration features.
+Atlas is not just a view—it's the **project model** itself. The Atlas View is one interface to this model, but the model serves the entire application: coding agent sessions, next steps, action items, deployments, and future collaboration features.
 
 **Core Insight**: We already have the data (code + conversations with coding agents). We don't need to pre-build a rigid knowledge structure. We index the data, and let the LLM generate views on demand based on context and questions.
 
@@ -63,7 +63,7 @@ Atlas is not just a view—it's the **project model** itself. The Atlas View is 
 | **Semantics** | What code does, capabilities | Natural language queries |
 | **Decisions** | Why things exist, tradeoffs made | Context during coding, reviews |
 | **Patterns** | How problems are solved here | Consistency, suggestions |
-| **Gaps** | What's missing, incomplete, fragile | Build suggestions |
+| **Gaps** | What's missing, incomplete, fragile | Next steps |
 | **Activity** | What's changing, who's working where | Coordination, priorities |
 | **Intent** | What user is trying to achieve | Contextual assistance |
 
@@ -736,7 +736,7 @@ src/
 │   │   └── Retriever.ts                # Semantic retrieval
 │   ├── insights/
 │   │   ├── InsightEngine.ts            # What should happen?
-│   │   ├── SuggestionGenerator.ts      # Build suggestions
+│   │   ├── SuggestionGenerator.ts      # Next steps
 │   │   ├── GapAnalyzer.ts              # Find gaps
 │   │   └── ActionExtractor.ts          # Extract action items
 │   ├── diagrams/
@@ -783,7 +783,7 @@ src/
 ├── agent/                              # Coding agent integration
 │   └── contextProvider.ts              # Queries model for agent context
 │
-├── suggestions/                        # Build suggestions feature
+├── suggestions/                        # Next steps feature
 │   └── ...
 │
 └── deployments/                        # Deployment integration

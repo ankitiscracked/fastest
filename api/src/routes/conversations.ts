@@ -1050,6 +1050,22 @@ Write a brief summary (1-2 sentences):`;
     createdAt: now,
   });
 
+  // Trigger Atlas re-index in background
+  const apiUrl = new URL(c.req.url).origin;
+  const apiToken = c.req.header('Authorization')?.replace('Bearer ', '') || '';
+  if (apiToken) {
+    c.executionCtx.waitUntil(
+      fetch(`${apiUrl}/v1/projects/${conversation.project_id}/atlas/index`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiToken}`,
+        },
+        body: JSON.stringify({}),
+      })
+    );
+  }
+
   return c.json({
     snapshot_id: snapshotId,
     manifest_hash: currentManifestHash,

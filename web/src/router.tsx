@@ -5,6 +5,7 @@ import { Login } from './pages/Login';
 import { Device } from './pages/Device';
 import { Projects } from './pages/Projects';
 import { ProjectDetail } from './pages/ProjectDetail';
+import { Atlas } from './pages/Atlas';
 import { Workspaces } from './pages/Workspaces';
 import { WorkspaceDetail } from './pages/WorkspaceDetail';
 import { Home } from './pages/Home';
@@ -158,6 +159,13 @@ const projectDocsConversationRoute = createRoute({
   component: DocsPage,
 });
 
+// Atlas route under conversation layout
+const atlasConversationRoute = createRoute({
+  getParentRoute: () => conversationLayoutRoute,
+  path: '/projects/$projectId/atlas',
+  component: Atlas,
+});
+
 // Build route tree
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -171,6 +179,7 @@ const routeTree = rootRoute.addChildren([
     settingsConversationRoute,
     projectDetailConversationRoute,
     projectDocsConversationRoute,
+    atlasConversationRoute,
   ]),
   authenticatedRoute.addChildren([
     projectsRoute,
