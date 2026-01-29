@@ -12,14 +12,15 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './index';
 import type { TimelineItem, FileChange, DeploymentLogEntry, DeploymentLog } from '@fastest/shared';
-import type { ConversationState, Message, Deployment, ProjectInfo } from './conversation_types';
-import { createDb, workspaces, activityEvents } from './db';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import type { ConversationState, Message, Deployment, ProjectInfo, SandboxRunner } from './conversation_types';
+import { createDb, workspaces, activityEvents, actionItems, actionItemRuns, snapshots, projects } from './db';
+import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { ConversationFiles } from './conversation_files';
 import { ConversationDeployments } from './conversation_deploy';
 import { ConversationOpenCode } from './conversation_opencode';
 import { ConversationWebSocket } from './conversation_ws';
 import { ConversationSandbox } from './conversation_sandbox';
+import { selectCheckCommands, type CheckCommands } from './action-items/checks';
 
  
 
@@ -41,7 +42,14 @@ type StreamEvent =
   | { type: 'warning'; warning: string }
   | { type: 'error'; error: string };
 
+const AUTO_SNAPSHOT_MIN_CHANGES = 2;
+const AUTO_SNAPSHOT_LARGE_CHANGES = 10;
+const AUTO_SNAPSHOT_MIN_BYTES = 5 * 1024;
+const AUTO_SNAPSHOT_LARGE_BYTES = 50 * 1024;
+const AUTO_SNAPSHOT_COOLDOWN_MS = 10 * 60 * 1000;
+
 export class ConversationSession extends DurableObject<Env> {
+  private static readonly DECISION_EXTRACTION_EVERY = 5;
   private state: ConversationState | null = null;
   private ws: ConversationWebSocket;
   private sandbox: ConversationSandbox;
@@ -89,6 +97,18 @@ export class ConversationSession extends DurableObject<Env> {
 
     const stored = await this.ctx.storage.get<ConversationState>('state');
     if (stored) {
+      let updated = false;
+      if (!stored.decisionExtractionEvery) {
+        stored.decisionExtractionEvery = ConversationSession.DECISION_EXTRACTION_EVERY;
+        updated = true;
+      }
+      if (stored.decisionExtractionCount === undefined) {
+        stored.decisionExtractionCount = 0;
+        updated = true;
+      }
+      if (updated) {
+        await this.ctx.storage.put('state', stored);
+      }
       this.state = stored;
       return this.state;
     }
@@ -123,6 +143,8 @@ export class ConversationSession extends DurableObject<Env> {
       timeline: [],
       deployments: [],
       autoCommitOnClear: false,
+      decisionExtractionEvery: ConversationSession.DECISION_EXTRACTION_EVERY,
+      decisionExtractionCount: 0,
       createdAt: now,
       updatedAt: now,
       lastManifestHash: initialManifestHash,
@@ -242,6 +264,34 @@ export class ConversationSession extends DurableObject<Env> {
         apiToken: string;
       };
       await this.openCode.rejectOpenCodeQuestion(requestId, apiUrl, apiToken);
+      return Response.json({ success: true });
+    }
+
+    if (url.pathname === '/action-item-runs/start' && request.method === 'POST') {
+      const { runId, actionItemId, conversationId, workspaceId, projectId, apiUrl, apiToken } = await request.json() as {
+        runId: string;
+        actionItemId: string;
+        conversationId: string;
+        workspaceId: string;
+        projectId: string;
+        apiUrl: string;
+        apiToken: string;
+      };
+      this.runActionItemRun(runId, actionItemId, conversationId, workspaceId, projectId, apiUrl, apiToken)
+        .catch((err) => console.error('[ActionItemRun] Failed:', err));
+      return Response.json({ success: true });
+    }
+
+    if (url.pathname === '/action-item-runs/apply' && request.method === 'POST') {
+      const { runId, conversationId, workspaceId, projectId, apiUrl, apiToken } = await request.json() as {
+        runId: string;
+        conversationId: string;
+        workspaceId: string;
+        projectId: string;
+        apiUrl: string;
+        apiToken: string;
+      };
+      await this.applyActionItemRun(runId, conversationId, workspaceId, projectId, apiUrl, apiToken);
       return Response.json({ success: true });
     }
 
@@ -484,11 +534,27 @@ export class ConversationSession extends DurableObject<Env> {
         this.generateTimelineSummary(timelineItem.id).catch(console.error);
       }
 
+      const shouldExtract = this.bumpDecisionExtraction(state);
       await this.ctx.storage.put('state', state);
+      if (shouldExtract) {
+        this.ctx.waitUntil(this.triggerDecisionExtraction(state, apiUrl, apiToken));
+      }
 
       if (fileChanges.length > 0) {
         this.broadcast({ type: 'files_changed', files: fileChanges.map(f => f.path) });
         this.broadcast({ type: 'message_update', message: assistantMessage });
+      }
+
+      if (manifestHash && fileChanges.length > 0 && state.lastManifestHash === manifestHash) {
+        this.ctx.waitUntil(this.maybeAutoSnapshot({
+          apiUrl,
+          apiToken,
+          manifestHash,
+          previousManifestHash,
+          fileChanges,
+          workspaceId: state.workspaceId,
+          projectId: state.projectId,
+        }));
       }
 
     } catch (error) {
@@ -511,6 +577,383 @@ export class ConversationSession extends DurableObject<Env> {
       this.broadcast({ type: 'message_status', messageId: assistantMessage.id, status: 'failed' });
       this.broadcast({ type: 'message_complete', message: assistantMessage });
     }
+  }
+
+  private truncateOutput(text: string, maxLength: number): string {
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength)}\n...truncated`;
+  }
+
+  private bumpDecisionExtraction(state: ConversationState): boolean {
+    const every = state.decisionExtractionEvery || ConversationSession.DECISION_EXTRACTION_EVERY;
+    const count = (state.decisionExtractionCount ?? 0) + 1;
+    state.decisionExtractionCount = count;
+    if (count >= every) {
+      state.decisionExtractionCount = 0;
+      state.lastDecisionExtractionAt = new Date().toISOString();
+      return true;
+    }
+    return false;
+  }
+
+  private async triggerDecisionExtraction(state: ConversationState, apiUrl: string, apiToken: string) {
+    if (!apiUrl || !apiToken) return;
+    try {
+      const endpoint = `${apiUrl}/v1/projects/${state.projectId}/decisions/extract`;
+      await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiToken}`,
+        },
+        body: JSON.stringify({
+          conversation_id: state.conversationId,
+          messages_per_conversation: 12,
+        }),
+      });
+    } catch (err) {
+      console.error('[Conversation] Decision extraction failed', err);
+    }
+  }
+
+  private buildActionPrompt(args: {
+    type: string;
+    title: string;
+    description?: string | null;
+    affectedFiles?: string[];
+    suggestedPrompt?: string | null;
+    failureNotes?: string | null;
+  }): string {
+    const details = [
+      `Type: ${args.type}`,
+      `Title: ${args.title}`,
+      args.description ? `Description: ${args.description}` : null,
+      args.affectedFiles && args.affectedFiles.length > 0
+        ? `Affected files: ${args.affectedFiles.join(', ')}`
+        : null,
+      args.suggestedPrompt ? `Suggested prompt: ${args.suggestedPrompt}` : null,
+      args.failureNotes ? `Previous failures:\n${args.failureNotes}` : null,
+    ].filter(Boolean).join('\n');
+
+    return `You are a senior software engineer. Apply the requested fix and produce a clean, minimal patch.
+
+Constraints:
+- Only modify files needed for the fix.
+- Keep changes focused and safe.
+- Do not remove functionality.
+- Provide a concise summary of what changed and why.
+
+Task:
+${details}
+
+When done, summarize changes and call out any follow-up risks or tests that should pass.`;
+  }
+
+  private async ensureStateForActionRun(
+    conversationId: string,
+    workspaceId: string,
+    projectId: string,
+    initialManifestHash?: string | null
+  ): Promise<ConversationState> {
+    try {
+      return await this.ensureState();
+    } catch {
+      return this.init(conversationId, workspaceId, projectId, initialManifestHash || undefined);
+    }
+  }
+
+  private async runChecks(
+    sandbox: SandboxRunner,
+    workDir: string,
+    commands: CheckCommands
+  ): Promise<Array<{ kind: 'install' | 'build' | 'typecheck' | 'test'; command: string; success: boolean; output?: string }>> {
+    const checks: Array<{ kind: 'install' | 'build' | 'typecheck' | 'test'; command: string; success: boolean; output?: string }> = [];
+    const ordered: Array<{ kind: 'install' | 'build' | 'typecheck' | 'test'; command?: string }> = [
+      { kind: 'install', command: commands.install },
+      { kind: 'build', command: commands.build },
+      { kind: 'typecheck', command: commands.typecheck },
+      { kind: 'test', command: commands.test },
+    ];
+
+    for (const item of ordered) {
+      if (!item.command) continue;
+      const result = await sandbox.exec(`cd ${workDir} && ${item.command} 2>&1`);
+      const output = `${result.stdout || ''}${result.stderr || ''}`.trim();
+      checks.push({
+        kind: item.kind,
+        command: item.command,
+        success: result.success,
+        output: output ? this.truncateOutput(output, 12000) : undefined,
+      });
+      if (!result.success) {
+        break;
+      }
+    }
+
+    return checks;
+  }
+
+  private async runActionItemRun(
+    runId: string,
+    actionItemId: string,
+    conversationId: string,
+    workspaceId: string,
+    projectId: string,
+    apiUrl: string,
+    apiToken: string
+  ): Promise<void> {
+    const db = createDb(this.env.DB);
+    const [item] = await db
+      .select({
+        id: actionItems.id,
+        type: actionItems.type,
+        title: actionItems.title,
+        description: actionItems.description,
+        affectedFiles: actionItems.affectedFiles,
+        suggestedPrompt: actionItems.suggestedPrompt,
+        metadata: actionItems.metadata,
+      })
+      .from(actionItems)
+      .where(eq(actionItems.id, actionItemId))
+      .limit(1);
+
+    if (!item) {
+      await db.update(actionItemRuns).set({
+        status: 'failed',
+        error: 'Action item not found',
+        updatedAt: new Date().toISOString(),
+      }).where(eq(actionItemRuns.id, runId));
+      return;
+    }
+
+    const [workspaceRow] = await db
+      .select({ currentManifestHash: workspaces.currentManifestHash })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+
+    const baseManifestHash = workspaceRow?.currentManifestHash || null;
+    if (!baseManifestHash) {
+      await db.update(actionItemRuns).set({
+        status: 'failed',
+        error: 'Workspace has no manifest hash',
+        updatedAt: new Date().toISOString(),
+      }).where(eq(actionItemRuns.id, runId));
+      return;
+    }
+
+    await this.ensureStateForActionRun(conversationId, workspaceId, projectId, baseManifestHash);
+
+    const now = new Date().toISOString();
+    await db.update(actionItemRuns).set({
+      status: 'running',
+      startedAt: now,
+      baseManifestHash,
+      updatedAt: now,
+    }).where(eq(actionItemRuns.id, runId));
+
+    await db.update(actionItems).set({
+      status: 'running',
+      updatedAt: now,
+    }).where(eq(actionItems.id, actionItemId));
+
+    const sandbox = await this.sandbox.getSandboxRunner();
+    const workDir = this.sandbox.getSandboxWorkDir(sandbox);
+    const runDir = `/tmp/action-run-${runId}`;
+
+    await this.files.restoreFiles(sandbox, apiUrl, apiToken, baseManifestHash, workDir);
+    await sandbox.exec(`rm -rf ${runDir} && mkdir -p ${runDir} && cp -a ${workDir} ${runDir}/orig`);
+
+    const pkgResult = await sandbox.exec(`cat ${workDir}/package.json 2>/dev/null`);
+    let packageJson: { scripts?: Record<string, string>; packageManager?: string } | undefined;
+    if (pkgResult.success && pkgResult.stdout.trim()) {
+      try {
+        packageJson = JSON.parse(pkgResult.stdout);
+      } catch {
+        packageJson = undefined;
+      }
+    }
+
+    const commands = selectCheckCommands({ packageJson });
+    const maxAttempts = 3;
+    let lastFailure: string | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await sandbox.exec(`rm -rf ${workDir} && cp -a ${runDir}/orig ${workDir}`);
+
+      let affectedFiles: string[] = [];
+      if (item.affectedFiles) {
+        try {
+          affectedFiles = JSON.parse(item.affectedFiles);
+        } catch {
+          affectedFiles = [];
+        }
+      }
+
+      let metadataNote: string | null = null;
+      if (item.metadata) {
+        try {
+          metadataNote = `Metadata: ${item.metadata}`;
+        } catch {
+          metadataNote = null;
+        }
+      }
+
+      const prompt = this.buildActionPrompt({
+        type: item.type,
+        title: item.title,
+        description: item.description,
+        affectedFiles,
+        suggestedPrompt: item.suggestedPrompt,
+        failureNotes: [lastFailure, metadataNote].filter(Boolean).join('\n\n') || null,
+      });
+
+      const result = await this.openCode.runInSandboxWithStreaming(
+        prompt,
+        apiUrl,
+        apiToken,
+        `action-run-${runId}-${attempt}`,
+        () => undefined,
+        () => undefined
+      );
+
+      await sandbox.exec(`rm -rf ${runDir}/work && cp -a ${workDir} ${runDir}/work`);
+      await sandbox.exec(`diff -ruN ${runDir}/orig ${runDir}/work > ${runDir}/patch.diff || true`);
+      const patchResult = await sandbox.exec(`cat ${runDir}/patch.diff 2>/dev/null || true`);
+      const patch = patchResult.stdout || '';
+
+      const checks = await this.runChecks(sandbox, workDir, commands);
+      const allPassed = checks.every((c) => c.success);
+
+      if (allPassed && patch.trim().length > 0) {
+        const finishedAt = new Date().toISOString();
+        await db.update(actionItemRuns).set({
+          status: 'ready',
+          attemptCount: attempt,
+          report: this.truncateOutput(result.output || '', 20000) || null,
+          summary: this.truncateOutput((result.output || '').split('\n').slice(0, 3).join('\n'), 800) || null,
+          patch,
+          checks: JSON.stringify(checks),
+          completedAt: finishedAt,
+          updatedAt: finishedAt,
+        }).where(eq(actionItemRuns.id, runId));
+
+        await db.update(actionItems).set({
+          status: 'ready',
+          updatedAt: finishedAt,
+        }).where(eq(actionItems.id, actionItemId));
+
+        return;
+      }
+
+      const failedChecks = checks.filter((c) => !c.success);
+      lastFailure = failedChecks.map((c) => `${c.kind} failed:\n${c.output || ''}`).join('\n\n') || 'Patch generation failed';
+
+      await db.update(actionItemRuns).set({
+        attemptCount: attempt,
+        checks: JSON.stringify(checks),
+        report: this.truncateOutput(result.output || '', 20000) || null,
+        summary: this.truncateOutput((result.output || '').split('\n').slice(0, 3).join('\n'), 800) || null,
+        updatedAt: new Date().toISOString(),
+      }).where(eq(actionItemRuns.id, runId));
+    }
+
+    const failedAt = new Date().toISOString();
+    await db.update(actionItemRuns).set({
+      status: 'failed',
+      error: lastFailure || 'Action run failed',
+      completedAt: failedAt,
+      updatedAt: failedAt,
+    }).where(eq(actionItemRuns.id, runId));
+
+    await db.update(actionItems).set({
+      status: 'pending',
+      updatedAt: failedAt,
+    }).where(eq(actionItems.id, actionItemId));
+  }
+
+  private async applyActionItemRun(
+    runId: string,
+    conversationId: string,
+    workspaceId: string,
+    projectId: string,
+    apiUrl: string,
+    apiToken: string
+  ): Promise<void> {
+    const db = createDb(this.env.DB);
+    const [run] = await db
+      .select({
+        id: actionItemRuns.id,
+        actionItemId: actionItemRuns.actionItemId,
+        status: actionItemRuns.status,
+        patch: actionItemRuns.patch,
+        baseManifestHash: actionItemRuns.baseManifestHash,
+      })
+      .from(actionItemRuns)
+      .where(eq(actionItemRuns.id, runId))
+      .limit(1);
+
+    if (!run || run.status !== 'ready' || !run.patch) {
+      throw new Error('Run is not ready to apply');
+    }
+
+    const [workspaceRow] = await db
+      .select({ currentManifestHash: workspaces.currentManifestHash })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+
+    if (run.baseManifestHash && workspaceRow?.currentManifestHash !== run.baseManifestHash) {
+      throw new Error('Workspace has changed since run was generated');
+    }
+
+    const state = await this.ensureStateForActionRun(conversationId, workspaceId, projectId, run.baseManifestHash);
+    if (run.baseManifestHash) {
+      state.lastManifestHash = run.baseManifestHash;
+      await this.ctx.storage.put('state', state);
+    }
+
+    const sandbox = await this.sandbox.getSandboxRunner();
+    const workDir = this.sandbox.getSandboxWorkDir(sandbox);
+    const runDir = `/tmp/action-run-${runId}`;
+
+    const manifestHash = run.baseManifestHash || state.lastManifestHash;
+    if (!manifestHash) {
+      throw new Error('Missing base manifest hash for apply');
+    }
+    await this.files.restoreFiles(sandbox, apiUrl, apiToken, manifestHash, workDir);
+    await sandbox.exec(`rm -rf ${runDir} && mkdir -p ${runDir}`);
+    const marker = `PATCH_${runId.replace(/[^a-zA-Z0-9]/g, '')}`;
+    await sandbox.exec(`cat <<'${marker}' > ${runDir}/patch.diff\n${run.patch}\n${marker}`);
+
+    const applyResult = await sandbox.exec(`patch -p3 -d ${workDir} < ${runDir}/patch.diff 2>&1`);
+    if (!applyResult.success) {
+      throw new Error(`Patch apply failed: ${applyResult.stderr || applyResult.stdout || 'unknown error'}`);
+    }
+
+    const { fileChanges, manifestHash, previousManifestHash } = await this.files.collectAndUploadFiles(
+      sandbox,
+      apiUrl,
+      apiToken,
+      workDir
+    );
+
+    if (manifestHash) {
+      state.lastManifestHash = manifestHash;
+      await this.updateWorkspaceCurrentManifest(state.workspaceId, manifestHash, previousManifestHash);
+    }
+
+    const finishedAt = new Date().toISOString();
+    await db.update(actionItemRuns).set({
+      status: 'applied',
+      updatedAt: finishedAt,
+      completedAt: finishedAt,
+    }).where(eq(actionItemRuns.id, runId));
+
+    await db.update(actionItems).set({
+      status: 'applied',
+      updatedAt: finishedAt,
+    }).where(eq(actionItems.id, run.actionItemId));
   }
 
   /**
@@ -670,6 +1113,149 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
     if (deleted > 0) parts.push(`deleted ${deleted} file${deleted > 1 ? 's' : ''}`);
 
     return parts.length > 0 ? `Changed files: ${parts.join(', ')}` : 'Updated project files';
+  }
+
+  private async maybeAutoSnapshot(args: {
+    apiUrl: string;
+    apiToken: string;
+    manifestHash: string;
+    previousManifestHash?: string;
+    fileChanges: FileChange[];
+    workspaceId: string;
+    projectId: string;
+  }): Promise<void> {
+    if (!args.apiUrl || !args.apiToken) return;
+
+    const changeCount = args.fileChanges.length;
+    const hasAddDelete = args.fileChanges.some((change) => change.change === 'added' || change.change === 'deleted');
+
+    let bytesChanged = 0;
+    let significant = hasAddDelete || changeCount >= AUTO_SNAPSHOT_MIN_CHANGES;
+
+    if (!args.previousManifestHash && changeCount > 0) {
+      significant = true;
+    }
+
+    if (!significant && args.previousManifestHash) {
+      bytesChanged = await this.estimateBytesChanged({
+        projectId: args.projectId,
+        manifestHash: args.manifestHash,
+        previousManifestHash: args.previousManifestHash,
+        fileChanges: args.fileChanges,
+      });
+      significant = bytesChanged >= AUTO_SNAPSHOT_MIN_BYTES;
+    }
+
+    if (!significant) return;
+
+    const db = createDb(this.env.DB);
+    const latest = await db
+      .select({
+        id: snapshots.id,
+        manifest_hash: snapshots.manifestHash,
+        created_at: snapshots.createdAt,
+      })
+      .from(snapshots)
+      .where(eq(snapshots.workspaceId, args.workspaceId))
+      .orderBy(desc(snapshots.createdAt))
+      .limit(1);
+
+    const lastSnapshot = latest[0];
+    if (lastSnapshot?.manifest_hash === args.manifestHash) return;
+
+    if (lastSnapshot?.created_at) {
+      const ageMs = Date.now() - Date.parse(lastSnapshot.created_at);
+      const isLarge = changeCount >= AUTO_SNAPSHOT_LARGE_CHANGES || bytesChanged >= AUTO_SNAPSHOT_LARGE_BYTES;
+      if (ageMs < AUTO_SNAPSHOT_COOLDOWN_MS && !isLarge) return;
+    }
+
+    try {
+      const response = await fetch(`${args.apiUrl}/v1/projects/${args.projectId}/snapshots`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${args.apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          manifest_hash: args.manifestHash,
+          parent_snapshot_id: lastSnapshot?.id || null,
+          workspace_id: args.workspaceId,
+          source: 'system',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn('[Conversation] Auto snapshot failed:', response.status, errorText);
+      }
+    } catch (err) {
+      console.warn('[Conversation] Auto snapshot error:', err);
+    }
+  }
+
+  private async estimateBytesChanged(args: {
+    projectId: string;
+    manifestHash: string;
+    previousManifestHash: string;
+    fileChanges: FileChange[];
+  }): Promise<number> {
+    const db = createDb(this.env.DB);
+    const project = await db
+      .select({ owner_user_id: projects.ownerUserId })
+      .from(projects)
+      .where(eq(projects.id, args.projectId))
+      .limit(1);
+
+    const ownerUserId = project[0]?.owner_user_id;
+    if (!ownerUserId) return 0;
+
+    const currentKey = `${ownerUserId}/manifests/${args.manifestHash}.json`;
+    const previousKey = `${ownerUserId}/manifests/${args.previousManifestHash}.json`;
+
+    const [currentObj, previousObj] = await Promise.all([
+      this.env.BLOBS.get(currentKey),
+      this.env.BLOBS.get(previousKey),
+    ]);
+
+    if (!currentObj || !previousObj) return 0;
+
+    let currentManifest: { files: Array<{ path: string; size?: number }> };
+    let previousManifest: { files: Array<{ path: string; size?: number }> };
+
+    try {
+      currentManifest = JSON.parse(await currentObj.text());
+      previousManifest = JSON.parse(await previousObj.text());
+    } catch {
+      return 0;
+    }
+
+    const currentSizes = new Map<string, number>();
+    const previousSizes = new Map<string, number>();
+
+    for (const file of currentManifest.files || []) {
+      if (typeof file.path === 'string') {
+        currentSizes.set(file.path, file.size || 0);
+      }
+    }
+
+    for (const file of previousManifest.files || []) {
+      if (typeof file.path === 'string') {
+        previousSizes.set(file.path, file.size || 0);
+      }
+    }
+
+    let bytesChanged = 0;
+    for (const change of args.fileChanges) {
+      if (change.change === 'added') {
+        bytesChanged += currentSizes.get(change.path) || 0;
+      } else if (change.change === 'deleted') {
+        bytesChanged += previousSizes.get(change.path) || 0;
+      } else {
+        bytesChanged += currentSizes.get(change.path) || previousSizes.get(change.path) || 0;
+      }
+    }
+
+    return bytesChanged;
   }
 
 }

@@ -75,6 +75,9 @@ export interface ConversationState {
 
   // Settings
   autoCommitOnClear: boolean;
+  decisionExtractionEvery?: number;
+  decisionExtractionCount?: number;
+  lastDecisionExtractionAt?: string;
 
   // Metadata
   createdAt: string;

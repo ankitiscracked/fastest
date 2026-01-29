@@ -13,7 +13,7 @@ import { eq, and, gt, desc, isNotNull, ne } from 'drizzle-orm';
 import type { Env } from './index';
 import type { Manifest } from '@fastest/shared';
 import { compareDrift, fromJSON } from '@fastest/shared';
-import { createDb, workspaces, projects, snapshots, conversations, driftReports, refactoringSuggestions } from './db';
+import { createDb, workspaces, projects, snapshots, conversations, driftReports, actionItems } from './db';
 import type { ConversationSession } from './conversation';
 
 // Maximum workspaces to process per cron run (to stay within limits)
@@ -43,7 +43,7 @@ export async function runBackgroundJobs(env: Env): Promise<void> {
     workspacesProcessed: 0,
     snapshotsCreated: 0,
     driftReportsUpdated: 0,
-    refactoringSuggestionsCreated: 0,
+    actionItemsCreated: 0,
     errors: [] as string[],
   };
 
@@ -94,7 +94,7 @@ export async function runBackgroundJobs(env: Env): Promise<void> {
         results.workspacesProcessed++;
         if (processed.snapshotCreated) results.snapshotsCreated++;
         if (processed.driftUpdated) results.driftReportsUpdated++;
-        results.refactoringSuggestionsCreated += processed.suggestionsCreated;
+        results.actionItemsCreated += processed.suggestionsCreated;
       } catch (err) {
         const errorMsg = `Workspace ${ws.workspace_id}: ${err instanceof Error ? err.message : 'Unknown error'}`;
         console.error(`[BackgroundJobs] Error: ${errorMsg}`);
@@ -219,12 +219,13 @@ async function processWorkspace(
     }
   }
 
-  // Run refactoring analysis on the new snapshot
+  // Run action analysis on the new snapshot
   try {
     const suggestionsCreated = await analyzeCodeForSuggestions(
       env,
       db,
       ws.workspace_id,
+      ws.project_id,
       snapshotId,
       ws.owner_user_id,
       currentManifestHash
@@ -327,7 +328,7 @@ const MAX_FILES_TO_ANALYZE = 5;
 const MAX_FILE_SIZE = 10000;
 
 interface RefactoringSuggestion {
-  type: 'security' | 'duplication' | 'performance' | 'naming' | 'structure';
+  type: 'security' | 'duplication' | 'performance' | 'naming' | 'structure' | 'test_coverage';
   severity: 'info' | 'warning' | 'critical';
   title: string;
   description: string;
@@ -335,10 +336,22 @@ interface RefactoringSuggestion {
   suggestedPrompt: string;
 }
 
+const TEST_FILE_PATTERNS = [
+  /\/__tests__\//i,
+  /\.test\./i,
+  /\.spec\./i,
+  /\/tests?\//i,
+];
+
+function isTestFile(path: string): boolean {
+  return TEST_FILE_PATTERNS.some((pattern) => pattern.test(path));
+}
+
 async function analyzeCodeForSuggestions(
   env: Env,
   db: ReturnType<typeof createDb>,
   workspaceId: string,
+  projectId: string,
   snapshotId: string,
   userId: string,
   manifestHash: string
@@ -360,23 +373,77 @@ async function analyzeCodeForSuggestions(
     return 0;
   }
 
+  // Heuristic test coverage check based on file naming patterns
+  const coverageCodeFiles = manifest.files.filter((file) => {
+    const ext = file.path.substring(file.path.lastIndexOf('.'));
+    return ANALYZABLE_EXTENSIONS.has(ext) && !isTestFile(file.path);
+  });
+  const testFiles = manifest.files.filter((file) => isTestFile(file.path));
+
+  let createdCoverageSuggestion = 0;
+  const existingCoverage = await db
+    .select({ id: actionItems.id })
+    .from(actionItems)
+    .where(
+      and(
+        eq(actionItems.workspaceId, workspaceId),
+        eq(actionItems.type, 'test_coverage'),
+        eq(actionItems.status, 'pending')
+      )
+    )
+    .limit(1);
+
+  if (existingCoverage.length === 0 && coverageCodeFiles.length >= 5) {
+    const ratio = testFiles.length / Math.max(1, coverageCodeFiles.length);
+    if (testFiles.length === 0 || ratio < 0.1) {
+      const severity = testFiles.length === 0
+        ? (coverageCodeFiles.length >= 20 ? 'critical' : 'warning')
+        : 'info';
+      const coverageId = generateULID();
+      const now = new Date().toISOString();
+      const sampleFiles = coverageCodeFiles.slice(0, 5).map((file) => file.path);
+
+      await db.insert(actionItems).values({
+        id: coverageId,
+        workspaceId,
+        projectId,
+        type: 'test_coverage',
+        severity,
+        title: testFiles.length === 0 ? 'No tests detected' : 'Low test coverage (heuristic)',
+        description: testFiles.length === 0
+          ? `Found ${coverageCodeFiles.length} code files but no test files. Add a minimal test suite to reduce regressions.`
+          : `Found ${testFiles.length} test files for ${coverageCodeFiles.length} code files. Consider adding more coverage in critical areas.`,
+        affectedFiles: JSON.stringify(sampleFiles),
+        suggestedPrompt: testFiles.length === 0
+          ? 'Add a minimal test suite for the most critical modules. Start with smoke tests for core APIs and business logic.'
+          : 'Increase test coverage for critical modules. Focus on recently changed code paths and core business logic.',
+        status: 'pending',
+        source: 'analysis',
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      createdCoverageSuggestion = 1;
+    }
+  }
+
   // Filter to analyzable code files and limit count
-  const codeFiles = manifest.files
+  const analysisFiles = manifest.files
     .filter((file) => {
       const ext = file.path.substring(file.path.lastIndexOf('.'));
       return ANALYZABLE_EXTENSIONS.has(ext);
     })
     .slice(0, MAX_FILES_TO_ANALYZE);
 
-  if (codeFiles.length === 0) {
+  if (analysisFiles.length === 0) {
     console.log(`[BackgroundJobs] No code files to analyze`);
-    return 0;
+    return createdCoverageSuggestion;
   }
 
   // Fetch file contents from R2
   const fileContents: { path: string; content: string }[] = [];
 
-  for (const file of codeFiles) {
+  for (const file of analysisFiles) {
     const blobKey = `${userId}/blobs/${file.hash}`;
     const blobObj = await env.BLOBS.get(blobKey);
 
@@ -388,7 +455,7 @@ async function analyzeCodeForSuggestions(
 
   if (fileContents.length === 0) {
     console.log(`[BackgroundJobs] No file contents available for analysis`);
-    return 0;
+    return createdCoverageSuggestion;
   }
 
   // Build prompt for AI analysis
@@ -434,19 +501,19 @@ ${filesContext}`;
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
       console.log(`[BackgroundJobs] No JSON found in AI response`);
-      return 0;
+      return createdCoverageSuggestion;
     }
 
     const suggestions: RefactoringSuggestion[] = JSON.parse(jsonMatch[0]);
 
     if (!Array.isArray(suggestions) || suggestions.length === 0) {
       console.log(`[BackgroundJobs] No suggestions from AI analysis`);
-      return 0;
+      return createdCoverageSuggestion;
     }
 
     // Store suggestions in database
     const now = new Date().toISOString();
-    let insertedCount = 0;
+    let insertedCount = createdCoverageSuggestion;
 
     for (const suggestion of suggestions) {
       // Validate suggestion structure
@@ -454,18 +521,26 @@ ${filesContext}`;
 
       const suggestionId = generateULID();
 
-      await db.insert(refactoringSuggestions).values({
+      const actionType = suggestion.type === 'security' ? 'security' : 'refactoring';
+      const metadata = suggestion.type === 'security'
+        ? null
+        : JSON.stringify({ suggestion_type: suggestion.type });
+
+      await db.insert(actionItems).values({
         id: suggestionId,
-        workspaceId: workspaceId,
-        snapshotId: snapshotId,
-        type: suggestion.type,
+        workspaceId,
+        projectId,
+        type: actionType,
         severity: suggestion.severity || 'info',
         title: suggestion.title.substring(0, 100),
         description: suggestion.description || null,
         affectedFiles: JSON.stringify(suggestion.affectedFiles || []),
         suggestedPrompt: suggestion.suggestedPrompt || null,
+        metadata,
         status: 'pending',
+        source: 'analysis',
         createdAt: now,
+        updatedAt: now,
       });
 
       insertedCount++;
@@ -476,6 +551,6 @@ ${filesContext}`;
 
   } catch (err) {
     console.error(`[BackgroundJobs] AI analysis error:`, err);
-    return 0;
+    return createdCoverageSuggestion;
   }
 }
