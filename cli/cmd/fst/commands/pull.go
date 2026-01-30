@@ -7,13 +7,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
-	rootCmd.AddCommand(newPullCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newPullCmd()) })
 }
 
 func newPullCmd() *cobra.Command {
@@ -48,15 +47,15 @@ func runPull(snapshotID string, force bool) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		return auth.FormatKeyringError(err)
+		return deps.AuthFormatError(err)
 	}
 	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
-	client := newAPIClient(token, cfg)
+	client := deps.NewAPIClient(token, cfg)
 
 	if snapshotID == "" {
 		ws, err := client.GetWorkspace(cfg.WorkspaceID)

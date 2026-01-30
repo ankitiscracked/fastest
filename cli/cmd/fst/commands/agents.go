@@ -9,7 +9,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newAgentsCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newAgentsCmd()) })
 }
 
 func newAgentsCmd() *cobra.Command {

@@ -11,13 +11,12 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
-	rootCmd.AddCommand(newSyncCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newSyncCmd()) })
 }
 
 func newSyncCmd() *cobra.Command {
@@ -92,15 +91,15 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		return auth.FormatKeyringError(err)
+		return deps.AuthFormatError(err)
 	}
 	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
-	client := newAPIClient(token, cfg)
+	client := deps.NewAPIClient(token, cfg)
 	ws, err := client.GetWorkspace(cfg.WorkspaceID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch workspace: %w", err)

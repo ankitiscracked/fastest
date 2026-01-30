@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newExportCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newExportCmd()) })
 }
 
 func newExportCmd() *cobra.Command {

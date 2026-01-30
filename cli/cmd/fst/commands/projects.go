@@ -14,13 +14,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 )
 
 func init() {
-	rootCmd.AddCommand(newProjectsCmd())
-	rootCmd.AddCommand(newProjectCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newInitCmd()) })
+	register(func(root *cobra.Command) { root.AddCommand(newProjectsCmd()) })
+	register(func(root *cobra.Command) { root.AddCommand(newProjectCmd()) })
 }
 
 func newInitCmd() *cobra.Command {
@@ -149,9 +149,9 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	}
 
 	// Check for auth (optional)
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		fmt.Printf("Warning: %v\n", auth.FormatKeyringError(err))
+		fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
 	}
 	hasAuth := token != ""
 
@@ -164,7 +164,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		cloudSynced = false
 	} else if hasAuth {
 		// Try to create in cloud
-		client := newAPIClient(token, nil)
+		client := deps.NewAPIClient(token, nil)
 
 		fmt.Printf("Creating project \"%s\" in cloud...\n", projectName)
 		project, err := client.CreateProject(projectName)
@@ -274,15 +274,15 @@ func newProjectsCmd() *cobra.Command {
 }
 
 func runProjects(cmd *cobra.Command, args []string) error {
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		return auth.FormatKeyringError(err)
+		return deps.AuthFormatError(err)
 	}
 	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
-	client := newAPIClient(token, nil)
+	client := deps.NewAPIClient(token, nil)
 	projects, err := client.ListProjects()
 	if err != nil {
 		return fmt.Errorf("failed to list projects: %w", err)
@@ -331,9 +331,9 @@ If no ID is provided and you're in a project directory, shows the current projec
 }
 
 func runProject(cmd *cobra.Command, args []string) error {
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		return auth.FormatKeyringError(err)
+		return deps.AuthFormatError(err)
 	}
 	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
@@ -351,7 +351,7 @@ func runProject(cmd *cobra.Command, args []string) error {
 		projectID = cfg.ProjectID
 	}
 
-	client := newAPIClient(token, nil)
+	client := deps.NewAPIClient(token, nil)
 	project, workspaces, err := client.GetProject(projectID)
 	if err != nil {
 		return fmt.Errorf("failed to get project: %w", err)

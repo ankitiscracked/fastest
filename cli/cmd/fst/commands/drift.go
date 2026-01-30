@@ -10,14 +10,13 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
-	rootCmd.AddCommand(newDriftCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newDriftCmd()) })
 }
 
 func newDriftCmd() *cobra.Command {
@@ -78,15 +77,15 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 
 	if target == "" {
 		// No target specified - compare with main workspace
-		token, err := auth.GetToken()
+		token, err := deps.AuthGetToken()
 		if err != nil {
-			return auth.FormatKeyringError(err)
+			return deps.AuthFormatError(err)
 		}
 		if token == "" {
 			return fmt.Errorf("not logged in - run 'fst login' first\nOr specify a workspace: fst drift <workspace>")
 		}
 
-		client := newAPIClient(token, cfg)
+		client := deps.NewAPIClient(token, cfg)
 		project, workspacesList, err := client.GetProject(cfg.ProjectID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch project: %w", err)
@@ -195,15 +194,15 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 
 	// Sync to cloud if requested
 	if syncToCloud {
-		token, err := auth.GetToken()
+		token, err := deps.AuthGetToken()
 		if err != nil {
-			return auth.FormatKeyringError(err)
+			return deps.AuthFormatError(err)
 		}
 		if token == "" {
 			return fmt.Errorf("not logged in - run 'fst login' first")
 		}
 
-		client := newAPIClient(token, cfg)
+		client := deps.NewAPIClient(token, cfg)
 		err = client.ReportDrift(
 			cfg.WorkspaceID,
 			len(report.FilesAdded),
@@ -322,15 +321,15 @@ func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, genera
 
 	// Sync to cloud if requested
 	if syncToCloud {
-		token, err := auth.GetToken()
+		token, err := deps.AuthGetToken()
 		if err != nil {
-			return auth.FormatKeyringError(err)
+			return deps.AuthFormatError(err)
 		}
 		if token == "" {
 			return fmt.Errorf("not logged in - run 'fst login' first")
 		}
 
-		client := newAPIClient(token, cfg)
+		client := deps.NewAPIClient(token, cfg)
 		err = client.ReportDrift(
 			cfg.WorkspaceID,
 			len(report.FilesAdded),

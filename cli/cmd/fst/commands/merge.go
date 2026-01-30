@@ -12,7 +12,6 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
 	"github.com/anthropics/fastest/cli/internal/drift"
@@ -20,15 +19,7 @@ import (
 )
 
 func init() {
-	// Remove the placeholder merge command and add the real one
-	for i, cmd := range rootCmd.Commands() {
-		if cmd.Use == "merge <source-workspace>" {
-			rootCmd.RemoveCommand(cmd)
-			break
-		}
-		_ = i
-	}
-	rootCmd.AddCommand(newMergeCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newMergeCmd()) })
 }
 
 // ConflictMode determines how conflicts are resolved
@@ -212,11 +203,11 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 
 		if found == nil {
 			// Try cloud as fallback
-			token, err := auth.GetToken()
+			token, err := deps.AuthGetToken()
 			if err != nil {
-				fmt.Printf("Warning: %v\n", auth.FormatKeyringError(err))
+				fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
 			} else if token != "" {
-				client := newAPIClient(token, cfg)
+				client := deps.NewAPIClient(token, cfg)
 				_, cloudWorkspaces, err := client.GetProject(cfg.ProjectID)
 				if err == nil {
 					for _, ws := range cloudWorkspaces {
@@ -255,11 +246,11 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 	fmt.Printf("Into:         %s (%s)\n", cfg.WorkspaceName, currentRoot)
 	fmt.Println()
 
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		fmt.Printf("Warning: %v\n", auth.FormatKeyringError(err))
+		fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
 	} else if token != "" {
-		client := newAPIClient(token, cfg)
+		client := deps.NewAPIClient(token, cfg)
 		warnIfRemoteHeadDiff("target", client, cfg, currentRoot)
 		warnIfRemoteHeadDiff("source", client, sourceCfg, sourceRoot)
 	}
@@ -924,7 +915,7 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 		return nil, err
 	}
 
-	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.ForkSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
 	if err != nil {
 		return nil, err
 	}

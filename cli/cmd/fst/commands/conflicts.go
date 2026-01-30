@@ -13,7 +13,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newConflictsCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newConflictsCmd()) })
 }
 
 func newConflictsCmd() *cobra.Command {

@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newLogCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newLogCmd()) })
 }
 
 func newLogCmd() *cobra.Command {

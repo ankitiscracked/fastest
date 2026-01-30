@@ -10,15 +10,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
 )
 
 func init() {
-	rootCmd.AddCommand(newWorkspacesCmd())
-	rootCmd.AddCommand(newWorkspaceCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newWorkspacesCmd()) })
+	register(func(root *cobra.Command) { root.AddCommand(newWorkspaceCmd()) })
 }
 
 // WorkspaceRegistry holds all registered workspaces
@@ -409,15 +407,15 @@ func runSetMain(workspaceName string) error {
 		return fmt.Errorf("not in a project directory - run 'fst init' first")
 	}
 
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		return auth.FormatKeyringError(err)
+		return deps.AuthFormatError(err)
 	}
 	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
-	client := newAPIClient(token, cfg)
+	client := deps.NewAPIClient(token, cfg)
 
 	var targetWorkspaceID string
 	var targetWorkspaceName string

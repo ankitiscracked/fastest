@@ -23,7 +23,7 @@ type wsStatus struct {
 }
 
 func init() {
-	rootCmd.AddCommand(newStatusCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newStatusCmd()) })
 }
 
 func newStatusCmd() *cobra.Command {

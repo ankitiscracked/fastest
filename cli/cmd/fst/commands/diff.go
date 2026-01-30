@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newDiffCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newDiffCmd()) })
 }
 
 func newDiffCmd() *cobra.Command {

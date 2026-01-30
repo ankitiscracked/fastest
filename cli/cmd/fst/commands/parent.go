@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +12,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newParentCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newParentCmd()) })
 }
 
 func newParentCmd() *cobra.Command {
@@ -181,19 +180,4 @@ func moveWorkspaceIntoParent(parentPath, workspaceRoot, workspaceName string) er
 		return fmt.Errorf("failed to move %s to %s: %w", workspaceRoot, targetDest, err)
 	}
 	return nil
-}
-
-func randomSuffix(length int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyz"
-	if length <= 0 {
-		return ""
-	}
-	bytes := make([]byte, length)
-	if _, err := rand.Read(bytes); err != nil {
-		return "rand"
-	}
-	for i := range bytes {
-		bytes[i] = letters[int(bytes[i])%len(letters)]
-	}
-	return string(bytes)
 }

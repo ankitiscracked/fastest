@@ -11,20 +11,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
-	// Remove placeholder clone command if present
-	for _, cmd := range rootCmd.Commands() {
-		if cmd.Use == "clone <project|snapshot>" {
-			rootCmd.RemoveCommand(cmd)
-			break
-		}
-	}
-	rootCmd.AddCommand(newCloneCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newCloneCmd()) })
 }
 
 func newCloneCmd() *cobra.Command {
@@ -45,15 +37,15 @@ func newCloneCmd() *cobra.Command {
 }
 
 func runClone(target string, targetDir string) error {
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		return auth.FormatKeyringError(err)
+		return deps.AuthFormatError(err)
 	}
 	if token == "" {
 		return fmt.Errorf("not logged in - run 'fst login' first")
 	}
 
-	client := newAPIClient(token, nil)
+	client := deps.NewAPIClient(token, nil)
 
 	var snapshot *api.Snapshot
 	var projectID string

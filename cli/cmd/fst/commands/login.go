@@ -9,14 +9,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/auth"
 )
 
 func init() {
-	// Add auth commands
-	rootCmd.AddCommand(newLoginCmd())
-	rootCmd.AddCommand(newLogoutCmd())
-	rootCmd.AddCommand(newWhoamiCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newLoginCmd()) })
+	register(func(root *cobra.Command) { root.AddCommand(newLogoutCmd()) })
+	register(func(root *cobra.Command) { root.AddCommand(newWhoamiCmd()) })
 }
 
 func newLoginCmd() *cobra.Command {
@@ -33,16 +31,16 @@ in your terminal to complete authentication.`,
 
 func runLogin(cmd *cobra.Command, args []string) error {
 	// Check if already logged in
-	token, err := auth.GetToken()
+	token, err := deps.AuthGetToken()
 	if err != nil {
-		return auth.FormatKeyringError(err)
+		return deps.AuthFormatError(err)
 	}
 	if token != "" {
 		fmt.Println("Already logged in. Use 'fst logout' first to log in as a different user.")
 		return nil
 	}
 
-	client := newAPIClient("", nil)
+	client := deps.NewAPIClient("", nil)
 
 	// Start device flow
 	fmt.Println("Starting login...")
@@ -61,7 +59,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	// Try to open browser automatically
-	if err := openBrowser(deviceResp.VerificationURIComplete); err != nil {
+	if err := deps.OpenBrowser(deviceResp.VerificationURIComplete); err != nil {
 		fmt.Println("(Could not open browser automatically)")
 	} else {
 		fmt.Println("(Browser opened automatically)")
@@ -76,16 +74,16 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		interval = 5 * time.Second
 	}
 
-	deadline := time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
+	deadline := deps.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
 	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	spinIdx := 0
 
-	for time.Now().Before(deadline) {
+	for deps.Now().Before(deadline) {
 		// Show spinner
 		fmt.Printf("\r\033[KWaiting for authentication... %s", spinner[spinIdx%len(spinner)])
 		spinIdx++
 
-		time.Sleep(interval)
+		deps.Sleep(interval)
 
 		tokenResp, err := client.PollForToken(deviceResp.DeviceCode)
 		if err != nil {
@@ -112,8 +110,8 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		fmt.Println("\r\033[K")
 		fmt.Printf("✓ Logged in as \033[1m%s\033[0m\n", tokenResp.User.Email)
 
-		if err := auth.SaveToken(tokenResp.AccessToken); err != nil {
-			return fmt.Errorf("logged in but failed to save token: %w", auth.FormatKeyringError(err))
+		if err := deps.AuthSaveToken(tokenResp.AccessToken); err != nil {
+			return fmt.Errorf("logged in but failed to save token: %w", deps.AuthFormatError(err))
 		}
 
 		return nil
@@ -128,8 +126,8 @@ func newLogoutCmd() *cobra.Command {
 		Use:   "logout",
 		Short: "Log out of Fastest cloud",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := auth.ClearToken(); err != nil {
-				return fmt.Errorf("failed to clear credentials: %w", auth.FormatKeyringError(err))
+			if err := deps.AuthClearToken(); err != nil {
+				return fmt.Errorf("failed to clear credentials: %w", deps.AuthFormatError(err))
 			}
 			fmt.Println("Logged out successfully.")
 			return nil
@@ -142,16 +140,16 @@ func newWhoamiCmd() *cobra.Command {
 		Use:   "whoami",
 		Short: "Show current user",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			token, err := auth.GetToken()
+			token, err := deps.AuthGetToken()
 			if err != nil {
-				return auth.FormatKeyringError(err)
+				return deps.AuthFormatError(err)
 			}
 			if token == "" {
 				fmt.Println("Not logged in. Run 'fst login' to authenticate.")
 				return nil
 			}
 
-			client := newAPIClient(token, nil)
+			client := deps.NewAPIClient(token, nil)
 			user, err := client.GetMe()
 			if err != nil {
 				return fmt.Errorf("failed to get user info: %w", err)

@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newOverlapsCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newOverlapsCmd()) })
 }
 
 func newOverlapsCmd() *cobra.Command {
@@ -66,11 +66,11 @@ type FileOverlap struct {
 
 // OverlapReport contains all detected overlaps
 type OverlapReport struct {
-	ProjectID   string             `json:"project_id"`
-	Workspaces  []WorkspaceChanges `json:"workspaces"`
-	Overlaps    []FileOverlap      `json:"overlaps"`
-	TotalFiles  int                `json:"total_files_changed"`
-	OverlapCount int               `json:"overlap_count"`
+	ProjectID    string             `json:"project_id"`
+	Workspaces   []WorkspaceChanges `json:"workspaces"`
+	Overlaps     []FileOverlap      `json:"overlaps"`
+	TotalFiles   int                `json:"total_files_changed"`
+	OverlapCount int                `json:"overlap_count"`
 }
 
 func runOverlaps(jsonOutput, includeAll bool) error {
@@ -100,7 +100,7 @@ func runOverlaps(jsonOutput, includeAll bool) error {
 
 	// Collect changes for each workspace
 	var allChanges []WorkspaceChanges
-	fileToWorkspaces := make(map[string][]string) // file path -> workspace names
+	fileToWorkspaces := make(map[string][]string)      // file path -> workspace names
 	fileChangeType := make(map[string]map[string]bool) // file path -> change types
 
 	for _, ws := range projectWorkspaces {
@@ -197,7 +197,7 @@ func getWorkspaceChanges(ws RegisteredWorkspace) (*drift.Report, error) {
 	// Load base manifest
 	manifestHash, err := config.ManifestHashFromSnapshotIDAt(ws.Path, wsCfg.ForkSnapshotID)
 	if err != nil {
-		return fmt.Errorf("invalid fork snapshot id: %w", err)
+		return nil, fmt.Errorf("invalid fork snapshot id: %w", err)
 	}
 
 	manifestsDir := config.GetManifestsDirAt(ws.Path)

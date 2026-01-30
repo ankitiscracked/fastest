@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newRollbackCmd())
+	register(func(root *cobra.Command) { root.AddCommand(newRollbackCmd()) })
 }
 
 func newRollbackCmd() *cobra.Command {

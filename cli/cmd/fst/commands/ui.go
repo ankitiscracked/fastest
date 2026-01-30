@@ -19,7 +19,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(newUICmd())
+	register(func(root *cobra.Command) { root.AddCommand(newUICmd()) })
 }
 
 func newUICmd() *cobra.Command {
@@ -96,7 +96,7 @@ type model struct {
 	err            error
 	action         string // action to perform after quit
 	actionTarget   *workspaceItem
-	showOverlay    bool            // true when showing merge result overlay
+	showOverlay    bool             // true when showing merge result overlay
 	mergeResult    *mergeResultInfo // result to display in overlay
 }
 

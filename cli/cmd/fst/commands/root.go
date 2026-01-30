@@ -13,10 +13,24 @@ var (
 	GitCommit = "unknown"
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "fst",
-	Short: "Fastest - sync project state across interfaces",
-	Long: `Fastest (fst) is a tool for keeping projects and their state in sync
+var rootCmd = newRootCmd()
+
+type registrar func(*cobra.Command)
+
+var registrars []registrar
+
+func register(r registrar) {
+	registrars = append(registrars, r)
+	if rootCmd != nil {
+		r(rootCmd)
+	}
+}
+
+func newRootCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "fst",
+		Short: "Fastest - sync project state across interfaces",
+		Long: `Fastest (fst) is a tool for keeping projects and their state in sync
 across CLI and Web interfaces, designed for agentic coding workflows.
 
 It provides:
@@ -25,83 +39,48 @@ It provides:
   - Workspace management for parallel development
   - Drift detection with LLM-powered summaries
   - Merge tools with agent-assisted conflict resolution`,
+	}
 }
 
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print version information",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("fst version %s\n", Version)
-		fmt.Printf("  Build time: %s\n", BuildTime)
-		fmt.Printf("  Git commit: %s\n", GitCommit)
-	},
-}
-
-func init() {
-	rootCmd.AddCommand(versionCmd)
-
-	// Placeholder commands for features not yet implemented in separate files
-	rootCmd.AddCommand(cloneCmd)
-	rootCmd.AddCommand(watchCmd)
-	rootCmd.AddCommand(mergeCmd)
-	rootCmd.AddCommand(exportCmd)
+func NewRootCmd() *cobra.Command {
+	cmd := newRootCmd()
+	for _, r := range registrars {
+		r(cmd)
+	}
+	return cmd
 }
 
 func Execute() error {
 	return rootCmd.Execute()
 }
 
-// Placeholder commands - will be implemented in separate files
-
-var cloneCmd = &cobra.Command{
-	Use:   "clone <project|snapshot>",
-	Short: "Clone a project or snapshot",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("Clone %s not yet implemented\n", args[0])
-	},
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("fst version %s\n", Version)
+			fmt.Printf("  Build time: %s\n", BuildTime)
+			fmt.Printf("  Git commit: %s\n", GitCommit)
+		},
+	}
 }
 
-var watchCmd = &cobra.Command{
-	Use:   "watch",
-	Short: "Watch for changes and update drift",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Watch daemon not yet implemented")
-	},
-}
-
-var mergeCmd = &cobra.Command{
-	Use:   "merge <source-workspace>",
-	Short: "Merge changes from another workspace",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("Merge from %s not yet implemented\n", args[0])
-	},
-}
-
-var exportCmd = &cobra.Command{
-	Use:   "export",
-	Short: "Export snapshot to Git",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Use 'fst export git' to export to Git")
-	},
+// Placeholder command until watch daemon is implemented.
+func newWatchCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "watch",
+		Short: "Watch for changes and update drift",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println("Watch daemon not yet implemented")
+		},
+	}
+	cmd.Flags().Bool("summarize", false, "Periodically regenerate summaries")
+	cmd.Flags().Int("interval", 5, "Sync interval in seconds")
+	return cmd
 }
 
 func init() {
-	// Add subcommands to export
-	exportCmd.AddCommand(&cobra.Command{
-		Use:   "git",
-		Short: "Export to Git repository",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Git export not yet implemented")
-		},
-	})
-
-	// Add flags
-	watchCmd.Flags().Bool("summarize", false, "Periodically regenerate summaries")
-	watchCmd.Flags().Int("interval", 5, "Sync interval in seconds")
-
-	mergeCmd.Flags().Bool("agent", true, "Use agent for conflict resolution")
-	mergeCmd.Flags().Bool("manual", false, "Manual conflict resolution")
-	mergeCmd.Flags().StringSlice("cherry-pick", nil, "Cherry-pick specific files")
+	register(func(root *cobra.Command) { root.AddCommand(newVersionCmd()) })
+	register(func(root *cobra.Command) { root.AddCommand(newWatchCmd()) })
 }
