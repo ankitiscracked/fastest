@@ -3,6 +3,7 @@ package commands
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,8 +40,8 @@ affecting other workspaces. Blobs are stored in the global cache (~/.cache/fst/b
 so there is no storage duplication.
 
 If --to is not specified, creates a sibling directory of the project root
-named {project}-{workspace}. For example, if the project is at /code/myapp,
-running 'fst copy -n feature' creates /code/myapp-feature.`,
+named {workspace}. If the workspace is under a parent container (fst.json),
+the new workspace is created under that parent.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCopy(name, targetDir)
 		},
@@ -77,10 +78,13 @@ func runCopy(name, targetDir string) error {
 
 	// Compute default target directory if not specified
 	if targetDir == "" {
-		// Create sibling of project root: {parent}/{project-name}-{workspace-name}
-		projectName := filepath.Base(root)
 		parentDir := filepath.Dir(root)
-		targetDir = filepath.Join(parentDir, projectName+"-"+name)
+		if parentRoot, _, err := config.FindParentRootFrom(root); err == nil {
+			parentDir = parentRoot
+		} else if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+			return err
+		}
+		targetDir = filepath.Join(parentDir, name)
 	} else if !filepath.IsAbs(targetDir) {
 		// Relative path - resolve from current directory
 		cwd, err := os.Getwd()
@@ -88,6 +92,10 @@ func runCopy(name, targetDir string) error {
 			return err
 		}
 		targetDir = filepath.Join(cwd, targetDir)
+	}
+
+	if filepath.Base(targetDir) != name {
+		return fmt.Errorf("workspace name must match target directory name (%s)", filepath.Base(targetDir))
 	}
 
 	// Check if target exists

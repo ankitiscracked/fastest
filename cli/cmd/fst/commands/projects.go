@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,11 +16,9 @@ import (
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
-	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newProjectsCmd())
 	rootCmd.AddCommand(newProjectCmd())
 }
@@ -48,7 +47,7 @@ If no name is provided, the current directory name will be used.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&workspaceName, "workspace", "w", "", "Name for this workspace (default: main)")
+	cmd.Flags().StringVarP(&workspaceName, "workspace", "w", "", "Name for this workspace (must match directory name)")
 	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "Don't create initial snapshot")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip safety checks (use with caution)")
 
@@ -60,6 +59,20 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Check for project folder (fst.json)
+	parentRoot, parentCfg, err := config.FindParentRootFrom(cwd)
+	if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+		return err
+	}
+	if err == nil {
+		if cwd == parentRoot {
+			return fmt.Errorf("cannot initialize in project folder - create a workspace directory instead")
+		}
+		if filepath.Dir(cwd) != parentRoot {
+			return fmt.Errorf("workspace must be a direct child of the project folder (%s)", parentRoot)
+		}
 	}
 
 	// Check if current directory has .fst
@@ -116,15 +129,23 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 
 	// Determine project name
 	var projectName string
-	if len(args) > 0 {
+	if parentCfg != nil {
+		projectName = parentCfg.ProjectName
+		if len(args) > 0 && args[0] != projectName {
+			return fmt.Errorf("project name must match project folder name (%s)", projectName)
+		}
+	} else if len(args) > 0 {
 		projectName = args[0]
 	} else {
 		projectName = filepath.Base(cwd)
 	}
 
 	// Determine workspace name
+	defaultWorkspaceName := filepath.Base(cwd)
 	if workspaceName == "" {
-		workspaceName = "main"
+		workspaceName = defaultWorkspaceName
+	} else if workspaceName != defaultWorkspaceName {
+		return fmt.Errorf("workspace name must match directory name (%s)", defaultWorkspaceName)
 	}
 
 	// Check for auth (optional)
@@ -137,7 +158,11 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	var projectID, workspaceID string
 	var cloudSynced bool
 
-	if hasAuth {
+	if parentCfg != nil {
+		projectID = parentCfg.ProjectID
+		workspaceID = generateWorkspaceID()
+		cloudSynced = false
+	} else if hasAuth {
 		// Try to create in cloud
 		client := newAPIClient(token, nil)
 
@@ -179,87 +204,12 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		return fmt.Errorf("failed to initialize workspace: %w", err)
 	}
 
-	fstDir := filepath.Join(cwd, ".fst")
-	snapshotsDir := filepath.Join(fstDir, config.SnapshotsDirName)
-	manifestsDir := filepath.Join(fstDir, config.ManifestsDirName)
-
-	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create manifests directory: %w", err)
-	}
-
 	// Create initial snapshot if not disabled
 	var snapshotID string
 	if !noSnapshot {
-		fmt.Println("Creating initial snapshot...")
-
-		m, err := manifest.Generate(cwd, false)
+		snapshotID, err = createInitialSnapshot(cwd, workspaceID, workspaceName, cloudSynced)
 		if err != nil {
-			return fmt.Errorf("failed to scan files: %w", err)
-		}
-
-		manifestHash, err := m.Hash()
-		if err != nil {
-			return fmt.Errorf("failed to create snapshot: %w", err)
-		}
-
-		snapshotID = generateSnapshotID()
-
-		// Cache blobs in global cache
-		blobDir, err := config.GetGlobalBlobDir()
-		if err != nil {
-			return fmt.Errorf("failed to get global blob directory: %w", err)
-		}
-		for _, f := range m.Files {
-			blobPath := filepath.Join(blobDir, f.Hash)
-			if _, err := os.Stat(blobPath); err == nil {
-				continue
-			}
-			srcPath := filepath.Join(cwd, f.Path)
-			content, err := os.ReadFile(srcPath)
-			if err != nil {
-				continue
-			}
-			os.WriteFile(blobPath, content, 0644)
-		}
-
-		// Save snapshot to local snapshots directory
-		manifestJSON, err := m.ToJSON()
-		if err != nil {
-			return fmt.Errorf("failed to save snapshot: %w", err)
-		}
-
-		manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-			return fmt.Errorf("failed to save snapshot: %w", err)
-		}
-
-		// Save metadata
-		metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-		metadata := fmt.Sprintf(`{
-  "id": "%s",
-  "workspace_id": "%s",
-  "workspace_name": "%s",
-  "manifest_hash": "%s",
-  "parent_snapshot_id": "",
-  "message": "Initial snapshot",
-  "created_at": "%s",
-  "files": %d,
-  "size": %d
-}`, snapshotID, workspaceID, workspaceName, manifestHash, time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
-
-		if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
-			return fmt.Errorf("failed to save metadata: %w", err)
-		}
-
-		fmt.Printf("Captured %d files.\n", m.FileCount())
-
-		// Update config with fork snapshot ID (fork point)
-		cfg, _ := config.LoadAt(cwd)
-		cfg.ForkSnapshotID = snapshotID
-		cfg.CurrentSnapshotID = snapshotID
-		cfg.Mode = modeString(cloudSynced)
-		if err := config.SaveAt(cwd, cfg); err != nil {
-			return fmt.Errorf("failed to update config: %w", err)
+			return err
 		}
 	}
 

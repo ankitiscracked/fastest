@@ -326,7 +326,51 @@ Displays workspace name, ID, project, fork snapshot, and mode.`,
 		RunE: runWorkspaceStatus,
 	}
 
+	cmd.AddCommand(newWorkspaceInitCmd())
+	cmd.AddCommand(newWorkspaceCreateCmd())
 	cmd.AddCommand(newSetMainCmd())
+
+	return cmd
+}
+
+func newWorkspaceInitCmd() *cobra.Command {
+	var workspaceName string
+	var noSnapshot bool
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "init [project-name]",
+		Short: "Initialize a workspace in the current directory",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInit(args, workspaceName, noSnapshot, force)
+		},
+	}
+
+	cmd.Flags().StringVarP(&workspaceName, "workspace", "w", "", "Name for this workspace (must match directory name)")
+	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "Don't create initial snapshot")
+	cmd.Flags().BoolVar(&force, "force", false, "Skip safety checks (use with caution)")
+
+	return cmd
+}
+
+func newWorkspaceCreateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create [project-name] [workspace-name]",
+		Short: "Create a new workspace",
+		Long: `Create a new workspace with its own .fst metadata.
+
+When run inside a project folder (fst.json), the workspace is created under
+that folder and linked to the project's ID. When run outside a project folder,
+you must provide a project name.
+
+By default, the workspace name matches the directory name. If no workspace
+name is provided under a project folder, one is generated from the project name.`,
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCreate(args)
+		},
+	}
 
 	return cmd
 }
