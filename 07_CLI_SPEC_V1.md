@@ -73,6 +73,8 @@ fst workspace copy -n exp -t ~/tmp/exp # Creates ~/tmp/exp
 ```bash
 fst snapshot                 # Capture current state
   --message, -m <msg>        # Snapshot message
+  --agent-summary            # Generate message using local coding agent
+  --agent <name>             # Record which AI agent made these changes
 
 fst pull                     # Pull latest snapshot from cloud
   --snapshot <id>            # Pull a specific snapshot

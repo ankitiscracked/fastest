@@ -29,7 +29,7 @@ func TestSnapshotCreatesLocalArtifacts(t *testing.T) {
 	defer ResetDeps()
 
 	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"snapshot"})
+	cmd.SetArgs([]string{"snapshot", "-m", "test snapshot"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("snapshot failed: %v", err)
 	}

@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -13,6 +15,8 @@ import (
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func init() {
@@ -35,7 +39,7 @@ This will:
 3. Optionally sync to cloud if authenticated
 4. Set this as the new base for drift calculations
 
-Use --summary to auto-generate a description using your coding agent.
+Use --agent-summary to auto-generate a description using your local coding agent.
 Use --agent to record which AI agent made these changes.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSnapshot(message, autoSummary, agentName)
@@ -43,7 +47,7 @@ Use --agent to record which AI agent made these changes.`,
 	}
 
 	cmd.Flags().StringVarP(&message, "message", "m", "", "Description for this snapshot")
-	cmd.Flags().BoolVar(&autoSummary, "summary", false, "Auto-generate description using coding agent")
+	cmd.Flags().BoolVar(&autoSummary, "agent-summary", false, "Auto-generate description using local coding agent")
 	cmd.Flags().StringVar(&agentName, "agent", "", "Name of the AI agent (auto-detected if not specified)")
 
 	return cmd
@@ -63,6 +67,10 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	// Detect agent if not specified
 	if agentName == "" {
 		agentName = detectAgent()
+	}
+
+	if message == "" && !autoSummary {
+		return fmt.Errorf("snapshot message is required (use --message or --agent-summary)")
 	}
 
 	fmt.Println("Scanning files...")
@@ -106,9 +114,12 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		fmt.Println("Generating summary...")
 		summary, err := generateSnapshotSummary(root, cfg)
 		if err != nil {
-			fmt.Printf("Warning: Could not generate summary: %v\n", err)
+			return fmt.Errorf("failed to generate summary: %w", err)
 		} else {
-			message = summary
+			message, err = promptSnapshotMessage(summary)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -179,29 +190,6 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
-	// Try to sync to cloud if authenticated
-	token, err := deps.AuthGetToken()
-	if err != nil {
-		fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
-	}
-	cloudSynced := false
-	if token != "" {
-		client := deps.NewAPIClient(token, cfg)
-		if err := uploadSnapshotToCloud(client, root, m, manifestHash, manifestJSON); err != nil {
-			fmt.Printf("Warning: Cloud upload failed: %v\n", err)
-		} else {
-			_, created, err := client.CreateSnapshot(cfg.ProjectID, snapshotID, manifestHash, parentSnapshotID, cfg.WorkspaceID)
-			if err == nil {
-				cloudSynced = true
-				if created {
-					fmt.Println("Synced to cloud.")
-				}
-			} else {
-				fmt.Printf("Warning: Cloud snapshot record failed: %v\n", err)
-			}
-		}
-	}
-
 	cfg.CurrentSnapshotID = snapshotID
 
 	// Save config
@@ -226,11 +214,87 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	if cfg.ForkSnapshotID != "" {
 		fmt.Printf("  Fork:     %s\n", cfg.ForkSnapshotID)
 	}
-	if !cloudSynced && token == "" {
-		fmt.Println("  (local only - not synced to cloud)")
-	}
+	fmt.Println("  (local only - not synced to cloud)")
 
 	return nil
+}
+
+func promptSnapshotMessage(summary string) (string, error) {
+	m := newSnapshotMessageModel(summary)
+	p := tea.NewProgram(m)
+	final, err := p.Run()
+	if err != nil {
+		return "", err
+	}
+	model, ok := final.(snapshotMessageModel)
+	if !ok {
+		return "", fmt.Errorf("failed to read snapshot message")
+	}
+	if model.err != nil {
+		return "", model.err
+	}
+	return strings.TrimSpace(model.input.Value()), nil
+}
+
+type snapshotMessageModel struct {
+	input textarea.Model
+	err   error
+	done  bool
+}
+
+func newSnapshotMessageModel(initial string) snapshotMessageModel {
+	input := textarea.New()
+	input.SetValue(initial)
+	input.Focus()
+	input.Prompt = "> "
+	input.ShowLineNumbers = false
+	input.CharLimit = 1000
+	input.SetWidth(80)
+	input.SetHeight(6)
+	return snapshotMessageModel{input: input}
+}
+
+func (m snapshotMessageModel) Init() tea.Cmd {
+	return textarea.Blink
+}
+
+func (m snapshotMessageModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC:
+			m.err = fmt.Errorf("snapshot cancelled")
+			m.done = true
+			return m, tea.Quit
+		case tea.KeyCtrlS:
+			if strings.TrimSpace(m.input.Value()) == "" {
+				m.err = fmt.Errorf("message cannot be empty")
+				return m, nil
+			}
+			m.done = true
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+func (m snapshotMessageModel) View() string {
+	if m.done {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Edit snapshot message (Ctrl+S to save, Ctrl+C to cancel):\n")
+	b.WriteString(m.input.View())
+	if m.err != nil {
+		b.WriteString("\n")
+		b.WriteString(m.err.Error())
+	}
+	b.WriteString("\n")
+	b.WriteString("Ctrl+S to save, Ctrl+C to cancel")
+	return b.String()
 }
 
 // CreateAutoSnapshot creates a snapshot silently (for use before merge/destructive operations)
@@ -399,15 +463,15 @@ func generateSnapshotSummary(root string, cfg *config.ProjectConfig) (string, er
 		return "", err
 	}
 
-	// Compute drift from base
-	report, err := drift.ComputeFromCache(root)
+	// Compute changes since latest snapshot
+	report, err := drift.ComputeFromLatestSnapshot(root)
 	if err != nil {
-		return "", fmt.Errorf("failed to compute drift: %w", err)
+		return "", fmt.Errorf("failed to compute changes: %w", err)
 	}
 
 	// If no changes, return simple message
 	if !report.HasChanges() {
-		return "No changes from previous snapshot", nil
+		return "No changes since last snapshot", nil
 	}
 
 	fmt.Printf("Using %s to generate summary...\n", preferredAgent.Name)
