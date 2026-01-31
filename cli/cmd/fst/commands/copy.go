@@ -58,7 +58,7 @@ func runCopy(name, targetDir string) error {
 	// Load current config
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	root, err := config.FindProjectRoot()

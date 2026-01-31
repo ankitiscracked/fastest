@@ -102,7 +102,7 @@ fastest/
 - `fst login` / `fst logout` / `fst whoami`
 
 ### Projects
-- `fst init [name]` — create project + first workspace
+- `fst workspace init [name]` — create project + first workspace
 - `fst projects` — list cloud projects
 - `fst project [id]` — show project detail
 
@@ -240,7 +240,7 @@ CREATE TABLE activity_events (
 ### Deliverables
 - D1 schema: projects, workspaces
 - API: project CRUD, workspace registration
-- CLI: `fst init`, `fst projects`, `fst workspace create`, `fst workspaces`
+- CLI: `fst workspace init`, `fst projects`, `fst workspace create`, `fst workspaces`
 - Web: projects list, project detail with workspaces
 
 ### Local State (`.fst/`)

@@ -25,20 +25,37 @@ fst whoami                   # Show current user
 ### Projects
 
 ```bash
-fst init [name]              # Initialize new project
-  --workspace, -w <name>     # Workspace name (default: main)
-  --no-snapshot              # Don't create initial snapshot
-  --force                    # Skip safety checks
-
 fst projects                 # List your cloud projects
-fst project [id]             # Show project details
+fst projects show [id|name]  # Show project details
+fst project init [name]      # Initialize a project folder (fst.json); defaults to current folder name, workspace becomes main
+  --keep-name                # Keep current workspace folder name instead of "main"
+  --force                    # Skip safety checks (use with caution)
+  # Not allowed inside an existing project folder; run from a plain or workspace folder.
+fst project create <name>    # Create a new project folder with a main workspace
+  --path <dir>               # Parent directory to create the project under
+  --no-snapshot              # Don't create initial snapshot
+  --force                    # Skip safety checks (use with caution)
 ```
+
+**Location tags (LOC):**
+- `local` = present on this machine
+- `cloud` = listed in cloud
+- `local+cloud` = present on this machine and listed in cloud
 
 ### Workspaces
 
 ```bash
 fst workspace                # Show current workspace status
 fst workspaces               # List all workspaces for this project
+fst workspace init [name]    # Initialize a workspace in current directory (requires project folder)
+  --workspace, -w <name>     # Workspace name (must match directory name)
+  --no-snapshot              # Don't create initial snapshot
+  --force                    # Skip safety checks
+
+fst workspace create [workspace-name]
+                           # Create a workspace under the project folder
+fst workspace set-main [workspace]
+                           # Set main workspace for drift comparisons
 
 fst copy                     # Create a linked workspace copy
   --name, -n <name>          # Name for new workspace (required)
@@ -218,19 +235,30 @@ main: /path/to/main/workspace
 workspace_id: local-abc123
 ```
 
-### Global Registry
+### Global Index
 
-`~/.config/fst/workspaces.json`:
+`~/.config/fst/index.json`:
 ```json
 {
+  "version": 1,
+  "projects": [
+    {
+      "project_id": "proj-xyz",
+      "project_name": "demo",
+      "project_path": "/path/to/project",
+      "created_at": "2024-01-15T10:00:00Z",
+      "last_seen_at": "2024-01-20T12:00:00Z"
+    }
+  ],
   "workspaces": [
     {
-      "id": "ws-abc123",
+      "workspace_id": "ws-abc123",
+      "workspace_name": "main",
       "project_id": "proj-xyz",
-      "name": "main",
-      "path": "/path/to/project",
+      "path": "/path/to/project/main",
       "fork_snapshot_id": "snap-123",
-      "created_at": "2024-01-15T10:00:00Z"
+      "created_at": "2024-01-15T10:00:00Z",
+      "last_seen_at": "2024-01-20T12:00:00Z"
     }
   ]
 }

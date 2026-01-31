@@ -151,7 +151,7 @@ type MergeResult struct {
 func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool, noSnapshot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	currentRoot, err := config.FindProjectRoot()
@@ -1130,7 +1130,7 @@ func buildConflictInfosFromReport(report *conflicts.Report) []agent.ConflictInfo
 func runMergeAll(mode ConflictMode, dryRun bool, noSnapshot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	if _, err := config.FindProjectRoot(); err != nil {
@@ -1371,7 +1371,7 @@ func runMergeAll(mode ConflictMode, dryRun bool, noSnapshot bool) error {
 func runMergePlan() error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	currentRoot, err := config.FindProjectRoot()

@@ -15,7 +15,7 @@ A CLI tool for agentic coding workflows. Manage multiple workspaces, track chang
 
 ```bash
 # Initialize a project
-fst init myproject
+fst workspace init myproject
 
 # Create a linked workspace for parallel work
 fst copy -n feature

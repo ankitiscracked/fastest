@@ -1,17 +1,19 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
+	"github.com/anthropics/fastest/cli/internal/index"
 )
 
 func init() {
@@ -36,75 +38,91 @@ type RegisteredWorkspace struct {
 
 // GetRegistryPath returns the path to the workspace registry
 func GetRegistryPath() (string, error) {
-	configDir, err := config.GetGlobalConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(configDir, "workspaces.json"), nil
+	return index.GetIndexPath()
 }
 
 // LoadRegistry loads the workspace registry
 func LoadRegistry() (*WorkspaceRegistry, error) {
-	path, err := GetRegistryPath()
+	idx, err := index.Load()
 	if err != nil {
 		return nil, err
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &WorkspaceRegistry{Workspaces: []RegisteredWorkspace{}}, nil
-		}
-		return nil, err
+	registry := &WorkspaceRegistry{Workspaces: []RegisteredWorkspace{}}
+	for _, ws := range idx.Workspaces {
+		registry.Workspaces = append(registry.Workspaces, RegisteredWorkspace{
+			ID:             ws.WorkspaceID,
+			ProjectID:      ws.ProjectID,
+			Name:           ws.WorkspaceName,
+			Path:           ws.Path,
+			ForkSnapshotID: ws.ForkSnapshotID,
+			CreatedAt:      ws.CreatedAt,
+		})
 	}
-
-	var registry WorkspaceRegistry
-	if err := json.Unmarshal(data, &registry); err != nil {
-		return nil, err
-	}
-
-	return &registry, nil
+	return registry, nil
 }
 
 // SaveRegistry saves the workspace registry
 func SaveRegistry(registry *WorkspaceRegistry) error {
-	path, err := GetRegistryPath()
+	if registry == nil {
+		return fmt.Errorf("registry is nil")
+	}
+	idx, err := index.Load()
 	if err != nil {
 		return err
 	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
+	idx.Workspaces = []index.WorkspaceEntry{}
+	for _, ws := range registry.Workspaces {
+		idx.Workspaces = append(idx.Workspaces, index.WorkspaceEntry{
+			WorkspaceID:    ws.ID,
+			WorkspaceName:  ws.Name,
+			ProjectID:      ws.ProjectID,
+			Path:           ws.Path,
+			ForkSnapshotID: ws.ForkSnapshotID,
+			CreatedAt:      ws.CreatedAt,
+			LocalOnly:      true,
+		})
 	}
-
-	data, err := json.MarshalIndent(registry, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(path, data, 0644)
+	return index.Save(idx)
 }
 
 // RegisterWorkspace adds a workspace to the registry
 func RegisterWorkspace(ws RegisteredWorkspace) error {
-	registry, err := LoadRegistry()
-	if err != nil {
+	if err := index.UpsertWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    ws.ID,
+		WorkspaceName:  ws.Name,
+		ProjectID:      ws.ProjectID,
+		Path:           ws.Path,
+		ForkSnapshotID: ws.ForkSnapshotID,
+		CreatedAt:      ws.CreatedAt,
+		LocalOnly:      true,
+	}, ""); err != nil {
 		return err
 	}
 
-	// Check if already registered (by path)
-	for i, existing := range registry.Workspaces {
-		if existing.Path == ws.Path {
-			// Update existing entry
-			registry.Workspaces[i] = ws
-			return SaveRegistry(registry)
-		}
+	parentRoot, parentCfg, err := config.FindParentRootFrom(ws.Path)
+	if err == nil && parentCfg != nil {
+		_ = index.UpsertProject(index.ProjectEntry{
+			ProjectID:   parentCfg.ProjectID,
+			ProjectName: parentCfg.ProjectName,
+			ProjectPath: parentRoot,
+			LocalOnly:   true,
+		})
 	}
 
-	// Add new entry
-	registry.Workspaces = append(registry.Workspaces, ws)
-	return SaveRegistry(registry)
+	return nil
+}
+
+// UpdateWorkspaceRegistry updates an existing workspace entry by ID or path, or inserts it if missing.
+func UpdateWorkspaceRegistry(oldPath string, ws RegisteredWorkspace) error {
+	return index.UpsertWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    ws.ID,
+		WorkspaceName:  ws.Name,
+		ProjectID:      ws.ProjectID,
+		Path:           ws.Path,
+		ForkSnapshotID: ws.ForkSnapshotID,
+		CreatedAt:      ws.CreatedAt,
+		LocalOnly:      true,
+	}, oldPath)
 }
 
 // UnregisterWorkspace removes a workspace from the registry
@@ -198,7 +216,7 @@ func runWorkspaces(showAll bool) error {
 	if !showAll {
 		cfg, err := config.Load()
 		if err != nil {
-			return fmt.Errorf("not in a project directory - use --all to see all workspaces")
+			return fmt.Errorf("not in a workspace directory - use --all to see all workspaces")
 		}
 		currentProjectID = cfg.ProjectID
 	}
@@ -208,12 +226,79 @@ func runWorkspaces(showAll bool) error {
 		return fmt.Errorf("failed to load workspace registry: %w", err)
 	}
 
-	// Filter workspaces
-	var workspaces []RegisteredWorkspace
+	localWorkspaces := map[string]RegisteredWorkspace{}
 	for _, ws := range registry.Workspaces {
 		if showAll || ws.ProjectID == currentProjectID {
-			workspaces = append(workspaces, ws)
+			localWorkspaces[ws.ID] = ws
 		}
+	}
+
+	cloudWorkspaces := map[string]api.Workspace{}
+	token, err := deps.AuthGetToken()
+	if err != nil {
+		fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
+	}
+	if token != "" {
+		client := deps.NewAPIClient(token, nil)
+		if showAll {
+			projects, err := client.ListProjects()
+			if err != nil {
+				fmt.Printf("Warning: failed to list cloud projects: %v\n", err)
+			} else {
+				for _, p := range projects {
+					_, workspaces, err := client.GetProject(p.ID)
+					if err != nil {
+						fmt.Printf("Warning: failed to fetch project %s: %v\n", p.ID, err)
+						continue
+					}
+					for _, ws := range workspaces {
+						cloudWorkspaces[ws.ID] = ws
+					}
+				}
+			}
+		} else {
+			_, workspaces, err := client.GetProject(currentProjectID)
+			if err != nil {
+				fmt.Printf("Warning: failed to fetch project: %v\n", err)
+			} else {
+				for _, ws := range workspaces {
+					cloudWorkspaces[ws.ID] = ws
+				}
+			}
+		}
+	}
+
+	merged := map[string]*mergedWorkspace{}
+	for _, ws := range localWorkspaces {
+		merged[ws.ID] = &mergedWorkspace{
+			ID:             ws.ID,
+			Name:           ws.Name,
+			Path:           ws.Path,
+			ProjectID:      ws.ProjectID,
+			ForkSnapshotID: ws.ForkSnapshotID,
+			Local:          true,
+		}
+	}
+	for _, ws := range cloudWorkspaces {
+		entry, ok := merged[ws.ID]
+		if !ok {
+			entry = &mergedWorkspace{
+				ID:        ws.ID,
+				Name:      ws.Name,
+				ProjectID: ws.ProjectID,
+			}
+			merged[ws.ID] = entry
+		}
+		if entry.Name == "" {
+			entry.Name = ws.Name
+		}
+		entry.Cloud = true
+	}
+
+	workspaces := make([]mergedWorkspace, 0, len(merged))
+	for _, ws := range merged {
+		ws.LocationTag = locationTag(ws.Local, ws.Cloud)
+		workspaces = append(workspaces, *ws)
 	}
 
 	if len(workspaces) == 0 {
@@ -223,7 +308,7 @@ func runWorkspaces(showAll bool) error {
 			fmt.Println("No workspaces found for this project.")
 		}
 		fmt.Println()
-		fmt.Println("Create one with: fst init")
+		fmt.Println("Create one with: fst workspace init")
 		return nil
 	}
 
@@ -234,30 +319,45 @@ func runWorkspaces(showAll bool) error {
 	}
 
 	// Display header
+	sort.Slice(workspaces, func(i, j int) bool {
+		return strings.ToLower(workspaces[i].Name) < strings.ToLower(workspaces[j].Name)
+	})
+
 	if showAll {
 		fmt.Printf("All workspaces (%d):\n\n", len(workspaces))
 	} else {
 		fmt.Printf("Workspaces for project (%d):\n\n", len(workspaces))
 	}
 
-	// Table header
-	fmt.Printf("  %-10s  %-15s  %-35s  %s\n", "STATUS", "NAME", "PATH", "DRIFT")
-	fmt.Printf("  %-10s  %-15s  %-35s  %s\n",
+	fmt.Printf("  %-10s  %-10s  %-15s  %-35s  %s\n", "LOC", "STATUS", "NAME", "PATH", "DRIFT")
+	fmt.Printf("  %-10s  %-10s  %-15s  %-35s  %s\n",
+		strings.Repeat("-", 10),
 		strings.Repeat("-", 10),
 		strings.Repeat("-", 15),
 		strings.Repeat("-", 35),
 		strings.Repeat("-", 15))
 
 	for _, ws := range workspaces {
-		displayWorkspace(ws, currentPath)
+		displayMergedWorkspace(ws, currentPath)
 	}
 
 	return nil
 }
 
-func displayWorkspace(ws RegisteredWorkspace, currentPath string) {
+type mergedWorkspace struct {
+	ID             string
+	Name           string
+	Path           string
+	ProjectID      string
+	ForkSnapshotID string
+	Local          bool
+	Cloud          bool
+	LocationTag    string
+}
+
+func displayMergedWorkspace(ws mergedWorkspace, currentPath string) {
 	// Check if this is the current workspace
-	isCurrent := ws.Path == currentPath
+	isCurrent := ws.Path != "" && ws.Path == currentPath
 	indicator := " "
 	if isCurrent {
 		indicator = "*"
@@ -266,7 +366,10 @@ func displayWorkspace(ws RegisteredWorkspace, currentPath string) {
 	// Check if workspace still exists
 	status := "ok"
 	exists := true
-	if _, err := os.Stat(filepath.Join(ws.Path, ".fst")); os.IsNotExist(err) {
+	if !ws.Local {
+		status = "cloud"
+		exists = false
+	} else if _, err := os.Stat(filepath.Join(ws.Path, ".fst")); os.IsNotExist(err) {
 		status = "missing"
 		exists = false
 	}
@@ -288,6 +391,9 @@ func displayWorkspace(ws RegisteredWorkspace, currentPath string) {
 
 	// Truncate path for display
 	displayPath := ws.Path
+	if ws.Path == "" {
+		displayPath = "-"
+	}
 	if len(displayPath) > 35 {
 		displayPath = "..." + displayPath[len(displayPath)-32:]
 	}
@@ -304,10 +410,13 @@ func displayWorkspace(ws RegisteredWorkspace, currentPath string) {
 		statusStr = "\033[31mmissing\033[0m"
 	} else if isCurrent {
 		statusStr = "\033[32mcurrent\033[0m"
+	} else if status == "cloud" {
+		statusStr = "\033[36mcloud\033[0m"
 	}
 
-	fmt.Printf("%s %-10s  %-15s  %-35s  %s\n",
+	fmt.Printf("%s %-10s  %-10s  %-15s  %-35s  %s\n",
 		indicator,
+		ws.LocationTag,
 		statusStr,
 		name,
 		displayPath,
@@ -354,13 +463,12 @@ func newWorkspaceInitCmd() *cobra.Command {
 
 func newWorkspaceCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "create [project-name] [workspace-name]",
+		Use:   "create [workspace-name]",
 		Short: "Create a new workspace",
 		Long: `Create a new workspace with its own .fst metadata.
 
 When run inside a project folder (fst.json), the workspace is created under
-that folder and linked to the project's ID. When run outside a project folder,
-you must provide a project name.
+that folder and linked to the project's ID.
 
 By default, the workspace name matches the directory name. If no workspace
 name is provided under a project folder, one is generated from the project name.`,
@@ -404,7 +512,7 @@ Examples:
 func runSetMain(workspaceName string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	token, err := deps.AuthGetToken()
@@ -461,8 +569,11 @@ func runSetMain(workspaceName string) error {
 func runWorkspaceStatus(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
+
+	_ = index.TouchWorkspace(cfg.WorkspaceID)
+	_ = index.TouchProject(cfg.ProjectID)
 
 	root, _ := config.FindProjectRoot()
 

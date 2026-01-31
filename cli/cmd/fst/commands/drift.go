@@ -64,7 +64,7 @@ Examples:
 func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDirty bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	root, err := config.FindProjectRoot()

@@ -83,7 +83,7 @@ and creates a new snapshot on success.`,
 func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool, noSnapshot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	root, err := config.FindProjectRoot()

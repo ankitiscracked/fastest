@@ -13,7 +13,7 @@ Everything works on one machine without a cloud account:
 
 ## How It Works
 
-When you run `fst init` without being logged in:
+When you run `fst workspace init` without being logged in:
 1. Project is created with a local ID (`proj-abc123`)
 2. All data stays in `.fst/` directory
 3. Full functionality available
@@ -52,10 +52,10 @@ myproject-feature/
 └── ... (your files)
 ```
 
-### Global Registry
+### Global Index
 ```
 ~/.config/fst/
-├── workspaces.json           # All workspaces on this machine
+├── index.json                # Projects and workspaces on this machine
 └── agents.json               # Preferred coding agent
 ```
 
@@ -64,7 +64,7 @@ myproject-feature/
 All commands work identically in local and cloud modes:
 
 ```bash
-fst init myproject           # Create project
+fst workspace init myproject           # Create project
 fst copy -n feature          # Create linked workspace
 fst snapshot -m "message"    # Capture snapshot
 fst drift                    # Show changes

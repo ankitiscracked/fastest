@@ -63,7 +63,7 @@ Examples:
 func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRun bool, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	root, err := config.FindProjectRoot()

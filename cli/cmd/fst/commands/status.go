@@ -66,7 +66,7 @@ Examples:
 func runStatus(jsonOutput bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	root, err := config.FindProjectRoot()
@@ -227,7 +227,7 @@ func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.
 func runStatusAll(jsonOutput bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	// Load workspace registry

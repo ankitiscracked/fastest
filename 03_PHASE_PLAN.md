@@ -53,7 +53,7 @@
 
 ### Deliverables
 - API: project CRUD
-- CLI: `fst init`, `fst projects`, `fst project`
+- CLI: `fst workspace init`, `fst projects`, `fst project`
 - Web: projects list
 
 ### Completed

@@ -76,7 +76,7 @@ type OverlapReport struct {
 func runOverlaps(jsonOutput, includeAll bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	// Load workspace registry

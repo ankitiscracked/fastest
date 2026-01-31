@@ -107,7 +107,7 @@ export function Projects() {
           <h3 className="text-lg font-medium text-surface-800 mb-2">No projects yet</h3>
           <p className="text-surface-500 mb-4">Create your first project to get started</p>
           <p className="text-sm text-surface-400">
-            Or run <code className="bg-surface-100 px-1 py-0.5 rounded">fst init my-project</code> from the CLI
+            Or run <code className="bg-surface-100 px-1 py-0.5 rounded">fst workspace init my-project</code> from the CLI
           </p>
         </div>
       ) : (

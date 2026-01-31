@@ -17,13 +17,12 @@ func init() {
 
 func newCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "create [project-name] [workspace-name]",
+		Use:   "create [workspace-name]",
 		Short: "Create a new workspace",
 		Long: `Create a new workspace with its own .fst metadata.
 
 When run inside a project folder (fst.json), the workspace is created under
-that folder and linked to the project's ID. When run outside a project folder,
-you must provide a project name.
+that folder and linked to the project's ID.
 
 By default, the workspace name matches the directory name. If no workspace
 name is provided under a parent, one is generated from the project name.`,
@@ -50,9 +49,12 @@ func runCreate(args []string) error {
 	if err != nil && !errors.Is(err, config.ErrParentNotFound) {
 		return err
 	}
+	if errors.Is(err, config.ErrParentNotFound) {
+		return fmt.Errorf("no project folder found - run 'fst project init' first")
+	}
 	if err == nil {
 		if cwd != parentRoot {
-			return fmt.Errorf("run 'fst create' from the project folder (%s)", parentRoot)
+			return fmt.Errorf("run 'fst workspace create' from the project folder (%s)", parentRoot)
 		}
 		if len(args) > 1 {
 			return fmt.Errorf("workspace name only when using a project folder")
@@ -98,50 +100,6 @@ func runCreate(args []string) error {
 		return nil
 	}
 
-	if len(args) == 0 {
-		return fmt.Errorf("project name is required when not in a parent folder")
-	}
-
-	projectName := args[0]
-	workspaceName := projectName
-	if len(args) > 1 {
-		workspaceName = args[1]
-	}
-
-	projectID := generateProjectID()
-
-	parentDir := cwd
-
-	workspaceDir := filepath.Join(parentDir, workspaceName)
-	if _, err := os.Stat(workspaceDir); err == nil {
-		return fmt.Errorf("target directory already exists: %s", workspaceDir)
-	}
-	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
-		return fmt.Errorf("failed to create workspace directory: %w", err)
-	}
-
-	workspaceID := generateWorkspaceID()
-	if err := config.InitAt(workspaceDir, projectID, workspaceID, workspaceName, ""); err != nil {
-		return fmt.Errorf("failed to initialize workspace: %w", err)
-	}
-
-	snapshotID, err := createInitialSnapshot(workspaceDir, workspaceID, workspaceName, false)
-	if err != nil {
-		return err
-	}
-
-	if err := RegisterWorkspace(RegisteredWorkspace{
-		ID:             workspaceID,
-		ProjectID:      projectID,
-		Name:           workspaceName,
-		Path:           workspaceDir,
-		ForkSnapshotID: snapshotID,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		fmt.Printf("Warning: Could not register workspace: %v\n", err)
-	}
-
-	printCreateSuccess(projectName, workspaceName, workspaceDir, snapshotID)
 	return nil
 }
 

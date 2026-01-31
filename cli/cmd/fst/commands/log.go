@@ -57,7 +57,7 @@ type SnapshotMeta struct {
 func runLog(limit int, showAll bool) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	snapshotsDir, err := config.GetSnapshotsDir()

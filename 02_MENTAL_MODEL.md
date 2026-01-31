@@ -104,7 +104,7 @@ So:
 ```bash
 # 1. Initialize project
 cd myproject
-fst init
+fst workspace init
 
 # 2. Create parallel workspaces
 fst copy -n agent-a
@@ -127,17 +127,25 @@ fst export git --branch main
 
 ---
 
-## Global Registry
+## Global Index
 
-Workspaces are registered in `~/.config/fst/workspaces.json`:
+Local projects and workspaces are indexed in `~/.config/fst/index.json`:
 ```json
 {
+  "version": 1,
+  "projects": [
+    {
+      "project_id": "proj-xyz",
+      "project_name": "demo",
+      "project_path": "/Users/me/myproject"
+    }
+  ],
   "workspaces": [
     {
-      "id": "ws-abc123",
+      "workspace_id": "ws-abc123",
+      "workspace_name": "main",
       "project_id": "proj-xyz",
-      "name": "main",
-      "path": "/Users/me/myproject",
+      "path": "/Users/me/myproject/main",
       "fork_snapshot_id": "snap-123"
     }
   ]

@@ -52,7 +52,7 @@ Use --agent to record which AI agent made these changes.`,
 func runSnapshot(message string, autoSummary bool, agentName string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory - run 'fst init' first")
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
 	root, err := config.FindProjectRoot()
@@ -238,7 +238,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 func CreateAutoSnapshot(message string) (string, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return "", fmt.Errorf("not in a project directory")
+		return "", fmt.Errorf("not in a workspace directory")
 	}
 
 	root, err := config.FindProjectRoot()

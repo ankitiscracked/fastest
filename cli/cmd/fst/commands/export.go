@@ -117,7 +117,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("not in a project directory: %w", err)
+		return fmt.Errorf("not in a workspace directory: %w", err)
 	}
 
 	root, err := config.FindProjectRoot()
