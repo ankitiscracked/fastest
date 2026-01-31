@@ -23,22 +23,22 @@ func newDriftCmd() *cobra.Command {
 	var jsonOutput bool
 	var summary bool
 	var sync bool
-	var includeDirty bool
+	var noDirty bool
 
 	cmd := &cobra.Command{
 		Use:   "drift [workspace]",
 		Short: "Show divergence from upstream or another workspace",
 		Long: `Show drift between this workspace and another workspace.
 
-By default, drift compares the latest snapshots for each workspace.
-Use --include-dirty to include uncommitted local changes (current files).
+By default, drift compares current files for each workspace.
+Use --no-dirty to compare latest snapshots instead.
 
 With a workspace argument, compares against that workspace:
   - If the argument contains '/' or starts with '.', it's treated as a path
   - Otherwise, it's treated as a workspace name (looked up in the registry)
 
 Examples:
-  fst drift                    # Drift vs main workspace (latest snapshots)
+  fst drift                    # Drift vs main workspace (current files)
   fst drift main               # Drift vs workspace named "main"
   fst drift ../other-project   # Divergence from workspace at path
   fst drift --json             # Output as JSON
@@ -49,14 +49,14 @@ Examples:
 			if len(args) > 0 {
 				target = args[0]
 			}
-			return runDrift(target, jsonOutput, summary, sync, includeDirty)
+			return runDrift(target, jsonOutput, summary, sync, !noDirty)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	cmd.Flags().BoolVar(&summary, "summary", false, "Generate LLM summary of divergence (requires configured agent)")
 	cmd.Flags().BoolVar(&sync, "sync", false, "Sync drift report to cloud")
-	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include uncommitted changes in comparison")
+	cmd.Flags().BoolVar(&noDirty, "no-dirty", false, "Compare latest snapshots instead of current files")
 
 	return cmd
 }
@@ -132,7 +132,7 @@ func runDrift(target string, jsonOutput, generateSummary, syncToCloud, includeDi
 		}
 
 		if !found {
-			return fmt.Errorf("main workspace '%s' not found in local registry\nIt may be on a different machine. Use 'fst copy' to clone it locally.", mainWorkspace.Name)
+			return fmt.Errorf("main workspace '%s' not found in local registry\nIt may be on a different machine. Use 'fst workspace copy' to clone it locally.", mainWorkspace.Name)
 		}
 	} else {
 		// Target specified - determine if it's a path or name

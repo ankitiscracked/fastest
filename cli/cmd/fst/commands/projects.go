@@ -243,7 +243,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  fst drift                       # Check for changes")
-	fmt.Println("  fst copy -n feature             # Create a workspace copy")
+	fmt.Println("  fst workspace copy -n feature   # Create a workspace copy")
 
 	return nil
 }

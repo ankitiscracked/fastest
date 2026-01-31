@@ -42,7 +42,7 @@ func runCreate(args []string) error {
 	}
 
 	if _, err := config.FindProjectRoot(); err == nil {
-		return fmt.Errorf("already inside a workspace - use 'fst copy' instead")
+		return fmt.Errorf("already inside a workspace - use 'fst workspace copy' instead")
 	}
 
 	parentRoot, parentCfg, err := config.FindParentRootFrom(cwd)

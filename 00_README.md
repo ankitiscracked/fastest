@@ -18,7 +18,7 @@ A CLI tool for agentic coding workflows. Manage multiple workspaces, track chang
 fst workspace init myproject
 
 # Create a linked workspace for parallel work
-fst copy -n feature
+fst workspace copy -n feature
 
 # Check what changed
 fst drift

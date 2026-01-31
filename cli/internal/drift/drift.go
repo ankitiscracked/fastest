@@ -22,8 +22,8 @@ type Report struct {
 
 // DivergenceReport represents how two workspaces have diverged from a common ancestor
 type DivergenceReport struct {
-	CommonAncestorID string `json:"common_ancestor_id,omitempty"`
-	HasCommonAncestor bool  `json:"has_common_ancestor"`
+	CommonAncestorID  string `json:"common_ancestor_id,omitempty"`
+	HasCommonAncestor bool   `json:"has_common_ancestor"`
 
 	// Changes in "our" workspace (current) since common ancestor
 	OurChanges *Report `json:"our_changes"`
@@ -176,6 +176,43 @@ func ComputeFromCache(root string) (*Report, error) {
 	}
 
 	report.ForkSnapshotID = cfg.ForkSnapshotID
+	return report, nil
+}
+
+// ComputeFromLatestSnapshot compares current working directory against latest snapshot.
+func ComputeFromLatestSnapshot(root string) (*Report, error) {
+	snapshotID, _ := config.GetLatestSnapshotIDAt(root)
+	if snapshotID == "" {
+		current, err := manifest.Generate(root, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate manifest: %w", err)
+		}
+
+		var added []string
+		var bytesChanged int64
+		for _, f := range current.Files {
+			added = append(added, f.Path)
+			bytesChanged += f.Size
+		}
+
+		return &Report{
+			FilesAdded:    added,
+			FilesModified: nil,
+			FilesDeleted:  nil,
+			BytesChanged:  bytesChanged,
+		}, nil
+	}
+
+	baseManifest, err := LoadManifestFromSnapshots(root, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	report, err := Compute(root, baseManifest)
+	if err != nil {
+		return nil, err
+	}
+
 	return report, nil
 }
 

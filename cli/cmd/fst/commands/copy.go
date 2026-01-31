@@ -16,10 +16,6 @@ import (
 	"github.com/anthropics/fastest/cli/internal/ignore"
 )
 
-func init() {
-	register(func(root *cobra.Command) { root.AddCommand(newCopyCmd()) })
-}
-
 func newCopyCmd() *cobra.Command {
 	var name string
 	var targetDir string
@@ -55,6 +51,16 @@ the new workspace is created under that parent.`,
 }
 
 func runCopy(name, targetDir string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	if parentRoot, _, err := config.FindParentRootFrom(cwd); err == nil && parentRoot == cwd {
+		return fmt.Errorf("cannot run in project folder - run inside a workspace directory")
+	} else if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+		return err
+	}
+
 	// Load current config
 	cfg, err := config.Load()
 	if err != nil {
@@ -83,6 +89,8 @@ func runCopy(name, targetDir string) error {
 			parentDir = parentRoot
 		} else if err != nil && !errors.Is(err, config.ErrParentNotFound) {
 			return err
+		} else if errors.Is(err, config.ErrParentNotFound) {
+			return fmt.Errorf("no project folder found - run 'fst project init' first")
 		}
 		targetDir = filepath.Join(parentDir, name)
 	} else if !filepath.IsAbs(targetDir) {
@@ -92,6 +100,14 @@ func runCopy(name, targetDir string) error {
 			return err
 		}
 		targetDir = filepath.Join(cwd, targetDir)
+	}
+
+	if parentRoot, _, err := config.FindParentRootFrom(root); err == nil {
+		if filepath.Dir(targetDir) != parentRoot {
+			return fmt.Errorf("target directory must be a direct child of project folder (%s)", parentRoot)
+		}
+	} else if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+		return err
 	}
 
 	if filepath.Base(targetDir) != name {

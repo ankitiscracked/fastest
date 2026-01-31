@@ -107,8 +107,8 @@ cd myproject
 fst workspace init
 
 # 2. Create parallel workspaces
-fst copy -n agent-a
-fst copy -n agent-b
+fst workspace copy -n agent-a
+fst workspace copy -n agent-b
 
 # 3. Work in each workspace independently
 cd ../myproject-agent-a

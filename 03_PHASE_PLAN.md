@@ -138,7 +138,7 @@
 ### Workspaces ✓
 
 - `fst workspace`, `fst workspaces`
-- `fst copy` for linked workspaces
+- `fst workspace copy` for linked workspaces
 - Git worktree-like model (shared blob cache)
 - Global workspace registry
 

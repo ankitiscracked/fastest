@@ -75,6 +75,18 @@ func TestDriftBetweenWorkspacesIncludeDirtyJSON(t *testing.T) {
 		"a.txt": "two",
 		"b.txt": "new",
 	})
+	if err := os.MkdirAll(filepath.Join(rootA, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots A: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots B: %v", err)
+	}
+	if _, err := createInitialSnapshot(rootA, "ws-a-id", "ws-a", false); err != nil {
+		t.Fatalf("createInitialSnapshot A: %v", err)
+	}
+	if _, err := createInitialSnapshot(rootB, "ws-b-id", "ws-b", false); err != nil {
+		t.Fatalf("createInitialSnapshot B: %v", err)
+	}
 
 	restoreCwd := chdir(t, rootA)
 	defer restoreCwd()
@@ -82,7 +94,53 @@ func TestDriftBetweenWorkspacesIncludeDirtyJSON(t *testing.T) {
 	var output string
 	err := captureStdout(func() error {
 		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"drift", rootB, "--include-dirty", "--json"})
+		cmd.SetArgs([]string{"drift", rootB, "--json"})
+		return cmd.Execute()
+	}, &output)
+	if err != nil {
+		t.Fatalf("drift failed: %v", err)
+	}
+
+	var report drift.Report
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &report); err != nil {
+		t.Fatalf("failed to parse drift JSON: %v\noutput: %s", err, output)
+	}
+	if !contains(report.FilesAdded, "b.txt") {
+		t.Fatalf("expected b.txt in added, got %v", report.FilesAdded)
+	}
+	if !contains(report.FilesModified, "a.txt") {
+		t.Fatalf("expected a.txt in modified, got %v", report.FilesModified)
+	}
+}
+
+func TestDriftBetweenWorkspacesNoDirtyJSON(t *testing.T) {
+	rootA := setupWorkspace(t, "ws-a", map[string]string{
+		"a.txt": "one",
+	})
+	rootB := setupWorkspace(t, "ws-b", map[string]string{
+		"a.txt": "two",
+		"b.txt": "new",
+	})
+	if err := os.MkdirAll(filepath.Join(rootA, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots A: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots B: %v", err)
+	}
+	if _, err := createInitialSnapshot(rootA, "ws-a-id", "ws-a", false); err != nil {
+		t.Fatalf("createInitialSnapshot A: %v", err)
+	}
+	if _, err := createInitialSnapshot(rootB, "ws-b-id", "ws-b", false); err != nil {
+		t.Fatalf("createInitialSnapshot B: %v", err)
+	}
+
+	restoreCwd := chdir(t, rootA)
+	defer restoreCwd()
+
+	var output string
+	err := captureStdout(func() error {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"drift", rootB, "--no-dirty", "--json"})
 		return cmd.Execute()
 	}, &output)
 	if err != nil {

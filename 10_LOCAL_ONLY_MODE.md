@@ -65,7 +65,7 @@ All commands work identically in local and cloud modes:
 
 ```bash
 fst workspace init myproject           # Create project
-fst copy -n feature          # Create linked workspace
+fst workspace copy -n feature          # Create linked workspace
 fst snapshot -m "message"    # Capture snapshot
 fst drift                    # Show changes
 fst drift --summary          # LLM summary (requires agent)

@@ -66,21 +66,6 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-// Placeholder command until watch daemon is implemented.
-func newWatchCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "watch",
-		Short: "Watch for changes and update drift",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Watch daemon not yet implemented")
-		},
-	}
-	cmd.Flags().Bool("summarize", false, "Periodically regenerate summaries")
-	cmd.Flags().Int("interval", 5, "Sync interval in seconds")
-	return cmd
-}
-
 func init() {
 	register(func(root *cobra.Command) { root.AddCommand(newVersionCmd()) })
-	register(func(root *cobra.Command) { root.AddCommand(newWatchCmd()) })
 }

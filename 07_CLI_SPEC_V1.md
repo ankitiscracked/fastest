@@ -57,15 +57,15 @@ fst workspace create [workspace-name]
 fst workspace set-main [workspace]
                            # Set main workspace for drift comparisons
 
-fst copy                     # Create a linked workspace copy
+fst workspace copy           # Create a linked workspace copy
   --name, -n <name>          # Name for new workspace (required)
   --to, -t <path>            # Target directory (default: sibling)
 ```
 
 **Example:**
 ```bash
-fst copy -n feature          # Creates ../myproject-feature
-fst copy -n exp -t ~/tmp/exp # Creates ~/tmp/exp
+fst workspace copy -n feature          # Creates ../myproject-feature
+fst workspace copy -n exp -t ~/tmp/exp # Creates ~/tmp/exp
 ```
 
 ### Snapshots
@@ -198,7 +198,6 @@ Configuration stored in `~/.config/fst/agents.json`.
 ### Watch (Triaged)
 
 ```bash
-fst watch                    # Watch for changes (daemon)
   --summarize                # Regenerate summaries periodically
 ```
 

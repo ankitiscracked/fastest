@@ -435,6 +435,7 @@ Displays workspace name, ID, project, fork snapshot, and mode.`,
 
 	cmd.AddCommand(newWorkspaceInitCmd())
 	cmd.AddCommand(newWorkspaceCreateCmd())
+	cmd.AddCommand(newCopyCmd())
 	cmd.AddCommand(newSetMainCmd())
 
 	return cmd
