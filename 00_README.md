@@ -22,7 +22,7 @@ fst workspace copy -n feature
 
 # Check what changed
 fst drift
-fst drift --summary  # LLM-generated summary
+fst drift --agent-summary  # LLM-generated summary
 
 # Capture a snapshot
 fst snapshot -m "Added authentication"

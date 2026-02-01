@@ -91,11 +91,7 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 			if err != nil {
 				return fmt.Errorf("failed to find snapshots: %w", err)
 			}
-			if latestID != "" {
-				targetSnapshotID = latestID
-			} else {
-				targetSnapshotID = cfg.ForkSnapshotID
-			}
+			targetSnapshotID = latestID
 		}
 	}
 	if targetSnapshotID == "" {

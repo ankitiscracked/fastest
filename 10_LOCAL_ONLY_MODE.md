@@ -68,7 +68,7 @@ fst workspace init myproject           # Create project
 fst workspace copy -n feature          # Create linked workspace
 fst snapshot -m "message"    # Capture snapshot
 fst drift                    # Show changes
-fst drift --summary          # LLM summary (requires agent)
+fst drift --agent-summary    # LLM summary (requires agent)
 fst merge feature            # Merge workspaces
 fst export git               # Export to git
 ```
@@ -92,8 +92,8 @@ Supported agents:
 If multiple agents are detected and none is preferred, the CLI will prompt you to choose one for the current run.
 
 Features requiring agents:
-- `fst drift --summary` — Generate change summary
-- `fst merge --agent` — AI conflict resolution
+- `fst drift --agent-summary` — Generate change summary
+- `fst merge` — AI conflict resolution by default
 
 ## Migrating to Cloud
 

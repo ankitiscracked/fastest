@@ -20,11 +20,10 @@ func init() {
 }
 
 func newSyncCmd() *cobra.Command {
-	var useAgent bool
 	var manual bool
 	var theirs bool
 	var ours bool
-	var cherryPick []string
+	var files []string
 	var dryRun bool
 	var dryRunSummary bool
 	var noSnapshot bool
@@ -38,9 +37,6 @@ If the local and remote heads diverged, this performs a three-way merge
 and creates a new snapshot on success.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			modeCount := 0
-			if useAgent {
-				modeCount++
-			}
 			if manual {
 				modeCount++
 			}
@@ -51,7 +47,7 @@ and creates a new snapshot on success.`,
 				modeCount++
 			}
 			if modeCount > 1 {
-				return fmt.Errorf("only one of --agent, --manual, --theirs, --ours can be specified")
+				return fmt.Errorf("only one of --manual, --theirs, --ours can be specified")
 			}
 
 			mode := ConflictModeAgent // default
@@ -63,18 +59,16 @@ and creates a new snapshot on success.`,
 				mode = ConflictModeOurs
 			}
 
-			return runSync(mode, cherryPick, dryRun, dryRunSummary, noSnapshot)
+			return runSync(mode, files, dryRun, dryRunSummary, noSnapshot)
 		},
 	}
 
-	cmd.Flags().BoolVar(&useAgent, "agent", true, "Use coding agent for conflict resolution (default)")
 	cmd.Flags().BoolVar(&manual, "manual", false, "Create conflict markers for manual resolution")
 	cmd.Flags().BoolVar(&theirs, "theirs", false, "Take remote version for conflicts")
 	cmd.Flags().BoolVar(&ours, "ours", false, "Keep local version for conflicts")
-	cmd.Flags().StringSliceVar(&cherryPick, "files", nil, "Only sync specific files")
-	cmd.Flags().StringSliceVar(&cherryPick, "cherry-pick", nil, "Only sync specific files (alias for --files)")
+	cmd.Flags().StringSliceVar(&files, "files", nil, "Only sync specific files")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview sync with line-level conflict details")
-	cmd.Flags().BoolVar(&dryRunSummary, "summary", false, "Generate LLM summary of conflicts (with --dry-run)")
+	cmd.Flags().BoolVar(&dryRunSummary, "agent-summary", false, "Generate LLM summary of conflicts (with --dry-run)")
 	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "Skip auto-snapshot before sync")
 
 	return cmd
@@ -159,7 +153,8 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		return fmt.Errorf("failed to scan remote files: %w", err)
 	}
 
-	mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest, cherryPick)
+	mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest)
+	mergeActions = filterMergeActions(mergeActions, cherryPick)
 	fmt.Println("Merge plan:")
 	fmt.Printf("  Apply from remote:  %d files\n", len(mergeActions.toApply))
 	fmt.Printf("  Conflicts:          %d files\n", len(mergeActions.conflicts))
@@ -241,6 +236,42 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 	}
 
 	return nil
+}
+
+func filterMergeActions(actions *mergeActions, files []string) *mergeActions {
+	if len(files) == 0 {
+		return actions
+	}
+
+	filesSet := make(map[string]bool, len(files))
+	for _, f := range files {
+		filesSet[f] = true
+	}
+
+	filtered := &mergeActions{}
+	for _, a := range actions.toApply {
+		if filesSet[a.path] {
+			filtered.toApply = append(filtered.toApply, a)
+		} else {
+			filtered.skipped = append(filtered.skipped, mergeAction{path: a.path, actionType: "skip"})
+		}
+	}
+	for _, a := range actions.conflicts {
+		if filesSet[a.path] {
+			filtered.conflicts = append(filtered.conflicts, a)
+		} else {
+			filtered.skipped = append(filtered.skipped, mergeAction{path: a.path, actionType: "skip"})
+		}
+	}
+	for _, a := range actions.inSync {
+		if filesSet[a.path] {
+			filtered.inSync = append(filtered.inSync, a)
+		} else {
+			filtered.skipped = append(filtered.skipped, mergeAction{path: a.path, actionType: "skip"})
+		}
+	}
+
+	return filtered
 }
 
 type syncSnapshotMeta struct {

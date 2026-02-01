@@ -117,7 +117,7 @@ fastest/
 
 ### Drift
 - `fst drift` — show file-level diff from base
-- `fst drift --summary` — invoke agent to generate natural language summary
+- `fst drift --agent-summary` — invoke agent to generate natural language summary
 - `fst drift --json` — machine-readable drift output
 
 ### Watch (Daemon)
@@ -127,9 +127,8 @@ fastest/
 
 ### Merge
 - `fst merge <source_workspace>` — merge changes from another workspace
-- `fst merge <source_workspace> --agent` — use agent to resolve conflicts
+- `fst merge <source_workspace>` — use agent to resolve conflicts by default
 - `fst merge <source_workspace> --manual` — show conflicts for manual resolution
-- `fst merge --cherry-pick <files...>` — merge specific files only
 
 ### Export
 - `fst export git [--snapshot <id>] [--repo <path>]`
@@ -296,7 +295,7 @@ CREATE TABLE activity_events (
 
 ### Deliverables
 - Agent invocation system (detect installed agents: claude, aider, etc.)
-- CLI: `fst drift --summary`
+- CLI: `fst drift --agent-summary`
 - Agent prompt template for summarization
 - Config: `~/.config/fst/agents.json` (which agent to use)
 
@@ -312,7 +311,7 @@ CREATE TABLE activity_events (
 ```
 
 ### Exit Criteria
-- `fst drift --summary` returns natural language like:
+- `fst drift --agent-summary` returns natural language like:
   "Added user authentication with JWT tokens. Refactored database layer to use connection pooling."
 
 ---
@@ -355,7 +354,7 @@ CREATE TABLE activity_events (
 3. Compute 3-way diff: base ↔ target ↔ source
 4. Non-conflicting changes: apply automatically
 5. Conflicts:
-   a. --agent (default): invoke agent with both versions, ask for resolution
+   a. (default): invoke agent with both versions, ask for resolution
    b. --manual: show conflict markers, user resolves
 6. After resolution: commit as new snapshot
 ```
@@ -414,7 +413,7 @@ Output the merged file content only.
 3. **Projects + Workspaces**: Create project, spawn 3 workspaces, see all in Web
 4. **Snapshots**: Push from workspace A, clone to B, verify identical
 5. **Drift**: Make changes, `fst drift` shows accurate diff
-6. **Summaries**: `fst drift --summary` returns natural language
+6. **Summaries**: `fst drift --agent-summary` returns natural language
 7. **Watch**: Daemon running, Web shows live drift updates
 8. **Merge**: Merge workspace B into A, conflicts resolved by agent
 9. **End-to-end**: 3 agents working in parallel, all visible in Web, merge best parts

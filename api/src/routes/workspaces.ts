@@ -1782,7 +1782,7 @@ interface MergeActions {
   toApply: MergeAction[];   // Non-conflicting changes to apply from source
   conflicts: MergeAction[]; // Files with conflicting changes
   inSync: MergeAction[];    // Files already in sync
-  skipped: MergeAction[];   // Files skipped (if cherry-pick filter used)
+  skipped: MergeAction[];   // Files skipped (if files filter used)
 }
 
 /**

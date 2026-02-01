@@ -151,7 +151,7 @@
 ### LLM Summaries ✓
 
 - Agent detection (claude, aider, cursor, copilot)
-- `fst drift --summary` — AI-generated change description
+- `fst drift --agent-summary` — AI-generated change description
 - Configuration at `~/.config/fst/agents.json`
 
 ### Watch Daemon (Triaged)
@@ -166,10 +166,9 @@
 
 - `fst merge <workspace>` — 3-way merge
 - Conflict resolution modes:
-  - `--agent` — AI-assisted (default)
+  - default — AI-assisted
   - `--manual` — conflict markers
   - `--theirs` / `--ours` — prefer one side
-- Cherry-pick with `--files`
 - Dry-run with `--dry-run`
 
 ---

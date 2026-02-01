@@ -185,7 +185,7 @@ func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, gene
 
 	fmt.Println()
 	fmt.Println("To resolve conflicts:")
-	fmt.Printf("  fst merge %s --agent   # Let AI resolve conflicts\n", otherWorkspace)
+	fmt.Printf("  fst merge %s          # Let AI resolve conflicts\n", otherWorkspace)
 	fmt.Printf("  fst merge %s --manual  # Create conflict markers for manual resolution\n", otherWorkspace)
 
 	return nil

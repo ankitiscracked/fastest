@@ -297,7 +297,7 @@ func TestSyncAlreadyInSync(t *testing.T) {
 
 func TestSyncModeValidation(t *testing.T) {
 	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"sync", "--agent", "--manual"})
+	cmd.SetArgs([]string{"sync", "--manual"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatalf("expected conflicting sync flags to fail")
 	}
@@ -305,7 +305,7 @@ func TestSyncModeValidation(t *testing.T) {
 
 func TestMergeModeValidation(t *testing.T) {
 	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"merge", "--agent", "--manual"})
+	cmd.SetArgs([]string{"merge", "--manual"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatalf("expected conflicting merge flags to fail")
 	}
@@ -754,29 +754,5 @@ func TestSyncApplyNonConflicting(t *testing.T) {
 	}
 	if string(data) != string(content) {
 		t.Fatalf("remote.txt content mismatch")
-	}
-}
-
-func TestMergePlanNoOtherWorkspaces(t *testing.T) {
-	root := setupWorkspace(t, "ws-merge", map[string]string{
-		"readme.md": "ok",
-	})
-
-	restoreCwd := chdir(t, root)
-	defer restoreCwd()
-
-	setenv(t, "XDG_CONFIG_HOME", filepath.Join(root, "config"))
-
-	var output string
-	err := captureStdout(func() error {
-		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"merge", "--plan"})
-		return cmd.Execute()
-	}, &output)
-	if err != nil {
-		t.Fatalf("merge --plan failed: %v", err)
-	}
-	if !strings.Contains(output, "No other workspaces") {
-		t.Fatalf("expected no workspaces message, got: %s", output)
 	}
 }

@@ -42,7 +42,7 @@ Examples:
   fst drift main               # Drift vs workspace named "main"
   fst drift ../other-project   # Divergence from workspace at path
   fst drift --json             # Output as JSON
-  fst drift --summary          # Generate AI summary of divergence`,
+  fst drift --agent-summary    # Generate AI summary of divergence`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var target string
@@ -54,7 +54,7 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
-	cmd.Flags().BoolVar(&summary, "summary", false, "Generate LLM summary of divergence (requires configured agent)")
+	cmd.Flags().BoolVar(&summary, "agent-summary", false, "Generate LLM summary of divergence (requires configured agent)")
 	cmd.Flags().BoolVar(&sync, "sync", false, "Sync drift report to cloud")
 	cmd.Flags().BoolVar(&noDirty, "no-dirty", false, "Compare latest snapshots instead of current files")
 

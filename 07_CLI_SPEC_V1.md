@@ -87,7 +87,8 @@ fst log                      # Show snapshot history
   --limit, -n <num>          # Number of entries (default: 10)
 
 fst rollback [snapshot-id]   # Restore files from snapshot
-  --snapshot, -s <id>        # Snapshot to restore (default: base)
+  --snapshot, -s <id>        # Snapshot to restore (default: latest)
+  --to-base                  # Restore to fork/base snapshot
 ```
 
 ### Drift
@@ -95,7 +96,7 @@ fst rollback [snapshot-id]   # Restore files from snapshot
 ```bash
 fst drift                    # Show changes from fork snapshot
   --json                     # Output as JSON
-  --summary                  # Generate LLM summary (requires agent)
+  --agent-summary            # Generate LLM summary (requires agent)
   --sync                     # Sync drift report to cloud
 ```
 
@@ -124,20 +125,26 @@ Summary:
 ```bash
 fst merge <workspace>        # Merge from another workspace
   --from <path>              # Source path (instead of name lookup)
-  --agent                    # Use AI for conflict resolution (default)
   --manual                   # Write conflict markers
   --theirs                   # Take source version for conflicts
   --ours                     # Keep target version for conflicts
-  --files <list>             # Only merge specific files
   --dry-run                  # Show plan without making changes
+  --agent-summary            # Generate LLM summary of conflicts (with --dry-run)
+  --no-pre-snapshot          # Skip pre-merge snapshot (only created if dirty)
+  --auto-post-snapshot       # Create a snapshot after a successful conflict-free merge
   --force                    # Allow merge without a common base (two-way merge)
 ```
+
+**Merge inputs:**
+- Merges are computed from the latest snapshots of both workspaces (not live working trees).
+- The source working tree is ignored; only its latest snapshot is used.
+- The target workspace may have local changes, but the merge aborts if any of those would be overwritten.
+- If either workspace has no snapshots, you must run `fst snapshot` first.
 
 ### Sync
 
 ```bash
 fst sync                     # Sync local and remote for this workspace
-  --agent                    # Use AI for conflict resolution (default)
   --manual                   # Write conflict markers
   --theirs                   # Take remote version for conflicts
   --ours                     # Keep local version for conflicts
@@ -146,7 +153,7 @@ fst sync                     # Sync local and remote for this workspace
 ```
 
 **Conflict resolution modes:**
-- `--agent` (default): Invokes Claude/Aider to intelligently merge
+- Default (no flag): Uses your preferred coding agent to intelligently merge
 - `--manual`: Writes `<<<<<<<` conflict markers for manual editing
 - `--theirs`: Takes source version for all conflicts
 - `--ours`: Keeps target version for all conflicts

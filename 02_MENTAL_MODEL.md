@@ -113,7 +113,7 @@ fst workspace copy -n agent-b
 # 3. Work in each workspace independently
 cd ../myproject-agent-a
 # ... make changes ...
-fst drift --summary
+fst drift --agent-summary
 fst snapshot -m "Added auth"
 
 # 4. Merge best changes back
