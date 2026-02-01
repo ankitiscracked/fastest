@@ -2,8 +2,10 @@ package commands
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/anthropics/fastest/cli/internal/agent"
 )
@@ -79,7 +81,7 @@ func runAgentsList(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Active agent: %s\n", preferred.Name)
 		}
 		fmt.Println()
-		fmt.Println("Set preferred agent with: fst agents set <name>")
+		fmt.Println("Set preferred agent with: fst agents set-preferred [name]")
 	}
 
 	return nil
@@ -87,29 +89,38 @@ func runAgentsList(cmd *cobra.Command, args []string) error {
 
 func newAgentsSetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "set <agent-name>",
+		Use:   "set-preferred [agent-name]",
 		Short: "Set the preferred coding agent",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			if !term.IsTerminal(int(os.Stdin.Fd())) && len(args) == 0 {
+				return fmt.Errorf("agent name is required in non-interactive mode")
+			}
+
+			var name string
+			if len(args) > 0 {
+				name = args[0]
+			} else {
+				available := agent.GetAvailableAgents()
+				if len(available) == 0 {
+					return fmt.Errorf("no coding agents detected - install a supported agent first")
+				}
+				if len(available) == 1 {
+					name = available[0].Name
+				} else {
+					chosen, err := agent.PromptAgentChoice(available)
+					if err != nil {
+						return err
+					}
+					name = chosen.Name
+				}
+			}
 
 			if err := agent.SetPreferredAgent(name); err != nil {
 				return err
 			}
 
-			// Verify it's available
-			agents := agent.DetectAgents()
-			for _, a := range agents {
-				if a.Name == name {
-					if !a.Available {
-						fmt.Printf("Warning: %s is set as preferred but is not installed.\n", name)
-					} else {
-						fmt.Printf("✓ %s set as preferred agent\n", name)
-					}
-					return nil
-				}
-			}
-
+			fmt.Printf("✓ %s set as preferred agent\n", name)
 			return nil
 		},
 	}

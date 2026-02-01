@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 )
 
 // Agent represents a detected coding agent
@@ -27,19 +30,29 @@ var KnownAgents = []Agent{
 		Description: "Claude Code (Anthropic)",
 	},
 	{
-		Name:        "aider",
-		Command:     "aider",
-		Description: "Aider - AI pair programming",
+		Name:        "codex",
+		Command:     "codex",
+		Description: "OpenAI Codex CLI",
 	},
 	{
-		Name:        "cursor",
-		Command:     "cursor",
-		Description: "Cursor IDE",
+		Name:        "amp",
+		Command:     "amp",
+		Description: "Amp CLI",
 	},
 	{
-		Name:        "copilot",
-		Command:     "gh copilot",
-		Description: "GitHub Copilot CLI",
+		Name:        "agent",
+		Command:     "agent",
+		Description: "Cursor Agent CLI",
+	},
+	{
+		Name:        "gemini",
+		Command:     "gemini",
+		Description: "Gemini CLI",
+	},
+	{
+		Name:        "droid",
+		Command:     "droid",
+		Description: "Factory Droid CLI",
 	},
 }
 
@@ -139,7 +152,7 @@ func GetPreferredAgent() (*Agent, error) {
 
 	available := GetAvailableAgents()
 	if len(available) == 0 {
-		return nil, fmt.Errorf("no coding agents detected - install claude, aider, or another supported agent")
+		return nil, fmt.Errorf("no coding agents detected - install a supported agent or set one with 'fst agents set <name>'")
 	}
 
 	// If preferred is set and available, use it
@@ -151,22 +164,38 @@ func GetPreferredAgent() (*Agent, error) {
 		}
 	}
 
-	// Otherwise return first available
-	return &available[0], nil
+	if len(available) == 1 {
+		return &available[0], nil
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, fmt.Errorf("multiple coding agents detected - set preferred with 'fst agents set <name>'")
+	}
+
+	chosen, err := PromptAgentChoice(available)
+	if err != nil {
+		return nil, err
+	}
+
+	return &chosen, nil
 }
 
 // SetPreferredAgent sets the preferred agent
 func SetPreferredAgent(name string) error {
-	// Verify agent exists
+	if name == "" {
+		return fmt.Errorf("agent name is required")
+	}
+
+	available := GetAvailableAgents()
 	found := false
-	for _, a := range KnownAgents {
+	for _, a := range available {
 		if a.Name == name {
 			found = true
 			break
 		}
 	}
 	if !found {
-		return fmt.Errorf("unknown agent: %s", name)
+		return fmt.Errorf("agent %s is not installed or not on PATH", name)
 	}
 
 	config, err := LoadConfig()
@@ -176,6 +205,87 @@ func SetPreferredAgent(name string) error {
 
 	config.PreferredAgent = name
 	return SaveConfig(config)
+}
+
+func PromptAgentChoice(available []Agent) (Agent, error) {
+	model := agentChoiceModel{
+		agents: available,
+	}
+	p := tea.NewProgram(model)
+	final, err := p.Run()
+	if err != nil {
+		return Agent{}, err
+	}
+	m, ok := final.(agentChoiceModel)
+	if !ok {
+		return Agent{}, fmt.Errorf("failed to read agent choice")
+	}
+	if m.err != nil {
+		return Agent{}, m.err
+	}
+	if m.choice == nil {
+		return Agent{}, fmt.Errorf("no agent selected")
+	}
+	return *m.choice, nil
+}
+
+type agentChoiceModel struct {
+	agents []Agent
+	cursor int
+	choice *Agent
+	err    error
+	done   bool
+}
+
+func (m agentChoiceModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m agentChoiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC:
+			m.err = fmt.Errorf("selection cancelled")
+			m.done = true
+			return m, tea.Quit
+		case tea.KeyUp:
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.KeyDown:
+			if m.cursor < len(m.agents)-1 {
+				m.cursor++
+			}
+		case tea.KeyEnter:
+			if len(m.agents) == 0 {
+				m.err = fmt.Errorf("no agents available")
+				m.done = true
+				return m, tea.Quit
+			}
+			m.choice = &m.agents[m.cursor]
+			m.done = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m agentChoiceModel) View() string {
+	if m.done {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Multiple coding agents detected. Choose one:\n\n")
+	for i, a := range m.agents {
+		cursor := " "
+		if m.cursor == i {
+			cursor = ">"
+		}
+		b.WriteString(fmt.Sprintf(" %s %s\n", cursor, a.Name))
+	}
+	b.WriteString("\nUse \u2191/\u2193 and Enter to select. Ctrl+C to cancel.\n")
+	return b.String()
 }
 
 // InvokeSummary invokes an agent to generate a summary of changes
@@ -287,8 +397,16 @@ func invokeAgent(agent *Agent, prompt string) (string, error) {
 	switch agent.Name {
 	case "claude":
 		return invokeClaude(prompt)
-	case "aider":
-		return invokeAider(prompt)
+	case "codex":
+		return invokeCodex(prompt)
+	case "amp":
+		return invokeAmp(prompt)
+	case "agent":
+		return invokeCursorAgent(prompt)
+	case "gemini":
+		return invokeGemini(prompt)
+	case "droid":
+		return invokeDroid(prompt)
 	default:
 		return "", fmt.Errorf("agent %s invocation not implemented", agent.Name)
 	}
@@ -313,6 +431,55 @@ func invokeClaude(prompt string) (string, error) {
 	// Strip markdown code fences if present
 	result = stripCodeFences(result)
 
+	return result, nil
+}
+
+func invokeCodex(prompt string) (string, error) {
+	// Codex CLI: codex exec "prompt"
+	cmd := exec.Command("codex", "exec", prompt)
+	cmd.Stdin = nil
+	return runAgentCommand(cmd, "codex")
+}
+
+func invokeAmp(prompt string) (string, error) {
+	// Amp CLI: amp -x "prompt"
+	cmd := exec.Command("amp", "-x", prompt)
+	cmd.Stdin = nil
+	return runAgentCommand(cmd, "amp")
+}
+
+func invokeCursorAgent(prompt string) (string, error) {
+	// Cursor Agent CLI: agent -p "prompt"
+	cmd := exec.Command("agent", "-p", prompt)
+	cmd.Stdin = nil
+	return runAgentCommand(cmd, "agent")
+}
+
+func invokeGemini(prompt string) (string, error) {
+	// Gemini CLI: gemini -p "prompt"
+	cmd := exec.Command("gemini", "-p", prompt)
+	cmd.Stdin = nil
+	return runAgentCommand(cmd, "gemini")
+}
+
+func invokeDroid(prompt string) (string, error) {
+	// Factory Droid CLI: droid exec "prompt"
+	cmd := exec.Command("droid", "exec", prompt)
+	cmd.Stdin = nil
+	return runAgentCommand(cmd, "droid")
+}
+
+func runAgentCommand(cmd *exec.Cmd, name string) (string, error) {
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return "", fmt.Errorf("%s failed: %s", name, string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("failed to run %s: %w", name, err)
+	}
+
+	result := strings.TrimSpace(string(output))
+	result = stripCodeFences(result)
 	return result, nil
 }
 

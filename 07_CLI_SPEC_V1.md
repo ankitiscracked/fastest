@@ -186,16 +186,19 @@ fst export git --include-drift -m "WIP"  # Include uncommitted
 
 ```bash
 fst agents                   # List detected coding agents
-fst agents set <name>        # Set preferred agent
+fst agents set-preferred [name]  # Set preferred agent (prompts if omitted)
 ```
 
 **Supported agents:**
 - `claude` — Claude Code CLI
-- `aider` — Aider AI pair programming
-- `cursor` — Cursor IDE
-- `copilot` — GitHub Copilot CLI
+- `codex` — OpenAI Codex CLI
+- `amp` — Amp CLI
+- `agent` — Cursor Agent CLI
+- `gemini` — Gemini CLI
+- `droid` — Factory Droid CLI
 
 Configuration stored in `~/.config/fst/agents.json`.
+If multiple agents are detected and none is preferred, the CLI will prompt you to choose one for the current run.
 
 ### Watch (Triaged)
 

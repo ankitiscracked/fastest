@@ -83,9 +83,13 @@ fst agents                   # List detected agents
 
 Supported agents:
 - `claude` — Claude Code CLI
-- `aider` — Aider
-- `cursor` — Cursor IDE
-- `copilot` — GitHub Copilot CLI
+- `codex` — OpenAI Codex CLI
+- `amp` — Amp CLI
+- `agent` — Cursor Agent CLI
+- `gemini` — Gemini CLI
+- `droid` — Factory Droid CLI
+
+If multiple agents are detected and none is preferred, the CLI will prompt you to choose one for the current run.
 
 Features requiring agents:
 - `fst drift --summary` — Generate change summary

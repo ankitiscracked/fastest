@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -408,48 +407,13 @@ func CreateAutoSnapshot(message string) (string, error) {
 // detectAgent attempts to auto-detect the coding agent from environment
 func detectAgent() string {
 	// Check explicit FST_AGENT env var first
-	if agent := os.Getenv("FST_AGENT"); agent != "" {
-		return agent
+	if agentName := os.Getenv("FST_AGENT"); agentName != "" {
+		return agentName
 	}
 
-	// Claude Code sets CLAUDE_CODE=1 when running
-	if os.Getenv("CLAUDE_CODE") == "1" {
-		return "claude"
-	}
-
-	// Check for Claude Code's session ID (also indicates Claude Code)
-	if os.Getenv("CLAUDE_SESSION_ID") != "" {
-		return "claude"
-	}
-
-	// Aider sets AIDER=1 when running
-	if os.Getenv("AIDER") == "1" {
-		return "aider"
-	}
-
-	// Cursor sets CURSOR=1 when in Cursor terminal
-	if os.Getenv("CURSOR") == "1" {
-		return "cursor"
-	}
-
-	// Check for Cursor's terminal integration
-	if os.Getenv("TERM_PROGRAM") == "cursor" {
-		return "cursor"
-	}
-
-	// Check for VS Code Copilot
-	if os.Getenv("TERM_PROGRAM") == "vscode" && os.Getenv("GITHUB_COPILOT") != "" {
-		return "copilot"
-	}
-
-	// Check for Windsurf
-	if os.Getenv("WINDSURF") == "1" {
-		return "windsurf"
-	}
-
-	// Check for Cline
-	if os.Getenv("CLINE") == "1" {
-		return "cline"
+	preferred, err := agent.GetPreferredAgent()
+	if err == nil && preferred != nil {
+		return preferred.Name
 	}
 
 	return ""
