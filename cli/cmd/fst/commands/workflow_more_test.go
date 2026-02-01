@@ -16,7 +16,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
-func TestInitCreatesWorkspace(t *testing.T) {
+func TestWorkspaceInitRequiresProjectFolder(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "readme.md"), []byte("hi"), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
@@ -35,25 +35,8 @@ func TestInitCreatesWorkspace(t *testing.T) {
 
 	cmd := NewRootCmd()
 	cmd.SetArgs([]string{"workspace", "init"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("init failed: %v", err)
-	}
-
-	cfg, err := config.LoadAt(root)
-	if err != nil {
-		t.Fatalf("LoadAt: %v", err)
-	}
-	if cfg.ProjectID == "" || cfg.WorkspaceID == "" {
-		t.Fatalf("expected project/workspace IDs to be set")
-	}
-	if cfg.WorkspaceName != filepath.Base(root) {
-		t.Fatalf("workspace name mismatch: %s", cfg.WorkspaceName)
-	}
-
-	snapshotsDir := filepath.Join(root, ".fst", "snapshots")
-	entries, err := os.ReadDir(snapshotsDir)
-	if err != nil || len(entries) == 0 {
-		t.Fatalf("expected snapshot metadata to be created")
+	if err := cmd.Execute(); err == nil {
+		t.Fatalf("expected init to fail without a project folder")
 	}
 }
 
@@ -429,18 +412,97 @@ func TestSyncDownloadsManifestAndBlobsDryRun(t *testing.T) {
 }
 
 func TestMergeDryRunPlan(t *testing.T) {
-	targetRoot := setupWorkspace(t, "ws-target", map[string]string{
-		"a.txt": "one",
-	})
-	sourceRoot := setupWorkspace(t, "ws-source", map[string]string{
-		"b.txt": "two",
-	})
+	targetRoot := setupWorkspace(t, "ws-target", nil)
+	sourceRoot := setupWorkspace(t, "ws-source", nil)
+	if err := os.MkdirAll(filepath.Join(targetRoot, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots target: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourceRoot, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots source: %v", err)
+	}
+	if _, err := createInitialSnapshot(targetRoot, "ws-target-id", "ws-target", false); err != nil {
+		t.Fatalf("createInitialSnapshot target: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourceRoot, ".fst", "manifests"), 0755); err != nil {
+		t.Fatalf("mkdir manifests source: %v", err)
+	}
+
+	// Copy snapshot metadata + manifest to source so both share a common ancestor.
+	targetSnapshotsDir := filepath.Join(targetRoot, ".fst", "snapshots")
+	entries, err := os.ReadDir(targetSnapshotsDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("expected snapshot metadata in target")
+	}
+	var snapshotMetaName string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".meta.json") {
+			snapshotMetaName = entry.Name()
+			break
+		}
+	}
+	if snapshotMetaName == "" {
+		t.Fatalf("expected snapshot metadata file")
+	}
+	metaBytes, err := os.ReadFile(filepath.Join(targetSnapshotsDir, snapshotMetaName))
+	if err != nil {
+		t.Fatalf("read target snapshot meta: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, ".fst", "snapshots", snapshotMetaName), metaBytes, 0644); err != nil {
+		t.Fatalf("write source snapshot meta: %v", err)
+	}
+
+	var meta config.SnapshotMeta
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		t.Fatalf("parse snapshot meta: %v", err)
+	}
+	manifestPath := filepath.Join(targetRoot, ".fst", "manifests", meta.ManifestHash+".json")
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read target manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, ".fst", "manifests", meta.ManifestHash+".json"), manifestBytes, 0644); err != nil {
+		t.Fatalf("write source manifest: %v", err)
+	}
+
+	sourceCfg, err := config.LoadAt(sourceRoot)
+	if err != nil {
+		t.Fatalf("LoadAt source: %v", err)
+	}
+	sourceCfg.CurrentSnapshotID = meta.ID
+	sourceCfg.ForkSnapshotID = meta.ID
+	if err := config.SaveAt(sourceRoot, sourceCfg); err != nil {
+		t.Fatalf("SaveAt source: %v", err)
+	}
+
+	// Add divergent changes after the shared base snapshot.
+	if err := os.WriteFile(filepath.Join(targetRoot, "a.txt"), []byte("one"), 0644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "b.txt"), []byte("two"), 0644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	restoreTargetCwd := chdir(t, targetRoot)
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "--message", "target snapshot"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("target snapshot failed: %v", err)
+	}
+	restoreTargetCwd()
+
+	restoreSourceCwd := chdir(t, sourceRoot)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "--message", "source snapshot"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("source snapshot failed: %v", err)
+	}
+	restoreSourceCwd()
 
 	restoreCwd := chdir(t, targetRoot)
 	defer restoreCwd()
 
 	var output string
-	err := captureStdout(func() error {
+	err = captureStdout(func() error {
 		cmd := NewRootCmd()
 		cmd.SetArgs([]string{"merge", "source", "--from", sourceRoot, "--dry-run"})
 		return cmd.Execute()

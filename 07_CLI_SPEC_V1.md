@@ -130,6 +130,7 @@ fst merge <workspace>        # Merge from another workspace
   --ours                     # Keep target version for conflicts
   --files <list>             # Only merge specific files
   --dry-run                  # Show plan without making changes
+  --force                    # Allow merge without a common base (two-way merge)
 ```
 
 ### Sync

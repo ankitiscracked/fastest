@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -44,6 +46,7 @@ func newMergeCmd() *cobra.Command {
 	var mergeAll bool
 	var showPlan bool
 	var noSnapshot bool
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "merge [workspace]",
@@ -108,7 +111,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 				if len(args) > 0 {
 					return fmt.Errorf("cannot specify workspace with --all")
 				}
-				return runMergeAll(mode, dryRun, noSnapshot)
+				return runMergeAll(mode, dryRun, noSnapshot, force)
 			}
 
 			var workspaceName string
@@ -118,7 +121,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 			if workspaceName == "" && fromPath == "" {
 				return fmt.Errorf("must specify workspace name or --from path")
 			}
-			return runMerge(workspaceName, fromPath, mode, cherryPick, dryRun, dryRunSummary, noSnapshot)
+			return runMerge(workspaceName, fromPath, mode, cherryPick, dryRun, dryRunSummary, noSnapshot, force)
 		},
 	}
 
@@ -134,6 +137,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 	cmd.Flags().BoolVarP(&mergeAll, "all", "a", false, "Merge all workspaces in the project")
 	cmd.Flags().BoolVar(&showPlan, "plan", false, "Analyze workspaces and suggest optimal merge order")
 	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "Skip auto-snapshot before merge")
+	cmd.Flags().BoolVar(&force, "force", false, "Allow merge without a common base (two-way merge)")
 
 	return cmd
 }
@@ -148,7 +152,7 @@ type MergeResult struct {
 	ManualMode bool
 }
 
-func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool, noSnapshot bool) error {
+func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool, noSnapshot bool, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -255,10 +259,13 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		warnIfRemoteHeadDiff("source", client, sourceCfg, sourceRoot)
 	}
 
-	// Determine merge base (common ancestor) using merge history and relationships
-	mergeBaseID, err := getMergeBase(cfg, sourceCfg, currentRoot, sourceRoot)
+	// Determine merge base (common ancestor) from local snapshot history
+	mergeBaseID, err := getMergeBaseLocalSnapshots(currentRoot, sourceRoot)
 	var baseManifest *manifest.Manifest
 	if err != nil {
+		if !force {
+			return fmt.Errorf("could not determine merge base: %w\nRun 'fst snapshot' in both workspaces or re-run with --force for a two-way merge", err)
+		}
 		fmt.Printf("Warning: Could not determine merge base: %v\n", err)
 		fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
 		baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
@@ -278,22 +285,80 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, cherryPick 
 		}
 	}
 
-	// Generate manifests for local and remote
-	fmt.Println("Scanning local workspace...")
-	currentManifest, err := manifest.Generate(currentRoot, false)
+	// Load snapshot manifests for current and source workspaces
+	currentSnapshotID := cfg.CurrentSnapshotID
+	if currentSnapshotID == "" {
+		currentSnapshotID, err = config.GetLatestSnapshotIDAt(currentRoot)
+		if err != nil {
+			return fmt.Errorf("failed to determine latest snapshot for current workspace: %w", err)
+		}
+	}
+	if currentSnapshotID == "" {
+		return fmt.Errorf("current workspace has no snapshots - run 'fst snapshot' before merging")
+	}
+	currentManifest, err := loadManifestByID(currentRoot, currentSnapshotID)
 	if err != nil {
-		return fmt.Errorf("failed to scan local workspace: %w", err)
+		return fmt.Errorf("failed to load current snapshot manifest: %w", err)
 	}
 
-	fmt.Println("Scanning source workspace...")
-	sourceManifest, err := manifest.Generate(sourceRoot, false)
+	sourceSnapshotID := sourceCfg.CurrentSnapshotID
+	if sourceSnapshotID == "" {
+		sourceSnapshotID, err = config.GetLatestSnapshotIDAt(sourceRoot)
+		if err != nil {
+			return fmt.Errorf("failed to determine latest snapshot for source workspace: %w", err)
+		}
+	}
+	if sourceSnapshotID == "" {
+		return fmt.Errorf("source workspace has no snapshots - run 'fst snapshot' before merging")
+	}
+	sourceManifest, err := loadManifestByID(sourceRoot, sourceSnapshotID)
 	if err != nil {
-		return fmt.Errorf("failed to scan source workspace: %w", err)
+		return fmt.Errorf("failed to load source snapshot manifest: %w", err)
 	}
 
 	// Compute three-way diff
 	fmt.Println("Computing differences...")
 	mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest, cherryPick)
+
+	// Abort if merge would overwrite local uncommitted changes in target (git-like behavior)
+	workingManifest, err := manifest.Generate(currentRoot, false)
+	if err != nil {
+		return fmt.Errorf("failed to scan current workspace: %w", err)
+	}
+	added, modified, deleted := manifest.Diff(currentManifest, workingManifest)
+	dirtyPaths := make(map[string]struct{})
+	for _, p := range added {
+		dirtyPaths[p] = struct{}{}
+	}
+	for _, p := range modified {
+		dirtyPaths[p] = struct{}{}
+	}
+	for _, p := range deleted {
+		dirtyPaths[p] = struct{}{}
+	}
+	if len(dirtyPaths) > 0 {
+		mergeTouched := make(map[string]struct{})
+		for _, a := range mergeActions.toApply {
+			mergeTouched[a.path] = struct{}{}
+		}
+		for _, a := range mergeActions.conflicts {
+			mergeTouched[a.path] = struct{}{}
+		}
+		var overlaps []string
+		for p := range dirtyPaths {
+			if _, ok := mergeTouched[p]; ok {
+				overlaps = append(overlaps, p)
+			}
+		}
+		if len(overlaps) > 0 {
+			preview := overlaps
+			if len(preview) > 5 {
+				preview = preview[:5]
+			}
+			return fmt.Errorf("merge would overwrite local changes in %d file(s): %s\nRun 'fst snapshot' or clean your working tree before merging", len(overlaps), strings.Join(preview, ", "))
+		}
+		fmt.Printf("Warning: current workspace has uncommitted changes in %d file(s) not touched by this merge.\n", len(dirtyPaths))
+	}
 
 	// Display summary
 	fmt.Println()
@@ -562,6 +627,7 @@ type mergeAction struct {
 	currentHash string
 	sourceHash  string
 	baseHash    string
+	sourceMode  uint32
 }
 
 // MergeActions holds all computed merge actions
@@ -633,6 +699,7 @@ func computeMergeActions(base, current, source *manifest.Manifest, cherryPick []
 		}
 		if inSource {
 			action.sourceHash = sourceFile.Hash
+			action.sourceMode = sourceFile.Mode
 		}
 
 		// Determine action based on three-way comparison
@@ -709,8 +776,50 @@ func printMergePlan(actions *mergeActions) {
 	}
 }
 
+func readSnapshotContent(root, relPath, expectedHash string, mode uint32) ([]byte, os.FileMode, error) {
+	if expectedHash == "" {
+		return nil, 0, os.ErrNotExist
+	}
+
+	// Prefer global blob cache.
+	if blobDir, err := config.GetGlobalBlobDir(); err == nil {
+		blobPath := filepath.Join(blobDir, expectedHash)
+		if data, err := os.ReadFile(blobPath); err == nil {
+			return data, fileModeOrDefault(mode, 0644), nil
+		}
+	}
+
+	// Fallback to reading from the workspace and verifying hash.
+	sourcePath := filepath.Join(root, relPath)
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return nil, 0, err
+	}
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != expectedHash {
+		return nil, 0, fmt.Errorf("source file does not match snapshot (dirty)")
+	}
+
+	m := fileModeOrDefault(mode, 0)
+	if m == 0 {
+		if info, err := os.Stat(sourcePath); err == nil {
+			m = info.Mode()
+		} else {
+			m = 0644
+		}
+	}
+
+	return data, m, nil
+}
+
+func fileModeOrDefault(mode uint32, fallback os.FileMode) os.FileMode {
+	if mode == 0 {
+		return fallback
+	}
+	return os.FileMode(mode)
+}
+
 func applyChange(currentRoot, sourceRoot string, action mergeAction) error {
-	sourcePath := filepath.Join(sourceRoot, action.path)
 	currentPath := filepath.Join(currentRoot, action.path)
 
 	// Ensure parent directory exists
@@ -718,20 +827,14 @@ func applyChange(currentRoot, sourceRoot string, action mergeAction) error {
 		return err
 	}
 
-	// Read source file
-	content, err := os.ReadFile(sourcePath)
+	// Read source file content from snapshot
+	content, mode, err := readSnapshotContent(sourceRoot, action.path, action.sourceHash, action.sourceMode)
 	if err != nil {
-		return fmt.Errorf("failed to read source: %w", err)
-	}
-
-	// Get source file mode
-	info, err := os.Stat(sourcePath)
-	if err != nil {
-		return fmt.Errorf("failed to stat source: %w", err)
+		return fmt.Errorf("failed to read source snapshot: %w", err)
 	}
 
 	// Write to current
-	if err := os.WriteFile(currentPath, content, info.Mode()); err != nil {
+	if err := os.WriteFile(currentPath, content, mode); err != nil {
 		return fmt.Errorf("failed to write: %w", err)
 	}
 
@@ -740,7 +843,6 @@ func applyChange(currentRoot, sourceRoot string, action mergeAction) error {
 
 func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction, ag *agent.Agent, baseManifest *manifest.Manifest) error {
 	currentPath := filepath.Join(currentRoot, action.path)
-	sourcePath := filepath.Join(sourceRoot, action.path)
 
 	// Read current content
 	currentContent, err := os.ReadFile(currentPath)
@@ -748,10 +850,10 @@ func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction
 		return fmt.Errorf("failed to read current: %w", err)
 	}
 
-	// Read source content
-	sourceContent, err := os.ReadFile(sourcePath)
+	// Read source content from snapshot
+	sourceContent, _, err := readSnapshotContent(sourceRoot, action.path, action.sourceHash, action.sourceMode)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to read source: %w", err)
+		return fmt.Errorf("failed to read source snapshot: %w", err)
 	}
 
 	// Try to get base content from global blob cache
@@ -787,10 +889,13 @@ func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction
 	showMergeDiff(string(currentContent), mergeResult.MergedCode)
 
 	// Write merged content
-	info, err := os.Stat(sourcePath)
-	mode := os.FileMode(0644)
-	if err == nil {
-		mode = info.Mode()
+	mode := fileModeOrDefault(action.sourceMode, 0)
+	if mode == 0 {
+		if info, err := os.Stat(currentPath); err == nil {
+			mode = info.Mode()
+		} else {
+			mode = 0644
+		}
 	}
 
 	if err := os.WriteFile(currentPath, []byte(mergeResult.MergedCode), mode); err != nil {
@@ -856,11 +961,10 @@ func showMergeDiff(before, after string) {
 
 func createConflictMarkers(currentRoot, sourceRoot string, action mergeAction) error {
 	currentPath := filepath.Join(currentRoot, action.path)
-	sourcePath := filepath.Join(sourceRoot, action.path)
 
 	// Read both versions
 	currentContent, currentErr := os.ReadFile(currentPath)
-	sourceContent, sourceErr := os.ReadFile(sourcePath)
+	sourceContent, _, sourceErr := readSnapshotContent(sourceRoot, action.path, action.sourceHash, action.sourceMode)
 
 	if currentErr != nil && sourceErr != nil {
 		return fmt.Errorf("cannot read either version")
@@ -933,6 +1037,7 @@ type snapshotMeta struct {
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspace_id"`
 	CreatedAt   string `json:"created_at"`
+	ParentID    string `json:"parent_snapshot_id"`
 }
 
 // loadSnapshotMetaFromDir loads snapshot metadata from a specific snapshots directory
@@ -952,6 +1057,45 @@ func loadSnapshotMetaFromDir(snapshotsDir, snapshotID string) (*snapshotMeta, er
 		return nil, fmt.Errorf("failed to parse snapshot metadata: %w", err)
 	}
 	return &meta, nil
+}
+
+func getMergeBaseLocalSnapshots(currentRoot, sourceRoot string) (string, error) {
+	currentHead, _ := config.GetLatestSnapshotIDAt(currentRoot)
+	sourceHead, _ := config.GetLatestSnapshotIDAt(sourceRoot)
+	if currentHead == "" || sourceHead == "" {
+		return "", fmt.Errorf("missing snapshots in one or both workspaces")
+	}
+
+	targetSnapshotsDir := config.GetSnapshotsDirAt(currentRoot)
+	sourceSnapshotsDir := config.GetSnapshotsDirAt(sourceRoot)
+
+	ancestors := map[string]struct{}{}
+	cur := currentHead
+	for cur != "" {
+		if _, ok := ancestors[cur]; ok {
+			break
+		}
+		ancestors[cur] = struct{}{}
+		meta, err := loadSnapshotMetaFromDir(targetSnapshotsDir, cur)
+		if err != nil {
+			return "", fmt.Errorf("missing snapshot metadata for %s", cur)
+		}
+		cur = meta.ParentID
+	}
+
+	src := sourceHead
+	for src != "" {
+		if _, ok := ancestors[src]; ok {
+			return src, nil
+		}
+		meta, err := loadSnapshotMetaFromDir(sourceSnapshotsDir, src)
+		if err != nil {
+			return "", fmt.Errorf("missing snapshot metadata for %s", src)
+		}
+		src = meta.ParentID
+	}
+
+	return "", fmt.Errorf("no common ancestor found between workspaces")
 }
 
 func warnIfRemoteHeadDiff(label string, client *api.Client, cfg *config.ProjectConfig, root string) {
@@ -1127,7 +1271,7 @@ func buildConflictInfosFromReport(report *conflicts.Report) []agent.ConflictInfo
 }
 
 // runMergeAll merges all workspaces in the project into the current one
-func runMergeAll(mode ConflictMode, dryRun bool, noSnapshot bool) error {
+func runMergeAll(mode ConflictMode, dryRun bool, noSnapshot bool, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -1316,7 +1460,7 @@ func runMergeAll(mode ConflictMode, dryRun bool, noSnapshot bool) error {
 		fmt.Printf("[%d/%d] Merging %s...\n", i+1, len(toMerge), a.ws.Name)
 
 		// Run merge (skip individual snapshots - we created one at the start)
-		err := runMerge(a.ws.Name, "", mode, nil, false, false, true)
+		err := runMerge(a.ws.Name, "", mode, nil, false, false, true, force)
 
 		outcome := mergeOutcome{
 			workspace: a.ws.Name,

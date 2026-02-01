@@ -393,7 +393,7 @@ func (m model) doMerge(item *workspaceItem) tea.Cmd {
 // runMergeForUI runs merge silently and returns error status
 func runMergeForUI(workspaceName, workspacePath string) error {
 	// Run merge with auto-snapshot, agent mode for conflicts
-	return runMerge(workspaceName, "", ConflictModeAgent, nil, false, false, false)
+	return runMerge(workspaceName, "", ConflictModeAgent, nil, false, false, false, false)
 }
 
 func (m *model) filterItems() {
