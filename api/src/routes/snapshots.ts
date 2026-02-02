@@ -23,7 +23,7 @@ snapshotRoutes.get('/:snapshotId', async (c) => {
       id: snapshots.id,
       project_id: snapshots.projectId,
       manifest_hash: snapshots.manifestHash,
-      parent_snapshot_id: snapshots.parentSnapshotId,
+      parent_snapshot_ids: snapshots.parentSnapshotIds,
       source: snapshots.source,
       created_at: snapshots.createdAt,
       owner_user_id: projects.ownerUserId,
@@ -48,7 +48,7 @@ snapshotRoutes.get('/:snapshotId', async (c) => {
       id: snapshot.id,
       project_id: snapshot.project_id,
       manifest_hash: snapshot.manifest_hash,
-      parent_snapshot_id: snapshot.parent_snapshot_id,
+      parent_snapshot_ids: JSON.parse(snapshot.parent_snapshot_ids || '[]'),
       source: snapshot.source,
       created_at: snapshot.created_at,
     }

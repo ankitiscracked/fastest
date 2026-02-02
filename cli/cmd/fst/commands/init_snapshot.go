@@ -67,7 +67,7 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
   "workspace_id": "%s",
   "workspace_name": "%s",
   "manifest_hash": "%s",
-  "parent_snapshot_id": "",
+  "parent_snapshot_ids": [],
   "message": "Initial snapshot",
   "created_at": "%s",
   "files": %d,

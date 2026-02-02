@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -326,17 +325,11 @@ func uploadLatestSnapshotToCloud(client *api.Client, root string, cfg *config.Pr
 		return err
 	}
 
-	parentID := ""
-	metaPath := filepath.Join(config.GetSnapshotsDirAt(root), latestID+".meta.json")
-	if metaJSON, err := os.ReadFile(metaPath); err == nil {
-		var meta struct {
-			ParentSnapshotID string `json:"parent_snapshot_id"`
-		}
-		_ = json.Unmarshal(metaJSON, &meta)
-		parentID = meta.ParentSnapshotID
+	parentIDs, _ := config.SnapshotParentIDsAt(root, latestID)
+	if parentIDs == nil {
+		parentIDs = []string{}
 	}
-
-	if _, _, err := client.CreateSnapshot(cfg.ProjectID, latestID, manifestHash, parentID, cfg.WorkspaceID); err != nil {
+	if _, _, err := client.CreateSnapshot(cfg.ProjectID, latestID, manifestHash, parentIDs, cfg.WorkspaceID); err != nil {
 		return err
 	}
 

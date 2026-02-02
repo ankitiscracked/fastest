@@ -23,7 +23,7 @@ The export maps fst concepts to git:
 ```bash
 fst export git               # Export snapshots to git
   --branch, -b <name>        # Branch name (default: workspace name)
-  --include-drift            # Include uncommitted changes as commit
+  --include-dirty            # Include uncommitted changes as commit
   --message, -m <msg>        # Commit message for drift
   --init                     # Initialize git repo if needed
   --rebuild                  # Rebuild all commits from scratch
@@ -57,7 +57,7 @@ fst export git
 
 ### Including Drift
 ```bash
-fst export git --include-drift -m "WIP changes"
+fst export git --include-dirty -m "WIP changes"
 ```
 
 After exporting snapshots, also commits current uncommitted changes.
@@ -113,7 +113,7 @@ fst export git
 ### Export with WIP Changes
 ```bash
 # Make some changes...
-fst export git --include-drift -m "Work in progress"
+fst export git --include-dirty -m "Work in progress"
 
 # Output:
 # ...
@@ -157,6 +157,6 @@ fst export git --branch feature
 
 ## Safety
 
-- Refuses if git has uncommitted changes (unless `--include-drift`)
+- Refuses if git has uncommitted changes (unless `--include-dirty`)
 - Mapping prevents duplicate commits
 - `--rebuild` for intentional fresh start

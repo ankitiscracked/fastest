@@ -1178,7 +1178,7 @@ Write a brief summary focusing on what was accomplished, not listing files. Use 
         },
         body: JSON.stringify({
           manifest_hash: args.manifestHash,
-          parent_snapshot_id: lastSnapshot?.id || null,
+          parent_snapshot_ids: lastSnapshot?.id ? [lastSnapshot.id] : [],
           workspace_id: args.workspaceId,
           source: 'system',
         }),

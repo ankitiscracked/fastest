@@ -624,7 +624,7 @@ projectRoutes.get('/:projectId', async (c) => {
       project_id: snapshots.projectId,
       workspace_id: snapshots.workspaceId,
       manifest_hash: snapshots.manifestHash,
-      parent_snapshot_id: snapshots.parentSnapshotId,
+      parent_snapshot_ids: snapshots.parentSnapshotIds,
       source: snapshots.source,
       summary: snapshots.summary,
       created_at: snapshots.createdAt,
@@ -692,10 +692,15 @@ projectRoutes.get('/:projectId', async (c) => {
         )))[0]?.total ?? 0
     : null;
 
+  const snapshotsWithParents = snapshotsResult.map(s => ({
+    ...s,
+    parent_snapshot_ids: JSON.parse(s.parent_snapshot_ids || '[]'),
+  }));
+
   return c.json({
     project,
     workspaces: workspacesResult,
-    snapshots: snapshotsResult,
+    snapshots: snapshotsWithParents,
     events: eventsResult,
     snapshot_insights: {
       last_merge_at: lastMergeAt,
@@ -966,7 +971,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
   const body = await c.req.json<{
     snapshot_id?: string;
     manifest_hash: string;
-    parent_snapshot_id?: string;
+    parent_snapshot_ids?: string[];
     workspace_id?: string;
     source?: 'cli' | 'web';
   }>();
@@ -987,6 +992,8 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'manifest_hash is required' } }, 422);
   }
 
+  const parentSnapshotIds = Array.from(new Set((body.parent_snapshot_ids || []).filter(Boolean)));
+
   if (body.workspace_id) {
     const wsResult = await db
       .select({ id: workspaces.id })
@@ -996,6 +1003,17 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
 
     if (!wsResult[0]) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'workspace_id does not belong to this project' } }, 422);
+    }
+  }
+
+  if (parentSnapshotIds.length > 0) {
+    const parents = await db
+      .select({ id: snapshots.id })
+      .from(snapshots)
+      .where(and(eq(snapshots.projectId, projectId), inArray(snapshots.id, parentSnapshotIds)));
+
+    if (parents.length !== parentSnapshotIds.length) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'parent_snapshot_ids must belong to this project' } }, 422);
     }
   }
 
@@ -1017,7 +1035,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
       project_id: snapshots.projectId,
       workspace_id: snapshots.workspaceId,
       manifest_hash: snapshots.manifestHash,
-      parent_snapshot_id: snapshots.parentSnapshotId,
+      parent_snapshot_ids: snapshots.parentSnapshotIds,
       source: snapshots.source,
       summary: snapshots.summary,
       created_at: snapshots.createdAt,
@@ -1030,7 +1048,17 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     if (existingById[0].manifest_hash !== body.manifest_hash) {
       return c.json({ error: { code: 'CONFLICT', message: 'snapshot_id already exists with different manifest_hash' } }, 409);
     }
-    return c.json({ snapshot: existingById[0], created: false });
+    const existingParents = JSON.parse(existingById[0].parent_snapshot_ids || '[]');
+    if (JSON.stringify(existingParents) !== JSON.stringify(parentSnapshotIds)) {
+      return c.json({ error: { code: 'CONFLICT', message: 'snapshot_id already exists with different parent_snapshot_ids' } }, 409);
+    }
+    return c.json({
+      snapshot: {
+        ...existingById[0],
+        parent_snapshot_ids: JSON.parse(existingById[0].parent_snapshot_ids || '[]'),
+      },
+      created: false,
+    });
   }
 
   await db.insert(snapshots).values({
@@ -1038,7 +1066,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     projectId,
     workspaceId: body.workspace_id || null,
     manifestHash: body.manifest_hash,
-    parentSnapshotId: body.parent_snapshot_id || null,
+    parentSnapshotIds: JSON.stringify(parentSnapshotIds),
     source,
     createdAt: now,
   });
@@ -1076,7 +1104,7 @@ projectRoutes.post('/:projectId/snapshots', async (c) => {
     project_id: projectId,
     workspace_id: body.workspace_id || null,
     manifest_hash: body.manifest_hash,
-    parent_snapshot_id: body.parent_snapshot_id || null,
+    parent_snapshot_ids: parentSnapshotIds,
     source,
     summary: null,
     created_at: now
@@ -1113,7 +1141,7 @@ projectRoutes.get('/:projectId/snapshots', async (c) => {
       project_id: snapshots.projectId,
       workspace_id: snapshots.workspaceId,
       manifest_hash: snapshots.manifestHash,
-      parent_snapshot_id: snapshots.parentSnapshotId,
+      parent_snapshot_ids: snapshots.parentSnapshotIds,
       source: snapshots.source,
       summary: snapshots.summary,
       created_at: snapshots.createdAt,
@@ -1123,7 +1151,12 @@ projectRoutes.get('/:projectId/snapshots', async (c) => {
     .orderBy(desc(snapshots.createdAt))
     .limit(limit);
 
-  return c.json({ snapshots: result });
+  const snapshotsWithParents = result.map(s => ({
+    ...s,
+    parent_snapshot_ids: JSON.parse(s.parent_snapshot_ids || '[]'),
+  }));
+
+  return c.json({ snapshots: snapshotsWithParents });
 });
 
 // =====================

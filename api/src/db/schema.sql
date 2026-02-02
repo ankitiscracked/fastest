@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
   manifest_hash TEXT NOT NULL,
-  parent_snapshot_id TEXT,
+  parent_snapshot_ids TEXT NOT NULL DEFAULT '[]',
   source TEXT NOT NULL DEFAULT 'cli',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

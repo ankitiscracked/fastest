@@ -1,10 +1,8 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -231,6 +229,15 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		}
 	}
 
+	if !dryRun {
+		mergeParents := normalizeMergeParents(localHead, remoteHead)
+		if len(mergeParents) >= 2 {
+			if err := config.WritePendingMergeParentsAt(root, mergeParents); err != nil {
+				fmt.Printf("Warning: Could not record merge parents: %v\n", err)
+			}
+		}
+	}
+
 	if err := runSnapshot("Sync merge", false, ""); err != nil {
 		return err
 	}
@@ -274,25 +281,19 @@ func filterMergeActions(actions *mergeActions, files []string) *mergeActions {
 	return filtered
 }
 
-type syncSnapshotMeta struct {
-	ID               string `json:"id"`
-	ParentSnapshotID string `json:"parent_snapshot_id"`
-}
-
 func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead string) (*manifest.Manifest, error) {
 	if localHead == "" || remoteHead == "" {
 		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
 	}
 
 	localAncestors := map[string]struct{}{}
-	snapshotsDir := config.GetSnapshotsDirAt(root)
 	current := localHead
 	for current != "" {
 		if _, ok := localAncestors[current]; ok {
 			break
 		}
 		localAncestors[current] = struct{}{}
-		parent, err := loadLocalSnapshotParent(snapshotsDir, current)
+		parent, err := config.SnapshotPrimaryParentIDAt(root, current)
 		if err != nil {
 			break
 		}
@@ -310,10 +311,10 @@ func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead st
 		if err != nil {
 			break
 		}
-		if snap.ParentSnapshotID == nil || *snap.ParentSnapshotID == "" {
+		if len(snap.ParentSnapshotIDs) == 0 {
 			break
 		}
-		remoteCurrent = *snap.ParentSnapshotID
+		remoteCurrent = snap.ParentSnapshotIDs[0]
 	}
 
 	if mergeBaseID == "" {
@@ -333,21 +334,6 @@ func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead st
 		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
 	}
 	return manifest.FromJSON(baseJSON)
-}
-
-func loadLocalSnapshotParent(snapshotsDir, snapshotID string) (string, error) {
-	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		return "", err
-	}
-
-	var meta syncSnapshotMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return "", err
-	}
-
-	return meta.ParentSnapshotID, nil
 }
 
 func buildSyncConflictContext(conflicts []mergeAction) string {

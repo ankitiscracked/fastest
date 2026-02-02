@@ -44,7 +44,7 @@ type SnapshotMeta struct {
 	WorkspaceID      string `json:"workspace_id"`
 	WorkspaceName    string `json:"workspace_name"`
 	ManifestHash     string `json:"manifest_hash"`
-	ParentSnapshotID string `json:"parent_snapshot_id"`
+	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
 	Message          string `json:"message"`
 	CreatedAt        string `json:"created_at"`
 	Files            int    `json:"files"`

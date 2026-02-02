@@ -1044,7 +1044,7 @@ Write a brief summary (1-2 sentences):`;
     projectId: conversation.project_id,
     workspaceId: conversation.workspace_id,
     manifestHash: currentManifestHash,
-    parentSnapshotId: conversation.fork_snapshot_id,
+    parentSnapshotIds: JSON.stringify(conversation.fork_snapshot_id ? [conversation.fork_snapshot_id] : []),
     source: 'web',
     summary,
     createdAt: now,

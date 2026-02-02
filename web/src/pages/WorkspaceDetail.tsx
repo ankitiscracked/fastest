@@ -74,7 +74,7 @@ export function WorkspaceDetail() {
     id: string;
     project_id: string;
     manifest_hash: string;
-    parent_snapshot_id: string | null;
+    parent_snapshot_ids: string[];
     source: string;
     summary: string | null;
     created_at: string;

@@ -1358,7 +1358,7 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
       projectId: workspace.project_id,
       workspaceId: workspaceId,
       manifestHash: currentSnapshot.manifest_hash,
-      parentSnapshotId: currentSnapshotId,
+      parentSnapshotIds: JSON.stringify(currentSnapshotId ? [currentSnapshotId] : []),
       source: 'system',
       createdAt: new Date().toISOString(),
     });
@@ -1547,7 +1547,7 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     projectId: workspace.project_id,
     workspaceId: workspaceId,
     manifestHash: newManifestHash,
-    parentSnapshotId: currentSnapshotId,
+    parentSnapshotIds: JSON.stringify(currentSnapshotId ? [currentSnapshotId] : []),
     source: 'web',
     createdAt: new Date().toISOString(),
   });
@@ -2470,7 +2470,7 @@ workspaceRoutes.get('/:workspaceId/snapshots', async (c) => {
       project_id: snapshots.projectId,
       workspace_id: snapshots.workspaceId,
       manifest_hash: snapshots.manifestHash,
-      parent_snapshot_id: snapshots.parentSnapshotId,
+      parent_snapshot_ids: snapshots.parentSnapshotIds,
       source: snapshots.source,
       summary: snapshots.summary,
       created_at: snapshots.createdAt,
@@ -2483,6 +2483,7 @@ workspaceRoutes.get('/:workspaceId/snapshots', async (c) => {
   // Mark which snapshot is current for this workspace
   const snapshotsWithStatus = snapshotResults.map(s => ({
     ...s,
+    parent_snapshot_ids: JSON.parse(s.parent_snapshot_ids || '[]'),
     is_current: s.id === workspace.current_snapshot_id,
   }));
 

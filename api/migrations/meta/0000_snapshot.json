@@ -677,12 +677,13 @@
           "notNull": true,
           "autoincrement": false
         },
-        "parent_snapshot_id": {
-          "name": "parent_snapshot_id",
+        "parent_snapshot_ids": {
+          "name": "parent_snapshot_ids",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
         },
         "source": {
           "name": "source",

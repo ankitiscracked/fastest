@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -170,26 +171,30 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 
 	// Save snapshot metadata
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	parentSnapshotID := cfg.CurrentSnapshotID
+	parents := resolveSnapshotParents(root, cfg)
+	parentIDsJSON, _ := json.Marshal(parents)
 	metadata := fmt.Sprintf(`{
   "id": "%s",
   "workspace_id": "%s",
   "workspace_name": "%s",
   "manifest_hash": "%s",
-  "parent_snapshot_id": "%s",
+  "parent_snapshot_ids": %s,
   "message": "%s",
   "agent": "%s",
   "created_at": "%s",
   "files": %d,
   "size": %d
-}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentSnapshotID, escapeJSON(message),
-		escapeJSON(agentName), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
+		escapeJSON(message), escapeJSON(agentName), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
 	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
 	cfg.CurrentSnapshotID = snapshotID
+	if err := config.ClearPendingMergeParentsAt(root); err != nil {
+		fmt.Printf("Warning: Could not clear pending merge parents: %v\n", err)
+	}
 
 	// Save config
 	if err := config.Save(cfg); err != nil {
@@ -381,19 +386,25 @@ func CreateAutoSnapshot(message string) (string, error) {
 
 	// Save metadata
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
+	parentSnapshotID := cfg.CurrentSnapshotID
+	parentIDs := []string{}
+	if parentSnapshotID != "" {
+		parentIDs = append(parentIDs, parentSnapshotID)
+	}
+	parentIDsJSON, _ := json.Marshal(parentIDs)
 	metadata := fmt.Sprintf(`{
   "id": "%s",
   "workspace_id": "%s",
   "workspace_name": "%s",
   "manifest_hash": "%s",
-  "parent_snapshot_id": "%s",
+  "parent_snapshot_ids": %s,
   "message": "%s",
   "agent": "",
   "created_at": "%s",
   "files": %d,
   "size": %d
-}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, cfg.CurrentSnapshotID, escapeJSON(message),
-		time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
+		escapeJSON(message), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
 
 	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 		return "", fmt.Errorf("failed to save metadata: %w", err)
@@ -551,6 +562,35 @@ func escapeJSON(s string) string {
 		}
 	}
 	return result
+}
+
+func resolveSnapshotParents(root string, cfg *config.ProjectConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	if parents, err := config.ReadPendingMergeParentsAt(root); err == nil && len(parents) > 0 {
+		return normalizeParentList(parents)
+	}
+	if cfg.CurrentSnapshotID != "" {
+		return []string{cfg.CurrentSnapshotID}
+	}
+	return nil
+}
+
+func normalizeParentList(parents []string) []string {
+	seen := make(map[string]struct{}, len(parents))
+	out := make([]string, 0, len(parents))
+	for _, p := range parents {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 func formatBytesLong(bytes int64) string {

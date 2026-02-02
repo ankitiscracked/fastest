@@ -65,7 +65,7 @@ export const snapshots = sqliteTable('snapshots', {
   projectId: text('project_id').notNull().references(() => projects.id),
   workspaceId: text('workspace_id'), // References workspaces.id (no FK to avoid circular ref)
   manifestHash: text('manifest_hash').notNull(),
-  parentSnapshotId: text('parent_snapshot_id'),
+  parentSnapshotIds: text('parent_snapshot_ids').notNull().default('[]'),
   source: text('source').notNull().default('cli'),
   summary: text('summary'), // LLM-generated description of changes
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),

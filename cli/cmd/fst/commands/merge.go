@@ -41,8 +41,8 @@ func newMergeCmd() *cobra.Command {
 	var dryRunSummary bool
 	var fromPath string
 	var noPreSnapshot bool
-	var autoPostSnapshot bool
 	var force bool
+	var abort bool
 
 	cmd := &cobra.Command{
 		Use:   "merge [workspace]",
@@ -65,11 +65,14 @@ Non-conflicting changes are applied automatically. For conflicts:
 
 Use --dry-run to preview the merge and see line-level conflict details.
 By default, a pre-merge snapshot is created only if the target has local changes.
-Use --auto-post-snapshot to save a snapshot after a successful conflict-free merge.
+After a successful conflict-free merge, a snapshot is created automatically.
 
 Workspace lookup uses the local registry. Use --from for explicit path.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if abort {
+				return runMergeAbort()
+			}
 			// Validate mutually exclusive options
 			modeCount := 0
 			if manual {
@@ -101,7 +104,7 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 			if workspaceName == "" && fromPath == "" {
 				return fmt.Errorf("must specify workspace name or --from path")
 			}
-			return runMerge(workspaceName, fromPath, mode, dryRun, dryRunSummary, noPreSnapshot, autoPostSnapshot, force)
+			return runMerge(workspaceName, fromPath, mode, dryRun, dryRunSummary, noPreSnapshot, force)
 		},
 	}
 
@@ -112,10 +115,24 @@ Workspace lookup uses the local registry. Use --from for explicit path.`,
 	cmd.Flags().BoolVar(&dryRunSummary, "agent-summary", false, "Generate LLM summary of conflicts (with --dry-run)")
 	cmd.Flags().StringVar(&fromPath, "from", "", "Source workspace path")
 	cmd.Flags().BoolVar(&noPreSnapshot, "no-pre-snapshot", false, "Skip pre-merge snapshot (only created if dirty)")
-	cmd.Flags().BoolVar(&autoPostSnapshot, "auto-post-snapshot", false, "Create a snapshot after a successful merge with no conflicts")
 	cmd.Flags().BoolVar(&force, "force", false, "Allow merge without a common base (two-way merge)")
+	cmd.Flags().BoolVar(&abort, "abort", false, "Abort an in-progress merge (clears pending merge state)")
 
 	return cmd
+}
+
+func runMergeAbort() error {
+	root, err := config.FindProjectRoot()
+	if err != nil {
+		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
+	}
+
+	if err := config.ClearPendingMergeParentsAt(root); err != nil {
+		return fmt.Errorf("failed to clear merge state: %w", err)
+	}
+
+	fmt.Println("Merge state cleared.")
+	return nil
 }
 
 // MergeResult tracks the result of a merge operation
@@ -128,7 +145,7 @@ type MergeResult struct {
 	ManualMode bool
 }
 
-func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool, dryRunSummary bool, noPreSnapshot bool, autoPostSnapshot bool, force bool) error {
+func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool, dryRunSummary bool, noPreSnapshot bool, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -526,13 +543,21 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 		fmt.Println()
 	}
 
-	// Optionally create a post-merge snapshot if successful and conflict-free.
-	if autoPostSnapshot && !dryRun && len(result.Conflicts) == 0 && len(result.Failed) == 0 && len(result.Applied) > 0 {
-		snapshotID, err := CreateAutoSnapshot(fmt.Sprintf("Merged %s", sourceDisplayName))
-		if err != nil {
+	mergeParents := normalizeMergeParents(currentSnapshotID, sourceSnapshotID)
+	if len(mergeParents) >= 2 && len(result.Failed) == 0 && (len(result.Applied) > 0 || len(result.Conflicts) > 0) {
+		if err := config.WritePendingMergeParentsAt(currentRoot, mergeParents); err != nil {
+			fmt.Printf("Warning: Could not record merge parents: %v\n", err)
+		}
+	}
+
+	autoSnapshotFailed := false
+	autoSnapshotSucceeded := false
+	if !dryRun && len(result.Conflicts) == 0 && len(result.Failed) == 0 && len(result.Applied) > 0 {
+		if err := runSnapshot(fmt.Sprintf("Merged %s", sourceDisplayName), false, ""); err != nil {
+			autoSnapshotFailed = true
 			fmt.Printf("Warning: Could not create post-merge snapshot: %v\n", err)
-		} else if snapshotID != "" {
-			fmt.Printf("Created snapshot %s\n", snapshotID)
+		} else {
+			autoSnapshotSucceeded = true
 		}
 	}
 
@@ -552,9 +577,17 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 		fmt.Println("  1. Edit the conflicting files (look for <<<<<<< markers)")
 		fmt.Println("  2. Remove the conflict markers")
 		fmt.Println("  3. Run 'fst snapshot' to save the merged state")
-	} else if len(result.Applied) > 0 {
+	} else if len(result.Applied) > 0 && autoSnapshotFailed {
 		fmt.Println()
 		fmt.Printf("Run 'fst snapshot -m \"Merged %s\"' to save.\n", sourceDisplayName)
+	}
+
+	if autoSnapshotSucceeded {
+		if refreshed, err := config.LoadAt(currentRoot); err == nil {
+			cfg = refreshed
+		} else {
+			fmt.Printf("Warning: Could not reload config after merge snapshot: %v\n", err)
+		}
 	}
 
 	// Update merge history to track this merge for future three-way merges
@@ -601,6 +634,22 @@ func updateMergeHistory(targetCfg, sourceCfg *config.ProjectConfig, sourceRoot s
 
 	// Save updated config
 	return config.Save(targetCfg)
+}
+
+func normalizeMergeParents(parents ...string) []string {
+	seen := make(map[string]struct{}, len(parents))
+	out := make([]string, 0, len(parents))
+	for _, p := range parents {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 // MergeAction represents a single file merge action
@@ -1004,10 +1053,10 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 
 // snapshotMeta represents snapshot metadata for merge base computation
 type snapshotMeta struct {
-	ID          string `json:"id"`
-	WorkspaceID string `json:"workspace_id"`
-	CreatedAt   string `json:"created_at"`
-	ParentID    string `json:"parent_snapshot_id"`
+	ID          string   `json:"id"`
+	WorkspaceID string   `json:"workspace_id"`
+	CreatedAt   string   `json:"created_at"`
+	ParentIDs   []string `json:"parent_snapshot_ids"`
 }
 
 // loadSnapshotMetaFromDir loads snapshot metadata from a specific snapshots directory
@@ -1036,9 +1085,6 @@ func getMergeBaseLocalSnapshots(currentRoot, sourceRoot string) (string, error) 
 		return "", fmt.Errorf("missing snapshots in one or both workspaces")
 	}
 
-	targetSnapshotsDir := config.GetSnapshotsDirAt(currentRoot)
-	sourceSnapshotsDir := config.GetSnapshotsDirAt(sourceRoot)
-
 	ancestors := map[string]struct{}{}
 	cur := currentHead
 	for cur != "" {
@@ -1046,11 +1092,11 @@ func getMergeBaseLocalSnapshots(currentRoot, sourceRoot string) (string, error) 
 			break
 		}
 		ancestors[cur] = struct{}{}
-		meta, err := loadSnapshotMetaFromDir(targetSnapshotsDir, cur)
+		parent, err := config.SnapshotPrimaryParentIDAt(currentRoot, cur)
 		if err != nil {
 			return "", fmt.Errorf("missing snapshot metadata for %s", cur)
 		}
-		cur = meta.ParentID
+		cur = parent
 	}
 
 	src := sourceHead
@@ -1058,11 +1104,11 @@ func getMergeBaseLocalSnapshots(currentRoot, sourceRoot string) (string, error) 
 		if _, ok := ancestors[src]; ok {
 			return src, nil
 		}
-		meta, err := loadSnapshotMetaFromDir(sourceSnapshotsDir, src)
+		parent, err := config.SnapshotPrimaryParentIDAt(sourceRoot, src)
 		if err != nil {
 			return "", fmt.Errorf("missing snapshot metadata for %s", src)
 		}
-		src = meta.ParentID
+		src = parent
 	}
 
 	return "", fmt.Errorf("no common ancestor found between workspaces")

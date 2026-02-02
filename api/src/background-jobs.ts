@@ -184,7 +184,7 @@ async function processWorkspace(
     projectId: ws.project_id,
     workspaceId: ws.workspace_id,
     manifestHash: currentManifestHash,
-    parentSnapshotId: snapshotResult[0]?.id || null,
+    parentSnapshotIds: JSON.stringify(snapshotResult[0]?.id ? [snapshotResult[0].id] : []),
     source: 'system', // Auto-created by background job
     createdAt: now,
   });

@@ -46,7 +46,7 @@ type SnapshotMeta struct {
 	WorkspaceID      string `json:"workspace_id"`
 	WorkspaceName    string `json:"workspace_name"`
 	ManifestHash     string `json:"manifest_hash"`
-	ParentSnapshotID string `json:"parent_snapshot_id"`
+	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
 	Message          string `json:"message"`
 	Agent            string `json:"agent"`
 	CreatedAt        string `json:"created_at"`
@@ -180,7 +180,11 @@ func walkSnapshotChain(snapshots []*SnapshotMeta, startID string) []*SnapshotMet
 			break
 		}
 		chain = append(chain, snap)
-		currentID = snap.ParentSnapshotID
+		if len(snap.ParentSnapshotIDs) > 0 {
+			currentID = snap.ParentSnapshotIDs[0]
+		} else {
+			currentID = ""
+		}
 	}
 
 	return chain

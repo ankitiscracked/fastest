@@ -60,7 +60,7 @@ export interface Snapshot {
   project_id: string;
   workspace_id: string | null;
   manifest_hash: string;
-  parent_snapshot_id: string | null;
+  parent_snapshot_ids: string[];
   source: 'cli' | 'web' | 'import' | 'system';
   summary: string | null;
   created_at: string;
@@ -296,7 +296,7 @@ export interface CreateWorkspaceResponse {
 export interface CreateSnapshotRequest {
   snapshot_id?: string;
   manifest_hash: string;
-  parent_snapshot_id?: string;
+  parent_snapshot_ids?: string[];
   workspace_id?: string;
   source: 'cli' | 'web';
 }

@@ -456,7 +456,7 @@ type Snapshot struct {
 	ProjectID        string  `json:"project_id"`
 	WorkspaceID      *string `json:"workspace_id"`
 	ManifestHash     string  `json:"manifest_hash"`
-	ParentSnapshotID *string `json:"parent_snapshot_id"`
+	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
 	Source           string  `json:"source"`
 	Summary          *string `json:"summary"`
 	CreatedAt        string  `json:"created_at"`
@@ -465,22 +465,23 @@ type Snapshot struct {
 type CreateSnapshotRequest struct {
 	SnapshotID       *string `json:"snapshot_id,omitempty"`
 	ManifestHash     string  `json:"manifest_hash"`
-	ParentSnapshotID *string `json:"parent_snapshot_id,omitempty"`
+	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
 	WorkspaceID      *string `json:"workspace_id,omitempty"`
 	Source           string  `json:"source,omitempty"`
 }
 
 // CreateSnapshot creates a new snapshot for a project
-func (c *Client) CreateSnapshot(projectID, snapshotID, manifestHash string, parentSnapshotID string, workspaceID string) (*Snapshot, bool, error) {
+func (c *Client) CreateSnapshot(projectID, snapshotID, manifestHash string, parentSnapshotIDs []string, workspaceID string) (*Snapshot, bool, error) {
+	if parentSnapshotIDs == nil {
+		parentSnapshotIDs = []string{}
+	}
 	req := CreateSnapshotRequest{
 		ManifestHash: manifestHash,
+		ParentSnapshotIDs: parentSnapshotIDs,
 		Source:      "cli",
 	}
 	if snapshotID != "" {
 		req.SnapshotID = &snapshotID
-	}
-	if parentSnapshotID != "" {
-		req.ParentSnapshotID = &parentSnapshotID
 	}
 	if workspaceID != "" {
 		req.WorkspaceID = &workspaceID

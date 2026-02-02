@@ -136,7 +136,6 @@ fst merge <workspace>        # Merge from another workspace
   --dry-run                  # Show plan without making changes
   --agent-summary            # Generate LLM summary of conflicts (with --dry-run)
   --no-pre-snapshot          # Skip pre-merge snapshot (only created if dirty)
-  --auto-post-snapshot       # Create a snapshot after a successful conflict-free merge
   --force                    # Allow merge without a common base (two-way merge)
 ```
 
@@ -145,6 +144,7 @@ fst merge <workspace>        # Merge from another workspace
 - The source working tree is ignored; only its latest snapshot is used.
 - The target workspace may have local changes, but the merge aborts if any of those would be overwritten.
 - If either workspace has no snapshots, you must run `fst snapshot` first.
+- After a successful conflict-free merge, a snapshot is created automatically.
 
 ### Sync
 
@@ -178,7 +178,7 @@ fst merge feature --dry-run  # Preview only
 ```bash
 fst export git               # Export snapshots to git
   --branch, -b <name>        # Branch name (default: workspace name)
-  --include-drift            # Include uncommitted changes
+  --include-dirty            # Include uncommitted changes
   --message, -m <msg>        # Drift commit message
   --init                     # Initialize git repo if needed
   --rebuild                  # Rebuild all commits from scratch
@@ -194,7 +194,7 @@ fst export git               # Export snapshots to git
 ```bash
 fst export git --init        # First export, creates repo
 fst export git               # Incremental export
-fst export git --include-drift -m "WIP"  # Include uncommitted
+fst export git --include-dirty -m "WIP"  # Include uncommitted
 ```
 
 ### Agents

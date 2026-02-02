@@ -423,6 +423,7 @@ gitignore := `# Fastest local data
 snapshots/
 manifests/
 *.log
+merge-parents.json
 `
 	gitignorePath := filepath.Join(configDir, ".gitignore")
 	if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
