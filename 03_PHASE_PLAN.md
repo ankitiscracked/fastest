@@ -100,7 +100,7 @@
 ## Phase G — Git Export ✓
 
 ### Deliverables
-- `fst export git` command
+- `fst git export` command
 - Snapshot chain → commit history
 - Incremental exports via mapping
 

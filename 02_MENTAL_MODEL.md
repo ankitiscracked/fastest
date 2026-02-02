@@ -122,7 +122,7 @@ fst merge agent-a
 fst merge agent-b --theirs  # prefer their version
 
 # 5. Export to git
-fst export git --branch main
+fst git export --branch main
 ```
 
 ---

@@ -47,7 +47,7 @@
 ### fast clone <project|snapshot>
 - Materialize snapshot to directory.
 
-### fast export git
+### fast git export
 - Snapshot → commit.
 - Env-less in V1.
 - Works offline.

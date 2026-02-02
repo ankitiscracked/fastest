@@ -70,7 +70,7 @@ fst snapshot -m "message"    # Capture snapshot
 fst drift                    # Show changes
 fst drift --agent-summary    # LLM summary (requires agent)
 fst merge feature            # Merge workspaces
-fst export git               # Export to git
+fst git export               # Export to git
 ```
 
 ## Agent Integration

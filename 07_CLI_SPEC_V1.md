@@ -176,7 +176,7 @@ fst merge feature --dry-run  # Preview only
 ### Export
 
 ```bash
-fst export git               # Export snapshots to git
+fst git export               # Export snapshots to git
   --branch, -b <name>        # Branch name (default: workspace name)
   --include-dirty            # Include uncommitted changes
   --message, -m <msg>        # Drift commit message
@@ -192,9 +192,19 @@ fst export git               # Export snapshots to git
 
 **Example:**
 ```bash
-fst export git --init        # First export, creates repo
-fst export git               # Incremental export
-fst export git --include-dirty -m "WIP"  # Include uncommitted
+fst git export --init        # First export, creates repo
+fst git export               # Incremental export
+fst git export --include-dirty -m "WIP"  # Include uncommitted
+```
+
+### Import
+
+```bash
+fst git import <repo-path>   # Import from a repo previously exported by fst
+  --branch, -b <name>        # Branch to import (default: from export metadata)
+  --workspace, -w <name>     # Target workspace name
+  --project, -p <name>       # Project name when creating a new project
+  --rebuild                  # Rebuild snapshots from scratch
 ```
 
 ### Agents

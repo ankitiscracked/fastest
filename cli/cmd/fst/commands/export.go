@@ -8,28 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
-
-func init() {
-	register(func(root *cobra.Command) { root.AddCommand(newExportCmd()) })
-}
-
-func newExportCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "export",
-		Short: "Export project to other formats",
-		Long:  `Export project snapshots and current state to other version control systems.`,
-	}
-
-	cmd.AddCommand(newExportGitCmd())
-
-	return cmd
-}
 
 func newExportGitCmd() *cobra.Command {
 	var branchName string
@@ -39,7 +24,7 @@ func newExportGitCmd() *cobra.Command {
 	var rebuild bool
 
 	cmd := &cobra.Command{
-		Use:   "git",
+		Use:   "export",
 		Short: "Export to Git repository",
 		Long: `Export workspace snapshots to Git commits.
 
@@ -52,10 +37,10 @@ The mapping is stored in .fst/export/git-map.json to enable incremental exports.
 Subsequent exports only create commits for new snapshots.
 
 Examples:
-  fst export git                     # Export to current branch
-  fst export git --branch feature    # Export to specific branch
-  fst export git --include-dirty     # Include uncommitted changes
-  fst export git --init              # Initialize git repo if needed`,
+  fst git export                     # Export to current branch
+  fst git export --branch feature    # Export to specific branch
+  fst git export --include-dirty     # Include uncommitted changes
+  fst git export --init              # Initialize git repo if needed`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runExportGit(branchName, includeDirty, message, initRepo, rebuild)
 		},
@@ -168,6 +153,9 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 
 	indexPath := filepath.Join(tempDir, "index")
 	git := newGitEnv(root, tempDir, indexPath)
+	metaDir := filepath.Join(tempDir, "meta")
+	metaIndexPath := filepath.Join(tempDir, "meta-index")
+	metaGit := newGitEnv(root, metaDir, metaIndexPath)
 
 	// Load or create mapping
 	var mapping *GitMapping
@@ -345,6 +333,10 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		return fmt.Errorf("failed to save mapping: %w", err)
 	}
 
+	if err := updateExportMetadata(metaGit, cfg, branchName); err != nil {
+		fmt.Printf("Warning: failed to update export metadata: %v\n", err)
+	}
+
 	fmt.Println()
 	if newCommits > 0 {
 		fmt.Printf("✓ Exported %d new commits to branch '%s'\n", newCommits, branchName)
@@ -484,6 +476,19 @@ type commitMeta struct {
 	CommitterDate  string
 }
 
+type exportMeta struct {
+	Version    int                            `json:"version"`
+	UpdatedAt  string                         `json:"updated_at,omitempty"`
+	ProjectID  string                         `json:"project_id,omitempty"`
+	Workspaces map[string]exportWorkspaceMeta `json:"workspaces,omitempty"`
+}
+
+type exportWorkspaceMeta struct {
+	WorkspaceID   string `json:"workspace_id"`
+	WorkspaceName string `json:"workspace_name,omitempty"`
+	Branch        string `json:"branch"`
+}
+
 func (m *commitMeta) env() map[string]string {
 	env := map[string]string{}
 	if m.AuthorName != "" {
@@ -523,6 +528,95 @@ func commitMetaFromSnapshot(s SnapshotInfo) *commitMeta {
 		meta.CommitterEmail = email
 	}
 	return meta
+}
+
+const (
+	fstMetaRef  = "refs/fst/meta"
+	fstMetaPath = ".fst-export/meta.json"
+)
+
+func updateExportMetadata(g gitEnv, cfg *config.ProjectConfig, branchName string) error {
+	if cfg == nil || cfg.WorkspaceID == "" {
+		return fmt.Errorf("missing workspace id for export metadata")
+	}
+
+	meta, err := loadExportMetadata(g)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if meta == nil {
+		meta = &exportMeta{Version: 1, Workspaces: make(map[string]exportWorkspaceMeta)}
+	}
+	if meta.Workspaces == nil {
+		meta.Workspaces = make(map[string]exportWorkspaceMeta)
+	}
+
+	meta.ProjectID = cfg.ProjectID
+	meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	meta.Workspaces[cfg.WorkspaceID] = exportWorkspaceMeta{
+		WorkspaceID:   cfg.WorkspaceID,
+		WorkspaceName: cfg.WorkspaceName,
+		Branch:        branchName,
+	}
+
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Join(g.workTree, ".fst-export"), 0755); err != nil {
+		return err
+	}
+	metaPath := filepath.Join(g.workTree, fstMetaPath)
+	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+		return err
+	}
+
+	if err := g.run("add", "-A"); err != nil {
+		return err
+	}
+
+	treeSHA, err := getGitTreeSHA(g)
+	if err != nil {
+		return err
+	}
+
+	parent, err := gitRefSHA(g, fstMetaRef)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	parents := []string{}
+	if parent != "" {
+		parents = append(parents, parent)
+	}
+
+	metaCommit := &commitMeta{
+		AuthorDate:    meta.UpdatedAt,
+		CommitterDate: meta.UpdatedAt,
+	}
+	sha, err := createGitCommitWithParents(g, treeSHA, "FST export metadata", parents, metaCommit)
+	if err != nil {
+		return err
+	}
+
+	return updateGitRef(g, fstMetaRef, sha)
+}
+
+func loadExportMetadata(g gitEnv) (*exportMeta, error) {
+	data, err := gitShowFileAtRef(g, fstMetaRef, fstMetaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var meta exportMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
 }
 
 func agentEmail(agent string) string {
@@ -787,6 +881,24 @@ func gitBranchExists(g gitEnv, branch string) (bool, error) {
 	return true, nil
 }
 
+func gitRefSHA(g gitEnv, ref string) (string, error) {
+	cmd := g.command("show-ref", "--verify", "--hash", ref)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			return "", os.ErrNotExist
+		}
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return "", fmt.Errorf("git show-ref --verify --hash %s: %s", ref, message)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func getGitCurrentBranch(g gitEnv) (string, error) {
 	return g.output("rev-parse", "--abbrev-ref", "HEAD")
 }
@@ -797,6 +909,18 @@ func getGitTreeSHA(g gitEnv) (string, error) {
 
 func getGitCommitTreeSHA(g gitEnv, sha string) (string, error) {
 	return g.output("rev-parse", sha+"^{tree}")
+}
+
+func gitShowFileAtRef(g gitEnv, ref, path string) ([]byte, error) {
+	content, err := g.output("show", ref+":"+path)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "Path") || strings.Contains(msg, "not a valid object name") || strings.Contains(msg, "invalid object name") || strings.Contains(msg, "unknown revision") || strings.Contains(msg, "bad object") {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	return []byte(content), nil
 }
 
 func createGitCommitWithParents(g gitEnv, treeSHA, message string, parents []string, meta *commitMeta) (string, error) {
@@ -816,11 +940,19 @@ func createGitCommitWithParents(g gitEnv, treeSHA, message string, parents []str
 }
 
 func updateGitBranchRef(g gitEnv, branch, sha string) error {
-	return g.run("update-ref", "refs/heads/"+branch, sha)
+	return updateGitRef(g, "refs/heads/"+branch, sha)
+}
+
+func updateGitRef(g gitEnv, ref, sha string) error {
+	return g.run("update-ref", ref, sha)
 }
 
 func deleteGitBranchRef(g gitEnv, branch string) error {
-	return g.run("update-ref", "-d", "refs/heads/"+branch)
+	return deleteGitRef(g, "refs/heads/"+branch)
+}
+
+func deleteGitRef(g gitEnv, ref string) error {
+	return g.run("update-ref", "-d", ref)
 }
 
 func resolveGitParentSHAs(g gitEnv, mapping *GitMapping, parentIDs []string) ([]string, error) {

@@ -21,7 +21,7 @@ The export maps fst concepts to git:
 ## Commands
 
 ```bash
-fst export git               # Export snapshots to git
+fst git export               # Export snapshots to git
   --branch, -b <name>        # Branch name (default: workspace name)
   --include-dirty            # Include uncommitted changes as commit
   --message, -m <msg>        # Commit message for drift
@@ -29,25 +29,34 @@ fst export git               # Export snapshots to git
   --rebuild                  # Rebuild all commits from scratch
 ```
 
+```bash
+fst git import <repo-path>   # Import from a repo previously exported by fst
+  --branch, -b <name>        # Branch to import (default: from export metadata)
+  --workspace, -w <name>     # Target workspace name
+  --project, -p <name>       # Project name when creating a new project
+  --rebuild                  # Rebuild snapshots from scratch
+```
+
 ## How It Works
 
 ### First Export
 ```bash
-fst export git --init
+fst git export --init
 ```
 
 1. Initialize git repo if needed
-2. Build snapshot chain (walk parent references)
-3. For each snapshot (oldest first):
-   - Restore files from cached blobs
+2. Build full snapshot DAG (walk all parent references)
+3. For each snapshot (parents before children):
+   - Restore files from cached blobs into a temporary work tree
    - Stage all files
    - Create commit with snapshot message
    - Record snapshot→commit mapping
 4. Save mapping to `.fst/export/git-map.json`
+5. Update metadata ref `refs/fst/meta` with `.fst-export/meta.json` (workspace↔branch map)
 
 ### Incremental Export
 ```bash
-fst export git
+fst git export
 ```
 
 1. Load existing mapping
@@ -57,10 +66,16 @@ fst export git
 
 ### Including Drift
 ```bash
-fst export git --include-dirty -m "WIP changes"
+fst git export --include-dirty -m "WIP changes"
 ```
 
 After exporting snapshots, also commits current uncommitted changes.
+
+## Import
+
+`fst git import` only accepts repos that contain the metadata ref created by export.
+It reads `refs/fst/meta` and reconstructs snapshots from commit history, preserving
+parent relationships and timestamps.
 
 ## Mapping File
 
@@ -75,12 +90,30 @@ After exporting snapshots, also commits current uncommitted changes.
 }
 ```
 
+## Repo Metadata Ref
+
+`refs/fst/meta` points to a commit containing `.fst-export/meta.json`:
+```json
+{
+  "version": 1,
+  "updated_at": "2026-02-02T00:00:00Z",
+  "project_id": "proj-123",
+  "workspaces": {
+    "ws-abc": {
+      "workspace_id": "ws-abc",
+      "workspace_name": "main",
+      "branch": "main"
+    }
+  }
+}
+```
+
 ## Examples
 
 ### Basic Export
 ```bash
 cd myproject
-fst export git --init
+fst git export --init
 
 # Output:
 # Initializing git repository...
@@ -93,13 +126,13 @@ fst export git --init
 
 ### Export to Specific Branch
 ```bash
-fst export git --branch feature-auth
+fst git export --branch feature-auth
 ```
 
 ### Re-export After More Snapshots
 ```bash
 fst snapshot -m "Added tests"
-fst export git
+fst git export
 
 # Output:
 # Found 4 snapshots to export
@@ -113,7 +146,7 @@ fst export git
 ### Export with WIP Changes
 ```bash
 # Make some changes...
-fst export git --include-dirty -m "Work in progress"
+fst git export --include-dirty -m "Work in progress"
 
 # Output:
 # ...
@@ -123,7 +156,7 @@ fst export git --include-dirty -m "Work in progress"
 
 ### Fresh Rebuild
 ```bash
-fst export git --rebuild
+fst git export --rebuild
 
 # Ignores existing mapping, recreates all commits
 ```
@@ -143,17 +176,15 @@ If mapped commits are missing (e.g., repo was reset):
 Each workspace can export to its own branch:
 ```bash
 cd myproject
-fst export git --branch main
+fst git export --branch main
 
 cd ../myproject-feature
-fst export git --branch feature
+fst git export --branch feature
 ```
 
 ## Limitations
 
-- **One-way**: No import from git
 - **No merge**: Export only, git handles merging
-- **Overwrites tree**: Each snapshot replaces working tree
 
 ## Safety
 

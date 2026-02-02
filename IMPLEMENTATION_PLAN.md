@@ -131,7 +131,7 @@ fastest/
 - `fst merge <source_workspace> --manual` — show conflicts for manual resolution
 
 ### Export
-- `fst export git [--snapshot <id>] [--repo <path>]`
+- `fst git export [--snapshot <id>] [--repo <path>]`
 
 ---
 
@@ -399,7 +399,7 @@ Output the merged file content only.
 ## Phase 10: Git Export + Polish
 
 ### Deliverables
-- `fst export git` (snapshot → git commit)
+- `fst git export` (snapshot → git commit)
 - Error messages and recovery
 - Homebrew formula
 - README + docs
