@@ -235,7 +235,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		return err
 	}
 
-	return nil
+	return deps.UploadSnapshot(client, root, cfg)
 }
 
 func filterMergeActions(actions *mergeActions, files []string) *mergeActions {

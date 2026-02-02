@@ -1,12 +1,17 @@
 package commands
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/anthropics/fastest/cli/internal/agent"
+	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
@@ -17,26 +22,65 @@ func init() {
 
 func newPullCmd() *cobra.Command {
 	var snapshotID string
-	var force bool
+	var hard bool
+	var manual bool
+	var theirs bool
+	var ours bool
+	var dryRun bool
+	var dryRunSummary bool
 
 	cmd := &cobra.Command{
-		Use:   "pull",
+		Use:   "pull [workspace]",
 		Short: "Pull latest snapshot from cloud",
 		Long: `Pull the latest snapshot for this workspace from the cloud.
 
-By default, pull refuses to overwrite local changes. Use --force to overwrite.`,
+By default, pull merges the remote snapshot into your local workspace.
+Use --hard to replace local files with the remote snapshot.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPull(snapshotID, force)
+			modeCount := 0
+			if manual {
+				modeCount++
+			}
+			if theirs {
+				modeCount++
+			}
+			if ours {
+				modeCount++
+			}
+			if modeCount > 1 {
+				return fmt.Errorf("only one of --manual, --theirs, --ours can be specified")
+			}
+
+			mode := ConflictModeAgent // default
+			if manual {
+				mode = ConflictModeManual
+			} else if theirs {
+				mode = ConflictModeTheirs
+			} else if ours {
+				mode = ConflictModeOurs
+			}
+
+			var workspaceName string
+			if len(args) > 0 {
+				workspaceName = args[0]
+			}
+			return runPull(workspaceName, snapshotID, hard, mode, dryRun, dryRunSummary)
 		},
 	}
 
 	cmd.Flags().StringVar(&snapshotID, "snapshot", "", "Pull a specific snapshot ID")
-	cmd.Flags().BoolVar(&force, "force", false, "Overwrite local changes")
+	cmd.Flags().BoolVar(&hard, "hard", false, "Replace local files with the remote snapshot (destructive)")
+	cmd.Flags().BoolVar(&manual, "manual", false, "Create conflict markers for manual resolution")
+	cmd.Flags().BoolVar(&theirs, "theirs", false, "Take remote version for conflicts")
+	cmd.Flags().BoolVar(&ours, "ours", false, "Keep local version for conflicts")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview pull with line-level conflict details")
+	cmd.Flags().BoolVar(&dryRunSummary, "agent-summary", false, "Generate LLM summary of conflicts (with --dry-run)")
 
 	return cmd
 }
 
-func runPull(snapshotID string, force bool) error {
+func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMode, dryRun bool, dryRunSummary bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -58,7 +102,26 @@ func runPull(snapshotID string, force bool) error {
 	client := deps.NewAPIClient(token, cfg)
 
 	if snapshotID == "" {
-		ws, err := client.GetWorkspace(cfg.WorkspaceID)
+		var remoteWorkspaceID string
+		if workspaceName == "" {
+			remoteWorkspaceID = cfg.WorkspaceID
+		} else {
+			_, workspaces, err := client.GetProject(cfg.ProjectID)
+			if err != nil {
+				return fmt.Errorf("failed to fetch project: %w", err)
+			}
+			for _, ws := range workspaces {
+				if ws.Name == workspaceName || ws.ID == workspaceName {
+					remoteWorkspaceID = ws.ID
+					break
+				}
+			}
+			if remoteWorkspaceID == "" {
+				return fmt.Errorf("workspace '%s' not found in project", workspaceName)
+			}
+		}
+
+		ws, err := client.GetWorkspace(remoteWorkspaceID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch workspace: %w", err)
 		}
@@ -76,14 +139,9 @@ func runPull(snapshotID string, force bool) error {
 			return fmt.Errorf("failed to read local snapshots: %w", err)
 		}
 	}
-	if !force {
-		dirty, err := isWorkingTreeDirty(root, latestLocalID)
-		if err != nil {
-			return err
-		}
-		if dirty {
-			return fmt.Errorf("working tree has un-snapshotted changes; run 'fst snapshot' or use --force")
-		}
+	dirty, err := isWorkingTreeDirty(root, latestLocalID)
+	if err != nil {
+		return err
 	}
 
 	snapshot, err := client.GetSnapshot(snapshotID)
@@ -101,24 +159,186 @@ func runPull(snapshotID string, force bool) error {
 		return fmt.Errorf("failed to parse manifest: %w", err)
 	}
 
-	if err := removeFilesNotInManifest(root, m); err != nil {
+	if hard {
+		if !confirmDestructivePull(snapshotID) {
+			return fmt.Errorf("pull cancelled")
+		}
+
+		if err := removeFilesNotInManifest(root, m); err != nil {
+			return err
+		}
+
+		if err := materializeSnapshot(client, root, m); err != nil {
+			return err
+		}
+
+		if err := writeSnapshotFiles(root, snapshot, manifestJSON, m, cfg.WorkspaceName); err != nil {
+			return err
+		}
+
+		cfg.Mode = "cloud"
+		cfg.CurrentSnapshotID = snapshotID
+		_ = config.SaveAt(root, cfg)
+
+		fmt.Println("✓ Pull complete!")
+		fmt.Printf("  Snapshot:  %s\n", snapshotID)
+		return nil
+	}
+
+	// Merge remote snapshot into local workspace (sync-like behavior)
+	if dirty {
+		if snapshotID, err := CreateAutoSnapshot("Before pull"); err != nil {
+			fmt.Printf("Warning: Could not create pre-pull snapshot: %v\n", err)
+		} else if snapshotID != "" {
+			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo pull)\n", snapshotID)
+		}
+	}
+
+	tempDir, err := os.MkdirTemp("", "fst-pull-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	if err := materializeSnapshot(client, tempDir, m); err != nil {
 		return err
 	}
 
-	if err := materializeSnapshot(client, root, m); err != nil {
+	baseManifest, err := getSyncMergeBaseManifest(client, root, latestLocalID, snapshotID)
+	if err != nil {
 		return err
 	}
 
-	if err := writeSnapshotFiles(root, snapshot, manifestJSON, m, cfg.WorkspaceName); err != nil {
+	currentManifest, err := manifest.Generate(root, false)
+	if err != nil {
+		return fmt.Errorf("failed to scan local files: %w", err)
+	}
+
+	sourceManifest, err := manifest.Generate(tempDir, false)
+	if err != nil {
+		return fmt.Errorf("failed to scan remote files: %w", err)
+	}
+
+	mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest)
+	fmt.Println("Merge plan:")
+	fmt.Printf("  Apply from remote:  %d files\n", len(mergeActions.toApply))
+	fmt.Printf("  Conflicts:          %d files\n", len(mergeActions.conflicts))
+	fmt.Printf("  Already in sync:    %d files\n", len(mergeActions.inSync))
+
+	if len(mergeActions.toApply) == 0 && len(mergeActions.conflicts) == 0 {
+		fmt.Println("✓ Nothing to pull - already aligned")
+		return nil
+	}
+
+	if dryRun {
+		printMergePlan(mergeActions)
+		if dryRunSummary && len(mergeActions.conflicts) > 0 {
+			preferredAgent, err := agent.GetPreferredAgent()
+			if err == nil {
+				conflictContext := buildSyncConflictContext(mergeActions.conflicts)
+				summaryText, err := agent.InvokeConflictSummary(preferredAgent, conflictContext)
+				if err == nil && summaryText != "" {
+					fmt.Println()
+					fmt.Println("Summary:")
+					fmt.Println(summaryText)
+				}
+			}
+		}
+		return nil
+	}
+
+	for _, action := range mergeActions.toApply {
+		if err := applyChange(root, tempDir, action); err != nil {
+			return err
+		}
+	}
+
+	if len(mergeActions.conflicts) > 0 {
+		switch mode {
+		case ConflictModeAgent:
+			preferredAgent, err := agent.GetPreferredAgent()
+			if err != nil {
+				return err
+			}
+			for _, conflict := range mergeActions.conflicts {
+				if err := resolveConflictWithAgent(root, tempDir, conflict, preferredAgent, baseManifest); err != nil {
+					return err
+				}
+			}
+		case ConflictModeManual:
+			for _, conflict := range mergeActions.conflicts {
+				if err := createConflictMarkers(root, tempDir, conflict); err != nil {
+					return err
+				}
+			}
+			fmt.Println("Conflicts written with markers. Resolve them, then run 'fst snapshot'.")
+			return nil
+		case ConflictModeTheirs:
+			for _, conflict := range mergeActions.conflicts {
+				if err := applyChange(root, tempDir, conflict); err != nil {
+					return err
+				}
+			}
+		case ConflictModeOurs:
+			// Keep local version; nothing to do
+		}
+	}
+
+	if err := runSnapshot("Pull merge", false, ""); err != nil {
 		return err
 	}
 
-	cfg.Mode = "cloud"
-	cfg.CurrentSnapshotID = snapshotID
-	_ = config.SaveAt(root, cfg)
+	return deps.UploadSnapshot(client, root, cfg)
+}
 
-	fmt.Println("✓ Pull complete!")
-	fmt.Printf("  Snapshot:  %s\n", snapshotID)
+func confirmDestructivePull(snapshotID string) bool {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("This will replace local files with remote snapshot %s and discard local changes. Continue? [y/N] ", snapshotID)
+	resp, _ := reader.ReadString('\n')
+	resp = strings.TrimSpace(strings.ToLower(resp))
+	return resp == "y" || resp == "yes"
+}
+
+func uploadLatestSnapshotToCloud(client *api.Client, root string, cfg *config.ProjectConfig) error {
+	latestID, err := config.GetLatestSnapshotIDAt(root)
+	if err != nil || latestID == "" {
+		return fmt.Errorf("failed to determine latest snapshot for upload")
+	}
+
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, latestID)
+	if err != nil {
+		return err
+	}
+
+	manifestsDir := config.GetManifestsDirAt(root)
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
+	manifestJSON, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("failed to read manifest: %w", err)
+	}
+
+	m, err := manifest.FromJSON(manifestJSON)
+	if err != nil {
+		return fmt.Errorf("failed to parse manifest: %w", err)
+	}
+
+	if err := uploadSnapshotToCloud(client, root, m, manifestHash, manifestJSON); err != nil {
+		return err
+	}
+
+	parentID := ""
+	metaPath := filepath.Join(config.GetSnapshotsDirAt(root), latestID+".meta.json")
+	if metaJSON, err := os.ReadFile(metaPath); err == nil {
+		var meta struct {
+			ParentSnapshotID string `json:"parent_snapshot_id"`
+		}
+		_ = json.Unmarshal(metaJSON, &meta)
+		parentID = meta.ParentSnapshotID
+	}
+
+	if _, _, err := client.CreateSnapshot(cfg.ProjectID, latestID, manifestHash, parentID, cfg.WorkspaceID); err != nil {
+		return err
+	}
 
 	return nil
 }

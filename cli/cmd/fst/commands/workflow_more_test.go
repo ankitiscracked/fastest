@@ -285,6 +285,9 @@ func TestSyncAlreadyInSync(t *testing.T) {
 			client.SetBaseURL(server.URL)
 			return client
 		},
+		UploadSnapshot: func(*api.Client, string, *config.ProjectConfig) error {
+			return nil
+		},
 	})
 	defer ResetDeps()
 
@@ -345,6 +348,7 @@ func TestSyncDownloadsManifestAndBlobsDryRun(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Debugging: uncomment if needed
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v1/workspaces/"):
 			resp := map[string]interface{}{
@@ -369,7 +373,39 @@ func TestSyncDownloadsManifestAndBlobsDryRun(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(resp)
 		case strings.HasPrefix(r.URL.Path, "/v1/blobs/manifests/"):
 			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPut {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			_, _ = w.Write(manifestJSON)
+		case strings.HasPrefix(r.URL.Path, "/v1/blobs/exists"):
+			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			resp := map[string]interface{}{
+				"missing": []string{hashStr},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case strings.HasPrefix(r.URL.Path, "/v1/blobs/presign-upload"):
+			resp := map[string]interface{}{
+				"urls": map[string]string{
+					hashStr: "/upload/" + hashStr,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case strings.HasPrefix(r.URL.Path, "/upload/"):
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/v1/projects/") && strings.HasSuffix(r.URL.Path, "/snapshots"):
+			resp := map[string]interface{}{
+				"snapshot": map[string]interface{}{
+					"id":            "snap-uploaded",
+					"project_id":    cfg.ProjectID,
+					"manifest_hash": hashStr,
+					"source":        "cli",
+					"created_at":    "2024-01-02T00:00:00Z",
+				},
+				"created": true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 		case r.URL.Path == "/v1/blobs/presign-download":
 			resp := map[string]interface{}{
 				"urls": map[string]string{
@@ -391,6 +427,9 @@ func TestSyncDownloadsManifestAndBlobsDryRun(t *testing.T) {
 			client := api.NewClient(token)
 			client.SetBaseURL(server.URL)
 			return client
+		},
+		UploadSnapshot: func(*api.Client, string, *config.ProjectConfig) error {
+			return nil
 		},
 	})
 	defer ResetDeps()
@@ -615,7 +654,37 @@ func TestSyncDryRunShowsConflicts(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(resp)
 		case strings.HasPrefix(r.URL.Path, "/v1/blobs/manifests/"):
 			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPut {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			_, _ = w.Write(manifestJSON)
+		case strings.HasPrefix(r.URL.Path, "/v1/blobs/exists"):
+			resp := map[string]interface{}{
+				"missing": []string{hashStr},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case strings.HasPrefix(r.URL.Path, "/v1/blobs/presign-upload"):
+			resp := map[string]interface{}{
+				"urls": map[string]string{
+					hashStr: "/upload/" + hashStr,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case strings.HasPrefix(r.URL.Path, "/upload/"):
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/v1/projects/") && strings.HasSuffix(r.URL.Path, "/snapshots"):
+			resp := map[string]interface{}{
+				"snapshot": map[string]interface{}{
+					"id":            "snap-uploaded",
+					"project_id":    cfg.ProjectID,
+					"manifest_hash": hashStr,
+					"source":        "cli",
+					"created_at":    "2024-01-02T00:00:00Z",
+				},
+				"created": true,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 		case r.URL.Path == "/v1/blobs/presign-download":
 			resp := map[string]interface{}{
 				"urls": map[string]string{
@@ -637,6 +706,9 @@ func TestSyncDryRunShowsConflicts(t *testing.T) {
 			client := api.NewClient(token)
 			client.SetBaseURL(server.URL)
 			return client
+		},
+		UploadSnapshot: func(*api.Client, string, *config.ProjectConfig) error {
+			return nil
 		},
 	})
 	defer ResetDeps()
@@ -738,6 +810,9 @@ func TestSyncApplyNonConflicting(t *testing.T) {
 			client := api.NewClient(token)
 			client.SetBaseURL(server.URL)
 			return client
+		},
+		UploadSnapshot: func(*api.Client, string, *config.ProjectConfig) error {
+			return nil
 		},
 	})
 	defer ResetDeps()

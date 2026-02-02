@@ -15,6 +15,7 @@ type Deps struct {
 	AuthClearToken  func() error
 	AuthFormatError func(error) error
 	NewAPIClient    func(string, *config.ProjectConfig) *api.Client
+	UploadSnapshot  func(*api.Client, string, *config.ProjectConfig) error
 	OpenBrowser     func(string) error
 	Sleep           func(time.Duration)
 	Now             func() time.Time
@@ -26,6 +27,7 @@ var defaultDeps = Deps{
 	AuthClearToken:  auth.ClearToken,
 	AuthFormatError: auth.FormatKeyringError,
 	NewAPIClient:    newAPIClient,
+	UploadSnapshot:  uploadLatestSnapshotToCloud,
 	OpenBrowser:     openBrowser,
 	Sleep:           time.Sleep,
 	Now:             time.Now,
@@ -48,6 +50,9 @@ func normalizeDeps(d Deps) Deps {
 	}
 	if d.NewAPIClient == nil {
 		d.NewAPIClient = defaultDeps.NewAPIClient
+	}
+	if d.UploadSnapshot == nil {
+		d.UploadSnapshot = defaultDeps.UploadSnapshot
 	}
 	if d.OpenBrowser == nil {
 		d.OpenBrowser = defaultDeps.OpenBrowser

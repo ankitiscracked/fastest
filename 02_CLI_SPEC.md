@@ -42,7 +42,7 @@
 
 ### fast pull
 - Fetch latest snapshot metadata.
-- Update local status.
+- Merge remote snapshot into the local workspace.
 
 ### fast clone <project|snapshot>
 - Materialize snapshot to directory.

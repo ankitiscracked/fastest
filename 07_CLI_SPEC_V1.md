@@ -76,9 +76,14 @@ fst snapshot                 # Capture current state
   --agent-summary            # Generate message using local coding agent
   --agent <name>             # Record which AI agent made these changes
 
-fst pull                     # Pull latest snapshot from cloud
+fst pull [workspace]         # Pull latest snapshot from cloud
   --snapshot <id>            # Pull a specific snapshot
-  --force                    # Overwrite local changes
+  --hard                     # Replace local files with the remote snapshot (destructive)
+  --manual                   # Write conflict markers
+  --theirs                   # Take remote version for conflicts
+  --ours                     # Keep local version for conflicts
+  --dry-run                  # Show plan without making changes
+  --agent-summary            # Generate LLM summary of conflicts (with --dry-run)
 
 fst clone <project|snapshot> # Clone to new directory
   --to, -t <path>            # Target directory
@@ -150,6 +155,8 @@ fst sync                     # Sync local and remote for this workspace
   --ours                     # Keep local version for conflicts
   --files <list>             # Only sync specific files
   --dry-run                  # Show plan without making changes
+  --agent-summary            # Generate LLM summary of conflicts (with --dry-run)
+  --no-snapshot              # Skip pre-sync snapshot
 ```
 
 **Conflict resolution modes:**
