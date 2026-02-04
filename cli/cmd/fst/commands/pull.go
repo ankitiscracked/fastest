@@ -100,6 +100,14 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 
 	client := deps.NewAPIClient(token, cfg)
 
+	if snapshotID != "" && strings.HasPrefix(snapshotID, "snap-") && len(snapshotID) < 30 {
+		if resolved, err := config.ResolveSnapshotIDAt(root, snapshotID); err == nil {
+			snapshotID = resolved
+		} else {
+			return fmt.Errorf("snapshot %q not found locally; use full snapshot ID", snapshotID)
+		}
+	}
+
 	if snapshotID == "" {
 		var remoteWorkspaceID string
 		if workspaceName == "" {
@@ -109,15 +117,11 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 			if err != nil {
 				return fmt.Errorf("failed to fetch project: %w", err)
 			}
-			for _, ws := range workspaces {
-				if ws.Name == workspaceName || ws.ID == workspaceName {
-					remoteWorkspaceID = ws.ID
-					break
-				}
+			ws, err := resolveWorkspaceFromAPI(workspaceName, workspaces)
+			if err != nil {
+				return err
 			}
-			if remoteWorkspaceID == "" {
-				return fmt.Errorf("workspace '%s' not found in project", workspaceName)
-			}
+			remoteWorkspaceID = ws.ID
 		}
 
 		ws, err := client.GetWorkspace(remoteWorkspaceID)

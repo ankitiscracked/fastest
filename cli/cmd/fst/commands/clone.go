@@ -57,7 +57,15 @@ func runClone(target string, targetDir string) error {
 			return err
 		}
 
-		project, _, err := client.GetProject(target)
+		projects, err := client.ListProjects()
+		if err != nil {
+			return fmt.Errorf("failed to list projects: %w", err)
+		}
+		project, err := resolveProjectFromAPI(target, projects)
+		if err != nil {
+			return err
+		}
+		project, _, err = client.GetProject(project.ID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch project: %w", err)
 		}
@@ -255,16 +263,16 @@ func writeSnapshotFiles(root string, snapshot *api.Snapshot, manifestJSON []byte
 
 	metadataPath := filepath.Join(snapshotsDir, snapshot.ID+".meta.json")
 	metadata := map[string]interface{}{
-		"id":                 snapshot.ID,
-		"workspace_id":       snapshot.WorkspaceID,
-		"workspace_name":     workspaceName,
-		"manifest_hash":      snapshot.ManifestHash,
+		"id":                  snapshot.ID,
+		"workspace_id":        snapshot.WorkspaceID,
+		"workspace_name":      workspaceName,
+		"manifest_hash":       snapshot.ManifestHash,
 		"parent_snapshot_ids": snapshot.ParentSnapshotIDs,
-		"message":            "",
-		"agent":              "",
-		"created_at":         snapshot.CreatedAt,
-		"files":              m.FileCount(),
-		"size":               m.TotalSize(),
+		"message":             "",
+		"agent":               "",
+		"created_at":          snapshot.CreatedAt,
+		"files":               m.FileCount(),
+		"size":                m.TotalSize(),
 	}
 	encoded, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {

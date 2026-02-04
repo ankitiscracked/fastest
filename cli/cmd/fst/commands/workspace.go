@@ -539,20 +539,12 @@ func runSetMain(workspaceName string) error {
 		if err != nil {
 			return fmt.Errorf("failed to fetch project: %w", err)
 		}
-
-		found := false
-		for _, ws := range workspaces {
-			if ws.Name == workspaceName || ws.ID == workspaceName {
-				targetWorkspaceID = ws.ID
-				targetWorkspaceName = ws.Name
-				found = true
-				break
-			}
+		ws, err := resolveWorkspaceFromAPI(workspaceName, workspaces)
+		if err != nil {
+			return err
 		}
-
-		if !found {
-			return fmt.Errorf("workspace '%s' not found in project", workspaceName)
-		}
+		targetWorkspaceID = ws.ID
+		targetWorkspaceName = ws.Name
 	}
 
 	// Set as main workspace

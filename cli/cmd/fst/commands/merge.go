@@ -190,12 +190,10 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 		}
 
 		var found *RegisteredWorkspace
-		for _, w := range registry.Workspaces {
-			if (w.Name == sourceName || w.ID == sourceName) && w.ProjectID == cfg.ProjectID {
-				wCopy := w
-				found = &wCopy
-				break
-			}
+		if w, ok, err := resolveWorkspaceFromRegistry(sourceName, registry.Workspaces, cfg.ProjectID); err != nil {
+			return err
+		} else if ok {
+			found = w
 		}
 
 		if found == nil {
@@ -207,14 +205,14 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 				client := deps.NewAPIClient(token, cfg)
 				_, cloudWorkspaces, err := client.GetProject(cfg.ProjectID)
 				if err == nil {
-					for _, ws := range cloudWorkspaces {
-						if ws.Name == sourceName || ws.ID == sourceName {
-							if ws.LocalPath != nil && *ws.LocalPath != "" {
-								sourceRoot = *ws.LocalPath
-								sourceDisplayName = ws.Name
-								break
-							}
+					ws, err := resolveWorkspaceFromAPI(sourceName, cloudWorkspaces)
+					if err != nil {
+						if !strings.Contains(err.Error(), "not found") {
+							return err
 						}
+					} else if ws.LocalPath != nil && *ws.LocalPath != "" {
+						sourceRoot = *ws.LocalPath
+						sourceDisplayName = ws.Name
 					}
 				}
 			}
@@ -252,33 +250,6 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 		warnIfRemoteHeadDiff("source", client, sourceCfg, sourceRoot)
 	}
 
-	// Determine merge base (common ancestor) from local snapshot history
-	mergeBaseID, err := getMergeBaseLocalSnapshots(currentRoot, sourceRoot)
-	var baseManifest *manifest.Manifest
-	if err != nil {
-		if !force {
-			return fmt.Errorf("could not determine merge base: %w\nRun 'fst snapshot' in both workspaces or re-run with --force for a two-way merge", err)
-		}
-		fmt.Printf("Warning: Could not determine merge base: %v\n", err)
-		fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
-		baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
-	} else {
-		// Try to load from current workspace's manifests first, then source's
-		baseManifest, err = loadManifestByID(currentRoot, mergeBaseID)
-		if err != nil {
-			// Try source workspace's manifests
-			baseManifest, err = loadManifestByID(sourceRoot, mergeBaseID)
-		}
-		if err != nil {
-			fmt.Printf("Warning: Could not load fork snapshot %s: %v\n", mergeBaseID, err)
-			fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
-			baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
-		} else {
-			fmt.Printf("Using merge base: %s\n", mergeBaseID)
-		}
-	}
-
-	// Load snapshot manifests for current and source workspaces
 	currentSnapshotID := cfg.CurrentSnapshotID
 	if currentSnapshotID == "" {
 		currentSnapshotID, err = config.GetLatestSnapshotIDAt(currentRoot)
@@ -307,6 +278,32 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 	sourceManifest, err := loadManifestByID(sourceRoot, sourceSnapshotID)
 	if err != nil {
 		return fmt.Errorf("failed to load source snapshot manifest: %w", err)
+	}
+
+	// Determine merge base (common ancestor) from snapshot DAG
+	mergeBaseID, err := getMergeBaseDAG(currentRoot, sourceRoot, currentSnapshotID, sourceSnapshotID)
+	var baseManifest *manifest.Manifest
+	if err != nil {
+		if !force {
+			return fmt.Errorf("could not determine merge base: %w\nRun 'fst snapshot' in both workspaces or re-run with --force for a two-way merge", err)
+		}
+		fmt.Printf("Warning: Could not determine merge base: %v\n", err)
+		fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
+		baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
+	} else {
+		// Try to load from current workspace's manifests first, then source's
+		baseManifest, err = loadManifestByID(currentRoot, mergeBaseID)
+		if err != nil {
+			// Try source workspace's manifests
+			baseManifest, err = loadManifestByID(sourceRoot, mergeBaseID)
+		}
+		if err != nil {
+			fmt.Printf("Warning: Could not load fork snapshot %s: %v\n", mergeBaseID, err)
+			fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
+			baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
+		} else {
+			fmt.Printf("Using merge base: %s\n", mergeBaseID)
+		}
 	}
 
 	// Compute three-way diff
@@ -544,9 +541,16 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 	}
 
 	mergeParents := normalizeMergeParents(currentSnapshotID, sourceSnapshotID)
-	if len(mergeParents) >= 2 && len(result.Failed) == 0 && (len(result.Applied) > 0 || len(result.Conflicts) > 0) {
+	if !dryRun && len(mergeParents) >= 2 && len(result.Failed) == 0 && (len(result.Applied) > 0 || len(result.Conflicts) > 0) {
 		if err := config.WritePendingMergeParentsAt(currentRoot, mergeParents); err != nil {
 			fmt.Printf("Warning: Could not record merge parents: %v\n", err)
+		}
+	}
+	if !dryRun && len(result.Failed) > 0 {
+		if err := config.ClearPendingMergeParentsAt(currentRoot); err != nil {
+			fmt.Printf("Warning: Could not clear pending merge parents: %v\n", err)
+		} else {
+			fmt.Println("Warning: Merge had failures; merge parents were not recorded.")
 		}
 	}
 
@@ -590,50 +594,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 		}
 	}
 
-	// Update merge history to track this merge for future three-way merges
-	if err := updateMergeHistory(cfg, sourceCfg, sourceRoot); err != nil {
-		fmt.Printf("Warning: Could not update merge history: %v\n", err)
-	}
-
 	return nil
-}
-
-// updateMergeHistory records the merge in the target's config for future merges.
-// It also inherits the source's merge history for transitive tracking.
-func updateMergeHistory(targetCfg, sourceCfg *config.ProjectConfig, sourceRoot string) error {
-	// Get source's latest snapshot ID
-	sourceLatestID, err := config.GetLatestSnapshotIDAt(sourceRoot)
-	if err != nil || sourceLatestID == "" {
-		return fmt.Errorf("could not determine source's latest snapshot")
-	}
-
-	// Initialize merge history if needed
-	if targetCfg.MergeHistory == nil {
-		targetCfg.MergeHistory = make(map[string]config.MergeRecord)
-	}
-
-	// Record direct merge from source
-	targetCfg.MergeHistory[sourceCfg.WorkspaceID] = config.MergeRecord{
-		LastMergedSnapshot: sourceLatestID,
-		MergedAt:           time.Now().UTC().Format(time.RFC3339),
-	}
-
-	// Inherit source's merge history (transitive tracking)
-	// This allows us to know about workspaces that were merged into source
-	if sourceCfg.MergeHistory != nil {
-		for wsID, record := range sourceCfg.MergeHistory {
-			// Only inherit if we don't already have a more recent record
-			if existing, ok := targetCfg.MergeHistory[wsID]; !ok {
-				targetCfg.MergeHistory[wsID] = record
-			} else if record.MergedAt > existing.MergedAt {
-				// Source has a more recent merge from this workspace
-				targetCfg.MergeHistory[wsID] = record
-			}
-		}
-	}
-
-	// Save updated config
-	return config.Save(targetCfg)
 }
 
 func normalizeMergeParents(parents ...string) []string {
@@ -1078,40 +1039,108 @@ func loadSnapshotMetaFromDir(snapshotsDir, snapshotID string) (*snapshotMeta, er
 	return &meta, nil
 }
 
-func getMergeBaseLocalSnapshots(currentRoot, sourceRoot string) (string, error) {
-	currentHead, _ := config.GetLatestSnapshotIDAt(currentRoot)
-	sourceHead, _ := config.GetLatestSnapshotIDAt(sourceRoot)
-	if currentHead == "" || sourceHead == "" {
+func loadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, snapshotID string) (*snapshotMeta, error) {
+	meta, err := loadSnapshotMetaFromDir(targetSnapshotsDir, snapshotID)
+	if err == nil {
+		return meta, nil
+	}
+	meta, err = loadSnapshotMetaFromDir(sourceSnapshotsDir, snapshotID)
+	if err == nil {
+		return meta, nil
+	}
+	return nil, err
+}
+
+func getMergeBaseDAG(targetRoot, sourceRoot, targetHead, sourceHead string) (string, error) {
+	if targetHead == "" || sourceHead == "" {
 		return "", fmt.Errorf("missing snapshots in one or both workspaces")
 	}
 
-	ancestors := map[string]struct{}{}
-	cur := currentHead
-	for cur != "" {
-		if _, ok := ancestors[cur]; ok {
+	targetSnapshotsDir := config.GetSnapshotsDirAt(targetRoot)
+	sourceSnapshotsDir := config.GetSnapshotsDirAt(sourceRoot)
+
+	type node struct {
+		id   string
+		dist int
+	}
+
+	targetDist := make(map[string]int)
+	queue := []node{{id: targetHead, dist: 0}}
+	for i := 0; i < len(queue); i++ {
+		item := queue[i]
+		if _, ok := targetDist[item.id]; ok {
+			continue
+		}
+		meta, err := loadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, item.id)
+		if err != nil {
+			return "", fmt.Errorf("missing snapshot metadata for %s", item.id)
+		}
+		targetDist[item.id] = item.dist
+		for _, parent := range meta.ParentIDs {
+			if parent == "" {
+				continue
+			}
+			if _, ok := targetDist[parent]; ok {
+				continue
+			}
+			queue = append(queue, node{id: parent, dist: item.dist + 1})
+		}
+	}
+
+	bestID := ""
+	bestScore := -1
+	bestTime := time.Time{}
+
+	queue = []node{{id: sourceHead, dist: 0}}
+	seenSource := make(map[string]struct{})
+	for i := 0; i < len(queue); i++ {
+		item := queue[i]
+		if _, ok := seenSource[item.id]; ok {
+			continue
+		}
+		if bestScore != -1 && item.dist > bestScore {
 			break
 		}
-		ancestors[cur] = struct{}{}
-		parent, err := config.SnapshotPrimaryParentIDAt(currentRoot, cur)
+		seenSource[item.id] = struct{}{}
+		meta, err := loadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, item.id)
 		if err != nil {
-			return "", fmt.Errorf("missing snapshot metadata for %s", cur)
+			return "", fmt.Errorf("missing snapshot metadata for %s", item.id)
 		}
-		cur = parent
+		if tdist, ok := targetDist[item.id]; ok {
+			score := item.dist + tdist
+			if bestScore == -1 || score < bestScore {
+				bestScore = score
+				bestID = item.id
+				if ts, err := time.Parse(time.RFC3339, meta.CreatedAt); err == nil {
+					bestTime = ts
+				} else {
+					bestTime = time.Time{}
+				}
+			} else if score == bestScore {
+				if ts, err := time.Parse(time.RFC3339, meta.CreatedAt); err == nil {
+					if bestTime.IsZero() || ts.After(bestTime) {
+						bestID = item.id
+						bestTime = ts
+					}
+				}
+			}
+		}
+
+		for _, parent := range meta.ParentIDs {
+			if parent == "" {
+				continue
+			}
+			if _, ok := seenSource[parent]; ok {
+				continue
+			}
+			queue = append(queue, node{id: parent, dist: item.dist + 1})
+		}
 	}
 
-	src := sourceHead
-	for src != "" {
-		if _, ok := ancestors[src]; ok {
-			return src, nil
-		}
-		parent, err := config.SnapshotPrimaryParentIDAt(sourceRoot, src)
-		if err != nil {
-			return "", fmt.Errorf("missing snapshot metadata for %s", src)
-		}
-		src = parent
+	if bestID == "" {
+		return "", fmt.Errorf("no common ancestor found between workspaces")
 	}
-
-	return "", fmt.Errorf("no common ancestor found between workspaces")
+	return bestID, nil
 }
 
 func warnIfRemoteHeadDiff(label string, client *api.Client, cfg *config.ProjectConfig, root string) {
@@ -1137,82 +1166,6 @@ func warnIfRemoteHeadDiff(label string, client *api.Client, cfg *config.ProjectC
 
 	fmt.Printf("Warning: %s workspace has remote changes not in this local copy (remote %s, local %s).\n", label, *remoteWs.CurrentSnapshotID, localHead)
 	fmt.Printf("         Run 'fst sync' in the %s workspace before merging to avoid missing changes.\n", label)
-}
-
-// getMergeBase determines the correct fork snapshot for a three-way merge.
-// It checks in order:
-// 1. Merge history - if we've merged from this source before, use that snapshot
-// 2. Direct relationship - if one workspace was forked from the other
-// 3. Sibling relationship - if both were forked from the same parent
-func getMergeBase(targetCfg, sourceCfg *config.ProjectConfig, targetRoot, sourceRoot string) (string, error) {
-	// 1. Check if we've merged from this source before
-	if targetCfg.MergeHistory != nil {
-		if record, ok := targetCfg.MergeHistory[sourceCfg.WorkspaceID]; ok {
-			return record.LastMergedSnapshot, nil
-		}
-	}
-
-	// Helper to try loading metadata from multiple directories
-	targetSnapshotsDir := config.GetSnapshotsDirAt(targetRoot)
-	sourceSnapshotsDir := config.GetSnapshotsDirAt(sourceRoot)
-
-	tryLoadMeta := func(snapshotID string) *snapshotMeta {
-		// Try target's directory first, then source's
-		if meta, err := loadSnapshotMetaFromDir(targetSnapshotsDir, snapshotID); err == nil {
-			return meta
-		}
-		if meta, err := loadSnapshotMetaFromDir(sourceSnapshotsDir, snapshotID); err == nil {
-			return meta
-		}
-		return nil
-	}
-
-	// 2. Check direct relationships using ForkSnapshotID
-	// When B forks from A, B.ForkSnapshotID points to a snapshot created by A
-	// So we need to check both directories for the metadata
-
-	// Check if target was forked from source
-	if targetCfg.ForkSnapshotID != "" {
-		if targetBaseMeta := tryLoadMeta(targetCfg.ForkSnapshotID); targetBaseMeta != nil {
-			if targetBaseMeta.WorkspaceID == sourceCfg.WorkspaceID {
-				// Target was forked from source, use target's base as common ancestor
-				return targetCfg.ForkSnapshotID, nil
-			}
-		}
-	}
-
-	// Check if source was forked from target
-	if sourceCfg.ForkSnapshotID != "" {
-		if sourceBaseMeta := tryLoadMeta(sourceCfg.ForkSnapshotID); sourceBaseMeta != nil {
-			if sourceBaseMeta.WorkspaceID == targetCfg.WorkspaceID {
-				// Source was forked from target, use source's base as common ancestor
-				return sourceCfg.ForkSnapshotID, nil
-			}
-		}
-	}
-
-	// 3. Check if both are siblings (forked from same parent)
-	if targetCfg.ForkSnapshotID != "" && sourceCfg.ForkSnapshotID != "" {
-		targetBaseMeta := tryLoadMeta(targetCfg.ForkSnapshotID)
-		sourceBaseMeta := tryLoadMeta(sourceCfg.ForkSnapshotID)
-
-		if targetBaseMeta != nil && sourceBaseMeta != nil {
-			if targetBaseMeta.WorkspaceID == sourceBaseMeta.WorkspaceID {
-				// Both forked from same workspace, use the earlier snapshot as common ancestor
-				if targetBaseMeta.CreatedAt < sourceBaseMeta.CreatedAt {
-					return targetCfg.ForkSnapshotID, nil
-				}
-				return sourceCfg.ForkSnapshotID, nil
-			}
-		}
-	}
-
-	// 4. Fall back to target's fork snapshot (original behavior)
-	if targetCfg.ForkSnapshotID != "" {
-		return targetCfg.ForkSnapshotID, nil
-	}
-
-	return "", fmt.Errorf("no common ancestor found between workspaces")
 }
 
 // loadManifestByID loads a manifest from the manifests directory by snapshot ID

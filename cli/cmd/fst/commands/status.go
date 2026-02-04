@@ -96,8 +96,17 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 	fmt.Printf("Path:      %s\n", root)
 	fmt.Println()
 
+	snapshotIDs := make([]string, 0, 2)
 	if latestSnapshotID != "" {
-		fmt.Printf("Latest:    %s", latestSnapshotID)
+		snapshotIDs = append(snapshotIDs, latestSnapshotID)
+	}
+	if cfg.ForkSnapshotID != "" {
+		snapshotIDs = append(snapshotIDs, cfg.ForkSnapshotID)
+	}
+	shortSnapshotIDs := shortenIDs(snapshotIDs, 12)
+
+	if latestSnapshotID != "" {
+		fmt.Printf("Latest:    %s", shortSnapshotIDs[latestSnapshotID])
 		if latestSnapshotTime != "" {
 			fmt.Printf(" (%s)", latestSnapshotTime)
 		}
@@ -106,7 +115,7 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 
 	// Fork snapshot
 	if cfg.ForkSnapshotID != "" {
-		fmt.Printf("Fork:      %s", cfg.ForkSnapshotID)
+		fmt.Printf("Fork:      %s", shortSnapshotIDs[cfg.ForkSnapshotID])
 		if baseTime != "" {
 			fmt.Printf(" (%s)", baseTime)
 		}

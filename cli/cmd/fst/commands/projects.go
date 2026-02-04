@@ -348,12 +348,15 @@ func runProjects(cmd *cobra.Command, args []string) error {
 		strings.Repeat("-", 10),
 		strings.Repeat("-", 20))
 
+	ids := make([]string, 0, len(rows))
+	for _, p := range rows {
+		ids = append(ids, p.ID)
+	}
+	shortIDs := shortenIDs(ids, 12)
+
 	for _, p := range rows {
 		updatedAt := formatProjectUpdatedAt(p.CloudUpdatedAt, p.LocalSeenAt)
-		shortID := p.ID
-		if len(shortID) > 12 {
-			shortID = shortID[:12]
-		}
+		shortID := shortIDs[p.ID]
 		name := p.Name
 		if len(name) > 30 {
 			name = name[:27] + "..."
@@ -533,11 +536,14 @@ func runProject(cmd *cobra.Command, args []string) error {
 		strings.Repeat("-", 35),
 		strings.Repeat("-", 15))
 
+	workspaceIDs := make([]string, 0, len(workspaces))
 	for _, w := range workspaces {
-		shortID := w.ID
-		if len(shortID) > 12 {
-			shortID = shortID[:12]
-		}
+		workspaceIDs = append(workspaceIDs, w.ID)
+	}
+	shortWorkspaceIDs := shortenIDs(workspaceIDs, 12)
+
+	for _, w := range workspaces {
+		shortID := shortWorkspaceIDs[w.ID]
 		name := w.Name
 		if len(name) > 20 {
 			name = name[:17] + "..."
@@ -610,6 +616,27 @@ func resolveProjectID(input string, idx *index.Index, cloudProjects []api.Projec
 			if p.ProjectID == input {
 				return p.ProjectID, nil
 			}
+		}
+	}
+
+	if strings.HasPrefix(input, "proj-") {
+		localCount := 0
+		if idx != nil {
+			localCount = len(idx.Projects)
+		}
+		ids := make([]string, 0, len(cloudProjects)+localCount)
+		for _, p := range cloudProjects {
+			ids = append(ids, p.ID)
+		}
+		if idx != nil {
+			for _, p := range idx.Projects {
+				ids = append(ids, p.ProjectID)
+			}
+		}
+		if resolved, err := resolveIDPrefix(input, ids, "project"); err == nil {
+			return resolved, nil
+		} else if !strings.Contains(err.Error(), "not found") {
+			return "", err
 		}
 	}
 

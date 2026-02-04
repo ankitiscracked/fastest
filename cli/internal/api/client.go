@@ -183,24 +183,17 @@ type Project struct {
 	MainWorkspaceID *string `json:"main_workspace_id"`
 }
 
-// MergeRecord tracks when a workspace was last merged from another workspace
-type MergeRecord struct {
-	LastMergedSnapshot string `json:"last_merged_snapshot"`
-	MergedAt           string `json:"merged_at"`
-}
-
 type Workspace struct {
-	ID                  string                 `json:"id"`
-	ProjectID           string                 `json:"project_id"`
-	Name                string                 `json:"name"`
-	MachineID           *string                `json:"machine_id"`
-	ForkSnapshotID      *string                `json:"fork_snapshot_id"`
-	CurrentSnapshotID   *string                `json:"current_snapshot_id,omitempty"`
-	CurrentManifestHash *string                `json:"current_manifest_hash,omitempty"`
-	LocalPath           *string                `json:"local_path"`
-	LastSeenAt          *string                `json:"last_seen_at"`
-	CreatedAt           string                 `json:"created_at"`
-	MergeHistory        map[string]MergeRecord `json:"merge_history,omitempty"`
+	ID                  string  `json:"id"`
+	ProjectID           string  `json:"project_id"`
+	Name                string  `json:"name"`
+	MachineID           *string `json:"machine_id"`
+	ForkSnapshotID      *string `json:"fork_snapshot_id"`
+	CurrentSnapshotID   *string `json:"current_snapshot_id,omitempty"`
+	CurrentManifestHash *string `json:"current_manifest_hash,omitempty"`
+	LocalPath           *string `json:"local_path"`
+	LastSeenAt          *string `json:"last_seen_at"`
+	CreatedAt           string  `json:"created_at"`
 }
 
 type CreateProjectRequest struct {
@@ -452,22 +445,22 @@ func (c *Client) SetMainWorkspace(workspaceID string) error {
 // Snapshot types
 
 type Snapshot struct {
-	ID               string  `json:"id"`
-	ProjectID        string  `json:"project_id"`
-	WorkspaceID      *string `json:"workspace_id"`
-	ManifestHash     string  `json:"manifest_hash"`
+	ID                string   `json:"id"`
+	ProjectID         string   `json:"project_id"`
+	WorkspaceID       *string  `json:"workspace_id"`
+	ManifestHash      string   `json:"manifest_hash"`
 	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-	Source           string  `json:"source"`
-	Summary          *string `json:"summary"`
-	CreatedAt        string  `json:"created_at"`
+	Source            string   `json:"source"`
+	Summary           *string  `json:"summary"`
+	CreatedAt         string   `json:"created_at"`
 }
 
 type CreateSnapshotRequest struct {
-	SnapshotID       *string `json:"snapshot_id,omitempty"`
-	ManifestHash     string  `json:"manifest_hash"`
+	SnapshotID        *string  `json:"snapshot_id,omitempty"`
+	ManifestHash      string   `json:"manifest_hash"`
 	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-	WorkspaceID      *string `json:"workspace_id,omitempty"`
-	Source           string  `json:"source,omitempty"`
+	WorkspaceID       *string  `json:"workspace_id,omitempty"`
+	Source            string   `json:"source,omitempty"`
 }
 
 // CreateSnapshot creates a new snapshot for a project
@@ -476,9 +469,9 @@ func (c *Client) CreateSnapshot(projectID, snapshotID, manifestHash string, pare
 		parentSnapshotIDs = []string{}
 	}
 	req := CreateSnapshotRequest{
-		ManifestHash: manifestHash,
+		ManifestHash:      manifestHash,
 		ParentSnapshotIDs: parentSnapshotIDs,
-		Source:      "cli",
+		Source:            "cli",
 	}
 	if snapshotID != "" {
 		req.SnapshotID = &snapshotID

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -134,9 +135,57 @@ func ManifestHashFromSnapshotIDAt(root, snapshotID string) (string, error) {
 		if len(legacy) == 64 {
 			return legacy, nil
 		}
+		if resolved, err := ResolveSnapshotIDAt(root, snapshotID); err == nil && resolved != snapshotID {
+			metaPath = filepath.Join(snapshotsDir, resolved+".meta.json")
+			if data, err := os.ReadFile(metaPath); err == nil {
+				var meta SnapshotMeta
+				if err := json.Unmarshal(data, &meta); err == nil && meta.ManifestHash != "" {
+					return meta.ManifestHash, nil
+				}
+			}
+		} else if err != nil && strings.Contains(err.Error(), "ambiguous") {
+			return "", err
+		}
 	}
 
 	return "", fmt.Errorf("snapshot metadata not found for: %s", snapshotID)
+}
+
+// ResolveSnapshotIDAt resolves a snapshot prefix to a full ID for a specific workspace root.
+func ResolveSnapshotIDAt(root, snapshotID string) (string, error) {
+	if snapshotID == "" {
+		return "", fmt.Errorf("empty snapshot ID")
+	}
+
+	snapshotsDir := GetSnapshotsDirAt(root)
+	entries, err := os.ReadDir(snapshotsDir)
+	if err != nil {
+		return "", err
+	}
+
+	matches := make([]string, 0, 4)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".meta.json")
+		if strings.HasPrefix(id, snapshotID) {
+			matches = append(matches, id)
+		}
+	}
+
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("snapshot %q not found", snapshotID)
+	}
+	sort.Strings(matches)
+	return "", fmt.Errorf("snapshot %q is ambiguous: %s", snapshotID, strings.Join(matches, ", "))
 }
 
 // SnapshotMeta represents snapshot metadata
@@ -196,23 +245,16 @@ func GetLatestSnapshotIDAt(root string) (string, error) {
 	return latestID, nil
 }
 
-// MergeRecord tracks when a workspace was last merged from another workspace
-type MergeRecord struct {
-	LastMergedSnapshot string `json:"last_merged_snapshot"`
-	MergedAt           string `json:"merged_at"`
-}
-
 // ProjectConfig represents the local project configuration stored in .fst/config.json
 // All workspaces are peers - there is no main/linked distinction
 type ProjectConfig struct {
-	ProjectID         string                 `json:"project_id"`
-	WorkspaceID       string                 `json:"workspace_id,omitempty"`
-	WorkspaceName     string                 `json:"workspace_name,omitempty"`
-	ForkSnapshotID    string                 `json:"fork_snapshot_id,omitempty"`
-	CurrentSnapshotID string                 `json:"current_snapshot_id,omitempty"`
-	MergeHistory      map[string]MergeRecord `json:"merge_history,omitempty"`
-	APIURL            string                 `json:"api_url,omitempty"`
-	Mode              string                 `json:"mode,omitempty"` // "cloud" or "local"
+	ProjectID         string `json:"project_id"`
+	WorkspaceID       string `json:"workspace_id,omitempty"`
+	WorkspaceName     string `json:"workspace_name,omitempty"`
+	ForkSnapshotID    string `json:"fork_snapshot_id,omitempty"`
+	CurrentSnapshotID string `json:"current_snapshot_id,omitempty"`
+	APIURL            string `json:"api_url,omitempty"`
+	Mode              string `json:"mode,omitempty"` // "cloud" or "local"
 }
 
 // FindProjectRoot walks up the directory tree to find .fst/ directory
@@ -419,7 +461,7 @@ func InitAt(root, projectID, workspaceID, workspaceName, forkSnapshotID string) 
 	}
 
 	// Create .gitignore for .fst directory
-gitignore := `# Fastest local data
+	gitignore := `# Fastest local data
 snapshots/
 manifests/
 *.log

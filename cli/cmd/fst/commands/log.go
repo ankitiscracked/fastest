@@ -42,16 +42,16 @@ Each entry shows the snapshot ID, timestamp, file count, and description.`,
 
 // SnapshotMeta represents snapshot metadata
 type SnapshotMeta struct {
-	ID               string `json:"id"`
-	WorkspaceID      string `json:"workspace_id"`
-	WorkspaceName    string `json:"workspace_name"`
-	ManifestHash     string `json:"manifest_hash"`
+	ID                string   `json:"id"`
+	WorkspaceID       string   `json:"workspace_id"`
+	WorkspaceName     string   `json:"workspace_name"`
+	ManifestHash      string   `json:"manifest_hash"`
 	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-	Message          string `json:"message"`
-	Agent            string `json:"agent"`
-	CreatedAt        string `json:"created_at"`
-	Files            int    `json:"files"`
-	Size             int64  `json:"size"`
+	Message           string   `json:"message"`
+	Agent             string   `json:"agent"`
+	CreatedAt         string   `json:"created_at"`
+	Files             int      `json:"files"`
+	Size              int64    `json:"size"`
 }
 
 func runLog(limit int, showAll bool) error {
@@ -112,9 +112,15 @@ func runLog(limit int, showAll bool) error {
 	}
 	fmt.Println()
 
+	ids := make([]string, 0, len(toShow))
+	for _, snap := range toShow {
+		ids = append(ids, snap.ID)
+	}
+	shortIDs := shortenIDs(ids, 12)
+
 	// Display snapshots
 	for i, snap := range toShow {
-		displaySnapshot(snap, i == 0 && snap.ID == cfg.CurrentSnapshotID)
+		displaySnapshot(snap, i == 0 && snap.ID == cfg.CurrentSnapshotID, shortIDs)
 	}
 
 	// Show if there are more
@@ -190,7 +196,7 @@ func walkSnapshotChain(snapshots []*SnapshotMeta, startID string) []*SnapshotMet
 	return chain
 }
 
-func displaySnapshot(snap *SnapshotMeta, isCurrent bool) {
+func displaySnapshot(snap *SnapshotMeta, isCurrent bool, shortIDs map[string]string) {
 	// Parse and format time
 	timeStr := formatSnapshotTime(snap.CreatedAt)
 
@@ -201,10 +207,7 @@ func displaySnapshot(snap *SnapshotMeta, isCurrent bool) {
 	}
 
 	// Snapshot ID (shortened)
-	shortID := snap.ID
-	if len(shortID) > 20 {
-		shortID = shortID[:20]
-	}
+	shortID := shortIDs[snap.ID]
 
 	// Agent tag (if present)
 	agentTag := ""
