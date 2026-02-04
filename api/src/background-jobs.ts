@@ -57,7 +57,7 @@ export async function runBackgroundJobs(env: Env): Promise<void> {
         workspace_id: workspaces.id,
         workspace_name: workspaces.name,
         project_id: workspaces.projectId,
-        fork_snapshot_id: workspaces.forkSnapshotId,
+        base_snapshot_id: workspaces.baseSnapshotId,
         current_snapshot_id: workspaces.currentSnapshotId,
         current_manifest_hash: workspaces.currentManifestHash,
         conversation_id: conversations.id,
@@ -124,7 +124,7 @@ async function processWorkspace(
     workspace_id: string;
     workspace_name: string;
     project_id: string;
-    fork_snapshot_id: string | null;
+    base_snapshot_id: string | null;
     current_manifest_hash: string | null;
     conversation_id: string;
     conversation_updated_at: string;

@@ -846,8 +846,8 @@ conversationRoutes.get('/:conversationId/stream', async (c) => {
  * - Branching: capture dirty files before creating new workspace
  * - Save snapshot: explicitly checkpoint work with a summary
  *
- * Note: This does NOT update the workspace's current_snapshot_id or fork_snapshot_id.
- * fork_snapshot_id represents the origin snapshot the workspace was created from.
+ * Note: This does NOT update the workspace's current_snapshot_id or base_snapshot_id.
+ * base_snapshot_id represents the origin snapshot the workspace was created from.
  */
 conversationRoutes.post('/:conversationId/snapshot', async (c) => {
   const user = await getAuthUser(c);
@@ -869,7 +869,7 @@ conversationRoutes.post('/:conversationId/snapshot', async (c) => {
       id: conversations.id,
       workspace_id: conversations.workspaceId,
       project_id: workspaces.projectId,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
     })
     .from(conversations)
@@ -907,7 +907,7 @@ conversationRoutes.post('/:conversationId/snapshot', async (c) => {
   if (!currentManifestHash) {
     // No files have been modified yet, just return the existing snapshot
     return c.json({
-      snapshot_id: conversation.fork_snapshot_id,
+      snapshot_id: conversation.base_snapshot_id,
       manifest_hash: null,
       was_dirty: false,
       summary: null,
@@ -916,11 +916,11 @@ conversationRoutes.post('/:conversationId/snapshot', async (c) => {
 
   // Check if the manifest is different from the workspace's current snapshot
   let existingManifestHash: string | null = null;
-  if (conversation.fork_snapshot_id) {
+  if (conversation.base_snapshot_id) {
     const snapshotResult = await db
       .select({ manifest_hash: snapshots.manifestHash })
       .from(snapshots)
-      .where(eq(snapshots.id, conversation.fork_snapshot_id))
+      .where(eq(snapshots.id, conversation.base_snapshot_id))
       .limit(1);
     existingManifestHash = snapshotResult[0]?.manifest_hash ?? null;
   }
@@ -928,7 +928,7 @@ conversationRoutes.post('/:conversationId/snapshot', async (c) => {
   // If the manifest hasn't changed, return the existing snapshot
   if (currentManifestHash === existingManifestHash) {
     return c.json({
-      snapshot_id: conversation.fork_snapshot_id,
+      snapshot_id: conversation.base_snapshot_id,
       manifest_hash: currentManifestHash,
       was_dirty: false,
       summary: null,
@@ -1044,7 +1044,7 @@ Write a brief summary (1-2 sentences):`;
     projectId: conversation.project_id,
     workspaceId: conversation.workspace_id,
     manifestHash: currentManifestHash,
-    parentSnapshotIds: JSON.stringify(conversation.fork_snapshot_id ? [conversation.fork_snapshot_id] : []),
+    parentSnapshotIds: JSON.stringify(conversation.base_snapshot_id ? [conversation.base_snapshot_id] : []),
     source: 'web',
     summary,
     createdAt: now,

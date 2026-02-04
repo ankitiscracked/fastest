@@ -26,7 +26,7 @@ func newStatusCmd() *cobra.Command {
 
 Without flags, shows detailed status of the current workspace:
 - Workspace name and path
-- Fork snapshot info
+- Base snapshot info
 - Upstream workspace (if any)
 - Current drift (files changed since base)
 
@@ -74,11 +74,11 @@ func runStatus(jsonOutput bool) error {
 	// Get upstream info
 	upstreamID, upstreamName, _ := drift.GetUpstreamWorkspace(root)
 
-	// Get fork snapshot time
+	// Get base snapshot time
 	var baseTime string
-	if cfg.ForkSnapshotID != "" {
+	if cfg.BaseSnapshotID != "" {
 		snapshotsDir, _ := config.GetSnapshotsDir()
-		metaPath := filepath.Join(snapshotsDir, cfg.ForkSnapshotID+".meta.json")
+		metaPath := filepath.Join(snapshotsDir, cfg.BaseSnapshotID+".meta.json")
 		if info, err := os.Stat(metaPath); err == nil {
 			baseTime = formatTimeAgo(info.ModTime())
 		}
@@ -100,8 +100,8 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 	if latestSnapshotID != "" {
 		snapshotIDs = append(snapshotIDs, latestSnapshotID)
 	}
-	if cfg.ForkSnapshotID != "" {
-		snapshotIDs = append(snapshotIDs, cfg.ForkSnapshotID)
+	if cfg.BaseSnapshotID != "" {
+		snapshotIDs = append(snapshotIDs, cfg.BaseSnapshotID)
 	}
 	shortSnapshotIDs := shortenIDs(snapshotIDs, 12)
 
@@ -113,15 +113,15 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 		fmt.Println()
 	}
 
-	// Fork snapshot
-	if cfg.ForkSnapshotID != "" {
-		fmt.Printf("Fork:      %s", shortSnapshotIDs[cfg.ForkSnapshotID])
+	// Base snapshot
+	if cfg.BaseSnapshotID != "" {
+		fmt.Printf("Base:      %s", shortSnapshotIDs[cfg.BaseSnapshotID])
 		if baseTime != "" {
 			fmt.Printf(" (%s)", baseTime)
 		}
 		fmt.Println()
 	} else {
-		fmt.Println("Fork:      (none)")
+		fmt.Println("Base:      (none)")
 	}
 
 	// Upstream
@@ -156,7 +156,7 @@ func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.
 	fmt.Printf("  \"path\": %q,\n", root)
 	fmt.Printf("  \"latest_snapshot_id\": %q,\n", latestSnapshotID)
 	fmt.Printf("  \"latest_snapshot_time\": %q,\n", latestSnapshotTime)
-	fmt.Printf("  \"fork_snapshot_id\": %q,\n", cfg.ForkSnapshotID)
+	fmt.Printf("  \"base_snapshot_id\": %q,\n", cfg.BaseSnapshotID)
 	if upstreamName != "" {
 		fmt.Printf("  \"upstream\": %q,\n", upstreamName)
 	}

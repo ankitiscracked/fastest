@@ -115,7 +115,7 @@ func runClone(target string, targetDir string) error {
 	// Create cloud workspace for this clone
 	ws, err := client.CreateWorkspace(projectID, api.CreateWorkspaceRequest{
 		Name:           workspaceName,
-		ForkSnapshotID: &forkSnapshotID,
+		BaseSnapshotID: &forkSnapshotID,
 		LocalPath:      &absTargetDir,
 	})
 	if err != nil {
@@ -147,7 +147,7 @@ func runClone(target string, targetDir string) error {
 		ProjectID:      projectID,
 		Name:           workspaceName,
 		Path:           absTargetDir,
-		ForkSnapshotID: forkSnapshotID,
+		BaseSnapshotID: forkSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)

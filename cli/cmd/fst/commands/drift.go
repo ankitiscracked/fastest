@@ -274,7 +274,7 @@ func loadWorkspaceManifest(root string, includeDirty bool) (*manifest.Manifest, 
 	return m, snapshotID, nil
 }
 
-// runDriftFromBase shows drift from fork snapshot (when no upstream is available)
+// runDriftFromBase shows drift from base snapshot (when no upstream is available)
 func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, generateSummary, syncToCloud bool) error {
 	report, err := drift.ComputeFromCache(root)
 	if err != nil {
@@ -359,11 +359,11 @@ func runDriftFromBase(root string, cfg *config.ProjectConfig, jsonOutput, genera
 
 	// Human-readable output
 	if !report.HasChanges() {
-		fmt.Println("No changes from fork snapshot.")
+		fmt.Println("No changes from base snapshot.")
 		return nil
 	}
 
-	fmt.Printf("Drift from fork snapshot (%s):\n", report.ForkSnapshotID)
+	fmt.Printf("Drift from base snapshot (%s):\n", report.BaseSnapshotID)
 	fmt.Println()
 	printChanges(report)
 

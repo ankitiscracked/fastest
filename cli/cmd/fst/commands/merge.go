@@ -298,7 +298,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 			baseManifest, err = loadManifestByID(sourceRoot, mergeBaseID)
 		}
 		if err != nil {
-			fmt.Printf("Warning: Could not load fork snapshot %s: %v\n", mergeBaseID, err)
+			fmt.Printf("Warning: Could not load base snapshot %s: %v\n", mergeBaseID, err)
 			fmt.Println("Proceeding without three-way merge (will treat all changes as additions)")
 			baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
 		} else {
@@ -990,8 +990,8 @@ func createConflictMarkers(currentRoot, sourceRoot string, action mergeAction) e
 }
 
 func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
-	if cfg.ForkSnapshotID == "" {
-		return nil, fmt.Errorf("no fork snapshot")
+	if cfg.BaseSnapshotID == "" {
+		return nil, fmt.Errorf("no base snapshot")
 	}
 
 	manifestsDir, err := config.GetManifestsDir()
@@ -999,7 +999,7 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 		return nil, err
 	}
 
-	manifestHash, err := config.ManifestHashFromSnapshotID(cfg.ForkSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotID(cfg.BaseSnapshotID)
 	if err != nil {
 		return nil, err
 	}

@@ -370,11 +370,11 @@ class ApiClient {
     );
   }
 
-  async createWorkspace(projectId: string, name: string, forkSnapshotId?: string) {
+  async createWorkspace(projectId: string, name: string, baseSnapshotId?: string) {
     return this.request<{ workspace: import('@fastest/shared').Workspace }>(
       'POST',
       `/projects/${projectId}/workspaces`,
-      { name, fork_snapshot_id: forkSnapshotId }
+      { name, base_snapshot_id: baseSnapshotId }
     );
   }
 

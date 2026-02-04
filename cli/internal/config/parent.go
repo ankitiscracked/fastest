@@ -13,9 +13,11 @@ const ParentConfigFileName = "fst.json"
 var ErrParentNotFound = errors.New("parent config not found")
 
 type ParentConfig struct {
-	ProjectID   string `json:"project_id"`
-	ProjectName string `json:"project_name"`
-	CreatedAt   string `json:"created_at"`
+	ProjectID       string `json:"project_id"`
+	ProjectName     string `json:"project_name"`
+	CreatedAt       string `json:"created_at"`
+	BaseSnapshotID  string `json:"base_snapshot_id,omitempty"`
+	BaseWorkspaceID string `json:"base_workspace_id,omitempty"`
 }
 
 func LoadParentConfigAt(root string) (*ParentConfig, error) {

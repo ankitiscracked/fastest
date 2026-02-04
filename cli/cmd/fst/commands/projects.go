@@ -222,7 +222,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		ProjectID:      projectID,
 		Name:           workspaceName,
 		Path:           cwd,
-		ForkSnapshotID: snapshotID,
+		BaseSnapshotID: snapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)

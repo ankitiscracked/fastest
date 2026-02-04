@@ -37,7 +37,7 @@ type WorkspaceEntry struct {
 	WorkspaceName  string `json:"workspace_name"`
 	ProjectID      string `json:"project_id"`
 	Path           string `json:"path"`
-	ForkSnapshotID string `json:"fork_snapshot_id,omitempty"`
+	BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
 	CreatedAt      string `json:"created_at,omitempty"`
 	LastSeenAt     string `json:"last_seen_at,omitempty"`
 	MachineID      string `json:"machine_id,omitempty"`
@@ -53,7 +53,7 @@ type legacyWorkspace struct {
 	ProjectID      string `json:"project_id"`
 	Name           string `json:"name"`
 	Path           string `json:"path"`
-	ForkSnapshotID string `json:"fork_snapshot_id,omitempty"`
+	BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
 	CreatedAt      string `json:"created_at,omitempty"`
 }
 
@@ -111,7 +111,7 @@ func Load() (*Index, error) {
 				WorkspaceName:  ws.Name,
 				ProjectID:      ws.ProjectID,
 				Path:           ws.Path,
-				ForkSnapshotID: ws.ForkSnapshotID,
+				BaseSnapshotID: ws.BaseSnapshotID,
 				CreatedAt:      ws.CreatedAt,
 				LocalOnly:      true,
 			})
@@ -193,8 +193,8 @@ func UpsertWorkspace(entry WorkspaceEntry, oldPath string) error {
 				if entry.ProjectID == "" {
 					entry.ProjectID = ws.ProjectID
 				}
-				if entry.ForkSnapshotID == "" {
-					entry.ForkSnapshotID = ws.ForkSnapshotID
+				if entry.BaseSnapshotID == "" {
+					entry.BaseSnapshotID = ws.BaseSnapshotID
 				}
 				if entry.CreatedAt == "" {
 					entry.CreatedAt = ws.CreatedAt

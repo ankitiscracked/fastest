@@ -31,7 +31,7 @@ func newConflictsCmd() *cobra.Command {
 Detect git-style conflicts with another workspace.
 
 A conflict occurs when the same lines/regions of a file have been modified
-in both your workspace and the other workspace since your common fork snapshot.
+in both your workspace and the other workspace since your common base snapshot.
 
 This performs a 3-way comparison:
 1. Your changes: base → current workspace
@@ -41,7 +41,7 @@ This performs a 3-way comparison:
 Files modified in both workspaces but in different regions are NOT conflicts
 and can be auto-merged.
 
-Both workspaces must share a common fork_snapshot_id (i.e., one was forked
+Both workspaces must share a common base_snapshot_id (i.e., one was forked
 from the other) for meaningful conflict detection.
 
 Examples:

@@ -508,7 +508,7 @@ func TestMergeDryRunPlan(t *testing.T) {
 		t.Fatalf("LoadAt source: %v", err)
 	}
 	sourceCfg.CurrentSnapshotID = meta.ID
-	sourceCfg.ForkSnapshotID = meta.ID
+	sourceCfg.BaseSnapshotID = meta.ID
 	if err := config.SaveAt(sourceRoot, sourceCfg); err != nil {
 		t.Fatalf("SaveAt source: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestMergeAutoSnapshot(t *testing.T) {
 		t.Fatalf("LoadAt source: %v", err)
 	}
 	sourceCfg.CurrentSnapshotID = meta.ID
-	sourceCfg.ForkSnapshotID = meta.ID
+	sourceCfg.BaseSnapshotID = meta.ID
 	if err := config.SaveAt(sourceRoot, sourceCfg); err != nil {
 		t.Fatalf("SaveAt source: %v", err)
 	}

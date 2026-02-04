@@ -32,7 +32,7 @@ type RegisteredWorkspace struct {
 	ProjectID      string `json:"project_id"`
 	Name           string `json:"name"`
 	Path           string `json:"path"`
-	ForkSnapshotID string `json:"fork_snapshot_id"`
+	BaseSnapshotID string `json:"base_snapshot_id"`
 	CreatedAt      string `json:"created_at"`
 }
 
@@ -54,7 +54,7 @@ func LoadRegistry() (*WorkspaceRegistry, error) {
 			ProjectID:      ws.ProjectID,
 			Name:           ws.WorkspaceName,
 			Path:           ws.Path,
-			ForkSnapshotID: ws.ForkSnapshotID,
+			BaseSnapshotID: ws.BaseSnapshotID,
 			CreatedAt:      ws.CreatedAt,
 		})
 	}
@@ -77,7 +77,7 @@ func SaveRegistry(registry *WorkspaceRegistry) error {
 			WorkspaceName:  ws.Name,
 			ProjectID:      ws.ProjectID,
 			Path:           ws.Path,
-			ForkSnapshotID: ws.ForkSnapshotID,
+			BaseSnapshotID: ws.BaseSnapshotID,
 			CreatedAt:      ws.CreatedAt,
 			LocalOnly:      true,
 		})
@@ -92,7 +92,7 @@ func RegisterWorkspace(ws RegisteredWorkspace) error {
 		WorkspaceName:  ws.Name,
 		ProjectID:      ws.ProjectID,
 		Path:           ws.Path,
-		ForkSnapshotID: ws.ForkSnapshotID,
+		BaseSnapshotID: ws.BaseSnapshotID,
 		CreatedAt:      ws.CreatedAt,
 		LocalOnly:      true,
 	}, ""); err != nil {
@@ -119,7 +119,7 @@ func UpdateWorkspaceRegistry(oldPath string, ws RegisteredWorkspace) error {
 		WorkspaceName:  ws.Name,
 		ProjectID:      ws.ProjectID,
 		Path:           ws.Path,
-		ForkSnapshotID: ws.ForkSnapshotID,
+		BaseSnapshotID: ws.BaseSnapshotID,
 		CreatedAt:      ws.CreatedAt,
 		LocalOnly:      true,
 	}, oldPath)
@@ -198,7 +198,7 @@ func newWorkspacesCmd() *cobra.Command {
 		Short:   "List workspaces for this project",
 		Long: `List all registered workspaces for the current project.
 
-Shows workspace name, path, fork snapshot, and current drift status.
+Shows workspace name, path, base snapshot, and current drift status.
 Use --all to show workspaces from all projects.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWorkspaces(showAll)
@@ -275,7 +275,7 @@ func runWorkspaces(showAll bool) error {
 			Name:           ws.Name,
 			Path:           ws.Path,
 			ProjectID:      ws.ProjectID,
-			ForkSnapshotID: ws.ForkSnapshotID,
+			BaseSnapshotID: ws.BaseSnapshotID,
 			Local:          true,
 		}
 	}
@@ -349,7 +349,7 @@ type mergedWorkspace struct {
 	Name           string
 	Path           string
 	ProjectID      string
-	ForkSnapshotID string
+	BaseSnapshotID string
 	Local          bool
 	Cloud          bool
 	LocationTag    string
@@ -429,7 +429,7 @@ func newWorkspaceCmd() *cobra.Command {
 		Short: "Show current workspace status",
 		Long: `Show the status of the current workspace.
 
-Displays workspace name, ID, project, fork snapshot, and mode.`,
+Displays workspace name, ID, project, base snapshot, and mode.`,
 		RunE: runWorkspaceStatus,
 	}
 
@@ -577,10 +577,10 @@ func runWorkspaceStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Project:    %s\n", cfg.ProjectID)
 	fmt.Printf("  Directory:  %s\n", root)
 
-	if cfg.ForkSnapshotID != "" {
-		fmt.Printf("  Fork:       %s\n", cfg.ForkSnapshotID)
+	if cfg.BaseSnapshotID != "" {
+		fmt.Printf("  Base:       %s\n", cfg.BaseSnapshotID)
 	} else {
-		fmt.Printf("  Fork:       (no fork snapshot)\n")
+		fmt.Printf("  Base:       (no base snapshot)\n")
 	}
 
 	fmt.Printf("  Mode:       %s\n", cfg.Mode)

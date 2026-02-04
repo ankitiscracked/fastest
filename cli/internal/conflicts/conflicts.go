@@ -33,7 +33,7 @@ type FileConflict struct {
 
 // Report contains all conflicts between workspaces
 type Report struct {
-	ForkSnapshotID   string         `json:"fork_snapshot_id"`
+	BaseSnapshotID   string         `json:"base_snapshot_id"`
 	Conflicts        []FileConflict `json:"conflicts"`
 	OverlappingFiles []string       `json:"overlapping_files"` // Files modified in both (may or may not conflict)
 	TrueConflicts    int            `json:"true_conflicts"`    // Count of files with actual line conflicts
@@ -98,7 +98,7 @@ func (a *FileSystemAccessor) Get(hash string) (string, error) {
 
 // Detect performs 3-way merge analysis to find git-style conflicts
 // between the current workspace and another workspace
-// Both workspaces must share a common fork_snapshot_id for meaningful conflict detection
+// Both workspaces must share a common base_snapshot_id for meaningful conflict detection
 func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -110,23 +110,23 @@ func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 		return nil, fmt.Errorf("cannot load other workspace config: %w", err)
 	}
 
-	// Load fork snapshot manifest (common ancestor)
+	// Load base snapshot manifest (common ancestor)
 	// We use current workspace's base as the reference point
-	baseSnapshotID := cfg.ForkSnapshotID
+	baseSnapshotID := cfg.BaseSnapshotID
 	if baseSnapshotID == "" {
-		return nil, fmt.Errorf("no fork snapshot - cannot detect conflicts")
+		return nil, fmt.Errorf("no base snapshot - cannot detect conflicts")
 	}
 
 	// Warn if bases don't match (they should for proper 3-way merge)
-	if otherCfg.ForkSnapshotID != baseSnapshotID {
+	if otherCfg.BaseSnapshotID != baseSnapshotID {
 		// They might still share a common ancestor through the snapshot, but warn
-		fmt.Printf("Warning: workspaces have different fork snapshots (%s vs %s)\n",
-			baseSnapshotID, otherCfg.ForkSnapshotID)
+		fmt.Printf("Warning: workspaces have different base snapshots (%s vs %s)\n",
+			baseSnapshotID, otherCfg.BaseSnapshotID)
 	}
 
 	baseManifest, err := loadManifestFromSnapshots(root, baseSnapshotID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load fork snapshot: %w", err)
+		return nil, fmt.Errorf("failed to load base snapshot: %w", err)
 	}
 
 	// Generate current workspace manifest
@@ -148,7 +148,7 @@ func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 	} else {
 		snapshotID, _ := config.GetLatestSnapshotIDAt(otherRoot)
 		if snapshotID == "" {
-			snapshotID = otherCfg.ForkSnapshotID
+			snapshotID = otherCfg.BaseSnapshotID
 		}
 
 		if snapshotID == "" {
@@ -238,7 +238,7 @@ func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 	}
 
 	return &Report{
-		ForkSnapshotID:   baseSnapshotID,
+		BaseSnapshotID:   baseSnapshotID,
 		Conflicts:        conflicts,
 		OverlappingFiles: overlapping,
 		TrueConflicts:    len(conflicts),

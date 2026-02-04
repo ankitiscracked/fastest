@@ -32,7 +32,7 @@ ALTER TABLE workspaces ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
 
 -- Update with optimistic lock
 UPDATE workspaces
-SET fork_snapshot_id = ?, version = version + 1, last_seen_at = ?
+SET base_snapshot_id = ?, version = version + 1, last_seen_at = ?
 WHERE id = ? AND version = ?
 ```
 

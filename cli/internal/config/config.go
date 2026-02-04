@@ -248,9 +248,11 @@ func GetLatestSnapshotIDAt(root string) (string, error) {
 // ProjectConfig represents the local project configuration stored in .fst/config.json
 // All workspaces are peers - there is no main/linked distinction
 type ProjectConfig struct {
-	ProjectID         string `json:"project_id"`
-	WorkspaceID       string `json:"workspace_id,omitempty"`
-	WorkspaceName     string `json:"workspace_name,omitempty"`
+	ProjectID      string `json:"project_id"`
+	WorkspaceID    string `json:"workspace_id,omitempty"`
+	WorkspaceName  string `json:"workspace_name,omitempty"`
+	BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
+	// Deprecated: legacy field for backwards compatibility.
 	ForkSnapshotID    string `json:"fork_snapshot_id,omitempty"`
 	CurrentSnapshotID string `json:"current_snapshot_id,omitempty"`
 	APIURL            string `json:"api_url,omitempty"`
@@ -307,17 +309,12 @@ func Load() (*ProjectConfig, error) {
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	var config struct {
-		ProjectConfig
-		BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
-	}
+	var config ProjectConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if config.ForkSnapshotID == "" && config.BaseSnapshotID != "" {
-		config.ForkSnapshotID = config.BaseSnapshotID
-	}
+	normalizeConfig(&config)
 	if config.CurrentSnapshotID == "" {
 		if root, err := FindProjectRoot(); err == nil {
 			if latest, err := GetLatestSnapshotIDAt(root); err == nil && latest != "" {
@@ -326,7 +323,19 @@ func Load() (*ProjectConfig, error) {
 		}
 	}
 
-	return &config.ProjectConfig, nil
+	return &config, nil
+}
+
+func normalizeConfig(config *ProjectConfig) {
+	if config == nil {
+		return
+	}
+	if config.BaseSnapshotID == "" && config.ForkSnapshotID != "" {
+		config.BaseSnapshotID = config.ForkSnapshotID
+	}
+	if config.ForkSnapshotID != "" {
+		config.ForkSnapshotID = ""
+	}
 }
 
 // LoadAt reads the project configuration from a specific workspace root
@@ -337,24 +346,19 @@ func LoadAt(root string) (*ProjectConfig, error) {
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	var config struct {
-		ProjectConfig
-		BaseSnapshotID string `json:"base_snapshot_id,omitempty"`
-	}
+	var config ProjectConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if config.ForkSnapshotID == "" && config.BaseSnapshotID != "" {
-		config.ForkSnapshotID = config.BaseSnapshotID
-	}
+	normalizeConfig(&config)
 	if config.CurrentSnapshotID == "" {
 		if latest, err := GetLatestSnapshotIDAt(root); err == nil && latest != "" {
 			config.CurrentSnapshotID = latest
 		}
 	}
 
-	return &config.ProjectConfig, nil
+	return &config, nil
 }
 
 // Save writes the project configuration to .fst/config.json
@@ -373,6 +377,9 @@ func Save(config *ProjectConfig) error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	if config != nil {
+		normalizeConfig(config)
+	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
@@ -393,6 +400,9 @@ func SaveAt(root string, config *ProjectConfig) error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	if config != nil {
+		normalizeConfig(config)
+	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
@@ -417,7 +427,7 @@ func Init(projectID, workspaceID, workspaceName string) error {
 }
 
 // InitAt creates a new workspace at a specific path
-func InitAt(root, projectID, workspaceID, workspaceName, forkSnapshotID string) error {
+func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) error {
 	configDir := filepath.Join(root, ConfigDirName)
 
 	// Check if already initialized
@@ -445,8 +455,8 @@ func InitAt(root, projectID, workspaceID, workspaceName, forkSnapshotID string) 
 		ProjectID:         projectID,
 		WorkspaceID:       workspaceID,
 		WorkspaceName:     workspaceName,
-		ForkSnapshotID:    forkSnapshotID,
-		CurrentSnapshotID: forkSnapshotID,
+		BaseSnapshotID:    baseSnapshotID,
+		CurrentSnapshotID: baseSnapshotID,
 		Mode:              "local",
 	}
 

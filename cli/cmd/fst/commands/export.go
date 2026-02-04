@@ -349,7 +349,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		// Check for drift
 		currentManifest, err := manifest.Generate(root, false)
 		if err == nil {
-			baseManifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.ForkSnapshotID)
+			baseManifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.BaseSnapshotID)
 			if err == nil {
 				baseManifestPath := filepath.Join(configDir, config.ManifestsDirName, baseManifestHash+".json")
 				if baseData, err := os.ReadFile(baseManifestPath); err == nil {

@@ -148,7 +148,7 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 	workspaceRoot = filepath.Join(parentPath, workspaceName)
 
 	var workspaceID string
-	var forkSnapshotID string
+	var baseSnapshotID string
 	if workspaceCfg == nil {
 		workspaceID = generateWorkspaceID()
 		if err := config.InitAt(workspaceRoot, projectID, workspaceID, workspaceName, ""); err != nil {
@@ -158,14 +158,14 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		if err != nil {
 			return err
 		}
-		forkSnapshotID = snapshotID
+		baseSnapshotID = snapshotID
 	} else {
 		workspaceCfg.WorkspaceName = workspaceName
 		if err := config.SaveAt(workspaceRoot, workspaceCfg); err != nil {
 			return fmt.Errorf("failed to update workspace config: %w", err)
 		}
 		workspaceID = workspaceCfg.WorkspaceID
-		forkSnapshotID = workspaceCfg.ForkSnapshotID
+		baseSnapshotID = workspaceCfg.BaseSnapshotID
 	}
 
 	if err := UpdateWorkspaceRegistry(originalWorkspaceRoot, RegisteredWorkspace{
@@ -173,16 +173,18 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		ProjectID:      projectID,
 		Name:           workspaceName,
 		Path:           workspaceRoot,
-		ForkSnapshotID: forkSnapshotID,
+		BaseSnapshotID: baseSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not update workspace registry: %v\n", err)
 	}
 
 	parentCfg := &config.ParentConfig{
-		ProjectID:   projectID,
-		ProjectName: projectName,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		ProjectID:       projectID,
+		ProjectName:     projectName,
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		BaseSnapshotID:  baseSnapshotID,
+		BaseWorkspaceID: workspaceID,
 	}
 	if err := config.SaveParentConfigAt(parentPath, parentCfg); err != nil {
 		return err
@@ -260,7 +262,7 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 		ProjectID:      projectID,
 		Name:           workspaceName,
 		Path:           workspacePath,
-		ForkSnapshotID: snapshotID,
+		BaseSnapshotID: snapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)

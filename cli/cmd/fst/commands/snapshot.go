@@ -215,8 +215,8 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	if message != "" {
 		fmt.Printf("  Message:  %s\n", message)
 	}
-	if cfg.ForkSnapshotID != "" {
-		fmt.Printf("  Fork:     %s\n", cfg.ForkSnapshotID)
+	if cfg.BaseSnapshotID != "" {
+		fmt.Printf("  Base:     %s\n", cfg.BaseSnapshotID)
 	}
 	fmt.Println("  (local only - not synced to cloud)")
 

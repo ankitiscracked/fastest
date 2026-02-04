@@ -80,9 +80,9 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 
 	fmt.Printf("Captured %d files.\n", m.FileCount())
 
-	// Update config with fork snapshot ID (fork point)
+	// Update config with base snapshot ID (base point)
 	cfg, _ := config.LoadAt(root)
-	cfg.ForkSnapshotID = snapshotID
+	cfg.BaseSnapshotID = snapshotID
 	cfg.CurrentSnapshotID = snapshotID
 	cfg.Mode = modeString(cloudSynced)
 	if err := config.SaveAt(root, cfg); err != nil {

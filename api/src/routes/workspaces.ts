@@ -47,7 +47,7 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
       project_id: workspaces.projectId,
       name: workspaces.name,
       machine_id: workspaces.machineId,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       local_path: workspaces.localPath,
@@ -72,7 +72,7 @@ workspaceRoutes.get('/:workspaceId', async (c) => {
     project_id: row.project_id,
     name: row.name,
     machine_id: row.machine_id,
-    fork_snapshot_id: row.fork_snapshot_id,
+    base_snapshot_id: row.base_snapshot_id,
     current_snapshot_id: row.current_snapshot_id,
     current_manifest_hash: row.current_manifest_hash,
     local_path: row.local_path,
@@ -425,7 +425,7 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
       id: workspaces.id,
       project_id: workspaces.projectId,
       name: workspaces.name,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       main_workspace_id: projects.mainWorkspaceId,
@@ -468,7 +468,7 @@ workspaceRoutes.get('/:workspaceId/drift/compare', async (c) => {
     .select({
       id: workspaces.id,
       name: workspaces.name,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       project_id: workspaces.projectId,
@@ -663,7 +663,7 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
       id: workspaces.id,
       project_id: workspaces.projectId,
       name: workspaces.name,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
       main_workspace_id: projects.mainWorkspaceId,
@@ -701,7 +701,7 @@ workspaceRoutes.post('/:workspaceId/drift/analyze', async (c) => {
     .select({
       id: workspaces.id,
       name: workspaces.name,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       current_manifest_hash: workspaces.currentManifestHash,
     })
@@ -915,7 +915,7 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
       id: workspaces.id,
       project_id: workspaces.projectId,
       name: workspaces.name,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       main_workspace_id: projects.mainWorkspaceId,
       owner_user_id: projects.ownerUserId,
@@ -946,7 +946,7 @@ workspaceRoutes.post('/:workspaceId/sync/prepare', async (c) => {
     .select({
       id: workspaces.id,
       name: workspaces.name,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
     })
     .from(workspaces)
@@ -1287,7 +1287,7 @@ workspaceRoutes.post('/:workspaceId/sync/execute', async (c) => {
     .select({
       id: workspaces.id,
       project_id: workspaces.projectId,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       version: workspaces.version,
     })
@@ -1699,7 +1699,7 @@ workspaceRoutes.post('/:workspaceId/sync/undo', async (c) => {
     .select({
       id: workspaces.id,
       project_id: workspaces.projectId,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
     })
     .from(workspaces)
@@ -1897,23 +1897,23 @@ function computeThreeWayMerge(
  * This mirrors the CLI's getMergeBase function with its 4-step fallback:
  *
  * 1. Check merge history - if we've merged from this source before
- * 2. Check if target was forked from source (via fork_snapshot_id metadata)
+ * 2. Check if target was forked from source (via base_snapshot_id metadata)
  * 3. Check if source was forked from target
  * 4. Check if both are siblings (forked from same parent)
- * 5. Fallback to target's fork_snapshot_id
+ * 5. Fallback to target's base_snapshot_id
  *
- * @returns The merge fork snapshot ID, or null if none found
+ * @returns The merge base snapshot ID, or null if none found
  */
 async function getMergeBase(
   db: ReturnType<typeof createDb>,
   targetWorkspaceId: string,
   sourceWorkspaceId: string
 ): Promise<string | null> {
-  // Get both workspaces with their merge history and fork snapshot IDs
+  // Get both workspaces with their merge history and base snapshot IDs
   const [targetResult, sourceResult] = await Promise.all([
     db.select({
       id: workspaces.id,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       merge_history: workspaces.mergeHistory,
     })
@@ -1922,7 +1922,7 @@ async function getMergeBase(
       .limit(1),
     db.select({
       id: workspaces.id,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
       merge_history: workspaces.mergeHistory,
     })
@@ -1959,28 +1959,28 @@ async function getMergeBase(
   }
 
   // 2. Check if target was forked from source
-  if (target.fork_snapshot_id) {
-    const targetBaseWorkspaceId = await getSnapshotWorkspaceId(target.fork_snapshot_id);
+  if (target.base_snapshot_id) {
+    const targetBaseWorkspaceId = await getSnapshotWorkspaceId(target.base_snapshot_id);
     if (targetBaseWorkspaceId === sourceWorkspaceId) {
       // Target was forked from source, use target's base as common ancestor
-      return target.fork_snapshot_id;
+      return target.base_snapshot_id;
     }
   }
 
   // 3. Check if source was forked from target
-  if (source.fork_snapshot_id) {
-    const sourceBaseWorkspaceId = await getSnapshotWorkspaceId(source.fork_snapshot_id);
+  if (source.base_snapshot_id) {
+    const sourceBaseWorkspaceId = await getSnapshotWorkspaceId(source.base_snapshot_id);
     if (sourceBaseWorkspaceId === targetWorkspaceId) {
       // Source was forked from target, use source's base as common ancestor
-      return source.fork_snapshot_id;
+      return source.base_snapshot_id;
     }
   }
 
   // 4. Check if both are siblings (forked from same parent workspace)
-  if (target.fork_snapshot_id && source.fork_snapshot_id) {
+  if (target.base_snapshot_id && source.base_snapshot_id) {
     const [targetBaseWsId, sourceBaseWsId] = await Promise.all([
-      getSnapshotWorkspaceId(target.fork_snapshot_id),
-      getSnapshotWorkspaceId(source.fork_snapshot_id),
+      getSnapshotWorkspaceId(target.base_snapshot_id),
+      getSnapshotWorkspaceId(source.base_snapshot_id),
     ]);
 
     if (targetBaseWsId && sourceBaseWsId && targetBaseWsId === sourceBaseWsId) {
@@ -1989,26 +1989,26 @@ async function getMergeBase(
       const [targetSnapshotResult, sourceSnapshotResult] = await Promise.all([
         db.select({ created_at: snapshots.createdAt })
           .from(snapshots)
-          .where(eq(snapshots.id, target.fork_snapshot_id!))
+          .where(eq(snapshots.id, target.base_snapshot_id!))
           .limit(1),
         db.select({ created_at: snapshots.createdAt })
           .from(snapshots)
-          .where(eq(snapshots.id, source.fork_snapshot_id!))
+          .where(eq(snapshots.id, source.base_snapshot_id!))
           .limit(1),
       ]);
 
       if (targetSnapshotResult[0] && sourceSnapshotResult[0]) {
         if (targetSnapshotResult[0].created_at < sourceSnapshotResult[0].created_at) {
-          return target.fork_snapshot_id;
+          return target.base_snapshot_id;
         }
-        return source.fork_snapshot_id;
+        return source.base_snapshot_id;
       }
     }
   }
 
-  // 5. Fallback to target's fork_snapshot_id
-  if (target.fork_snapshot_id) {
-    return target.fork_snapshot_id;
+  // 5. Fallback to target's base_snapshot_id
+  if (target.base_snapshot_id) {
+    return target.base_snapshot_id;
   }
 
   return null;
@@ -2450,7 +2450,7 @@ workspaceRoutes.get('/:workspaceId/snapshots', async (c) => {
     .select({
       id: workspaces.id,
       project_id: workspaces.projectId,
-      fork_snapshot_id: workspaces.forkSnapshotId,
+      base_snapshot_id: workspaces.baseSnapshotId,
       current_snapshot_id: workspaces.currentSnapshotId,
     })
     .from(workspaces)

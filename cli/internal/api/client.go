@@ -188,7 +188,7 @@ type Workspace struct {
 	ProjectID           string  `json:"project_id"`
 	Name                string  `json:"name"`
 	MachineID           *string `json:"machine_id"`
-	ForkSnapshotID      *string `json:"fork_snapshot_id"`
+	BaseSnapshotID      *string `json:"base_snapshot_id"`
 	CurrentSnapshotID   *string `json:"current_snapshot_id,omitempty"`
 	CurrentManifestHash *string `json:"current_manifest_hash,omitempty"`
 	LocalPath           *string `json:"local_path"`
@@ -203,7 +203,7 @@ type CreateProjectRequest struct {
 type CreateWorkspaceRequest struct {
 	Name           string  `json:"name"`
 	MachineID      *string `json:"machine_id,omitempty"`
-	ForkSnapshotID *string `json:"fork_snapshot_id,omitempty"`
+	BaseSnapshotID *string `json:"base_snapshot_id,omitempty"`
 	LocalPath      *string `json:"local_path,omitempty"`
 }
 

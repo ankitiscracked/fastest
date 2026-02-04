@@ -10,7 +10,7 @@ A container for identity and history.
 
 ### Workspace
 A local working copy of a project.
-- Tracks a fork snapshot (origin point)
+- Tracks a base snapshot (origin point)
 - Tracks a current snapshot (latest saved state)
 - Can detect drift (changes from fork)
 - Two types:
@@ -35,7 +35,7 @@ An immutable project state:
 - Upload/download deduped by blob hashes
 
 ### Drift
-Changes from the fork snapshot to current files:
+Changes from the base snapshot to current files:
 - Files added, modified, deleted
 - Can generate LLM summary via coding agents
 
@@ -146,7 +146,7 @@ Local projects and workspaces are indexed in `~/.config/fst/index.json`:
       "workspace_name": "main",
       "project_id": "proj-xyz",
       "path": "/Users/me/myproject/main",
-      "fork_snapshot_id": "snap-123"
+      "base_snapshot_id": "snap-123"
     }
   ]
 }

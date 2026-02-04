@@ -78,9 +78,9 @@ export function Workspaces() {
                 <div>
                   <h3 className="font-medium text-surface-800">{workspace.name}</h3>
                   <p className="text-sm text-surface-500 font-mono">{workspace.local_path}</p>
-                  {workspace.fork_snapshot_id && (
+                  {workspace.base_snapshot_id && (
                     <p className="text-xs text-surface-400 mt-1">
-                      Fork: {workspace.fork_snapshot_id.slice(0, 8)}...
+                      Base: {workspace.base_snapshot_id.slice(0, 8)}...
                     </p>
                   )}
                 </div>

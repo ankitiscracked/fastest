@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -76,13 +77,32 @@ func runCreate(args []string) error {
 		}
 
 		workspaceID := generateWorkspaceID()
-		if err := config.InitAt(workspaceDir, parentCfg.ProjectID, workspaceID, workspaceName, ""); err != nil {
+		baseSnapshotID := parentCfg.BaseSnapshotID
+		if err := config.InitAt(workspaceDir, parentCfg.ProjectID, workspaceID, workspaceName, baseSnapshotID); err != nil {
 			return fmt.Errorf("failed to initialize workspace: %w", err)
 		}
 
-		snapshotID, err := createInitialSnapshot(workspaceDir, workspaceID, workspaceName, false)
-		if err != nil {
-			return err
+		var snapshotID string
+		if baseSnapshotID == "" {
+			snapshotID, err = createInitialSnapshot(workspaceDir, workspaceID, workspaceName, false)
+			if err != nil {
+				return err
+			}
+			parentCfg.BaseSnapshotID = snapshotID
+			parentCfg.BaseWorkspaceID = workspaceID
+			if err := config.SaveParentConfigAt(parentRoot, parentCfg); err != nil {
+				return fmt.Errorf("failed to save project base snapshot: %w", err)
+			}
+		} else {
+			if err := copyBaseSnapshotToWorkspace(parentCfg, workspaceDir, baseSnapshotID); err != nil {
+				return err
+			}
+			snapshotID = baseSnapshotID
+			if cfg, err := config.LoadAt(workspaceDir); err == nil {
+				cfg.BaseSnapshotID = baseSnapshotID
+				cfg.CurrentSnapshotID = baseSnapshotID
+				_ = config.SaveAt(workspaceDir, cfg)
+			}
 		}
 
 		if err := RegisterWorkspace(RegisteredWorkspace{
@@ -90,7 +110,7 @@ func runCreate(args []string) error {
 			ProjectID:      parentCfg.ProjectID,
 			Name:           workspaceName,
 			Path:           workspaceDir,
-			ForkSnapshotID: snapshotID,
+			BaseSnapshotID: snapshotID,
 			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
 			fmt.Printf("Warning: Could not register workspace: %v\n", err)
@@ -121,4 +141,87 @@ func printCreateSuccess(projectName, workspaceName, workspaceDir, snapshotID str
 	fmt.Println("Next steps:")
 	fmt.Printf("  cd %s\n", workspaceDir)
 	fmt.Println("  fst drift        # Check for changes")
+}
+
+func copyBaseSnapshotToWorkspace(parentCfg *config.ParentConfig, workspaceDir, baseSnapshotID string) error {
+	if parentCfg == nil || baseSnapshotID == "" {
+		return nil
+	}
+
+	registry, err := LoadRegistry()
+	if err != nil {
+		return fmt.Errorf("failed to load workspace registry: %w", err)
+	}
+
+	sourcePath := ""
+	if parentCfg.BaseWorkspaceID != "" {
+		for _, ws := range registry.Workspaces {
+			if ws.ID == parentCfg.BaseWorkspaceID {
+				sourcePath = ws.Path
+				break
+			}
+		}
+	}
+	if sourcePath == "" {
+		for _, ws := range registry.Workspaces {
+			if ws.ProjectID != parentCfg.ProjectID {
+				continue
+			}
+			metaPath := filepath.Join(ws.Path, ".fst", config.SnapshotsDirName, baseSnapshotID+".meta.json")
+			if _, err := os.Stat(metaPath); err == nil {
+				sourcePath = ws.Path
+				break
+			}
+		}
+	}
+	if sourcePath == "" {
+		return fmt.Errorf("base snapshot source workspace not found")
+	}
+
+	sourceSnapshots := filepath.Join(sourcePath, ".fst", config.SnapshotsDirName)
+	sourceManifests := filepath.Join(sourcePath, ".fst", config.ManifestsDirName)
+	targetSnapshots := filepath.Join(workspaceDir, ".fst", config.SnapshotsDirName)
+	targetManifests := filepath.Join(workspaceDir, ".fst", config.ManifestsDirName)
+
+	metaPath := filepath.Join(sourceSnapshots, baseSnapshotID+".meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		return fmt.Errorf("failed to read base snapshot metadata: %w", err)
+	}
+
+	var meta struct {
+		ManifestHash string `json:"manifest_hash"`
+	}
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		return fmt.Errorf("failed to parse base snapshot metadata: %w", err)
+	}
+	if meta.ManifestHash == "" {
+		return fmt.Errorf("base snapshot metadata missing manifest hash")
+	}
+
+	manifestPath := filepath.Join(sourceManifests, meta.ManifestHash+".json")
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("failed to read base manifest: %w", err)
+	}
+
+	if err := os.MkdirAll(targetSnapshots, 0755); err != nil {
+		return fmt.Errorf("failed to create snapshots dir: %w", err)
+	}
+	if err := os.MkdirAll(targetManifests, 0755); err != nil {
+		return fmt.Errorf("failed to create manifests dir: %w", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(targetSnapshots, baseSnapshotID+".meta.json")); err != nil {
+		if err := os.WriteFile(filepath.Join(targetSnapshots, baseSnapshotID+".meta.json"), metaData, 0644); err != nil {
+			return fmt.Errorf("failed to write base snapshot metadata: %w", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(targetManifests, meta.ManifestHash+".json")); err != nil {
+		if err := os.WriteFile(filepath.Join(targetManifests, meta.ManifestHash+".json"), manifestData, 0644); err != nil {
+			return fmt.Errorf("failed to write base manifest: %w", err)
+		}
+	}
+
+	return nil
 }

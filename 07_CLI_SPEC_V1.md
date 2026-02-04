@@ -99,7 +99,7 @@ fst rollback [snapshot-id]   # Restore files from snapshot
 ### Drift
 
 ```bash
-fst drift                    # Show changes from fork snapshot
+fst drift                    # Show changes from base snapshot
   --json                     # Output as JSON
   --agent-summary            # Generate LLM summary (requires agent)
   --sync                     # Sync drift report to cloud
@@ -285,7 +285,7 @@ workspace_id: local-abc123
       "workspace_name": "main",
       "project_id": "proj-xyz",
       "path": "/path/to/project/main",
-      "fork_snapshot_id": "snap-123",
+      "base_snapshot_id": "snap-123",
       "created_at": "2024-01-15T10:00:00Z",
       "last_seen_at": "2024-01-20T12:00:00Z"
     }

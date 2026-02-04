@@ -429,8 +429,8 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 	}
 
 	cfg.CurrentSnapshotID = lastSnapshot
-	if cfg.ForkSnapshotID == "" || rebuild {
-		cfg.ForkSnapshotID = firstSnapshot
+	if cfg.BaseSnapshotID == "" || rebuild {
+		cfg.BaseSnapshotID = firstSnapshot
 	}
 	if err := config.SaveAt(targetRoot, cfg); err != nil {
 		return fmt.Errorf("failed to save workspace config: %w", err)
@@ -441,7 +441,7 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 		ProjectID:      cfg.ProjectID,
 		Name:           cfg.WorkspaceName,
 		Path:           targetRoot,
-		ForkSnapshotID: cfg.ForkSnapshotID,
+		BaseSnapshotID: cfg.BaseSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)
@@ -473,7 +473,7 @@ func resetWorkspaceSnapshots(root string, cfg *config.ProjectConfig) error {
 		return fmt.Errorf("failed to create manifests dir: %w", err)
 	}
 	cfg.CurrentSnapshotID = ""
-	cfg.ForkSnapshotID = ""
+	cfg.BaseSnapshotID = ""
 	return config.ClearPendingMergeParentsAt(root)
 }
 

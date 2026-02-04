@@ -80,7 +80,7 @@ export const workspaces = sqliteTable('workspaces', {
   projectId: text('project_id').notNull().references(() => projects.id),
   name: text('name').notNull(),
   machineId: text('machine_id'),
-  forkSnapshotId: text('fork_snapshot_id').references(() => snapshots.id),
+  baseSnapshotId: text('base_snapshot_id').references(() => snapshots.id),
   currentSnapshotId: text('current_snapshot_id').references(() => snapshots.id),
   currentManifestHash: text('current_manifest_hash'),
   localPath: text('local_path'),

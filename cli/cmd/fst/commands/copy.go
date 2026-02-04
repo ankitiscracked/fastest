@@ -28,8 +28,8 @@ func newCopyCmd() *cobra.Command {
 This will:
 1. Copy all project files to the target directory (respecting .fstignore)
 2. Create a full .fst/ directory with its own config and snapshots
-3. Set the new workspace's fork_snapshot_id to the current workspace's last snapshot (fork point)
-4. Copy the fork-point snapshot to the new workspace
+3. Set the new workspace's base_snapshot_id to the current workspace's last snapshot (base point)
+4. Copy the base-point snapshot to the new workspace
 
 The new workspace is fully independent and can be moved or deleted without
 affecting other workspaces. Blobs are stored in the global cache (~/.cache/fst/blobs/)
@@ -72,14 +72,14 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	// Determine the fork point snapshot
-	// Use the most recent snapshot if available, otherwise fork_snapshot_id
+	// Determine the base point snapshot
+	// Use the most recent snapshot if available, otherwise base_snapshot_id
 	forkSnapshotID, _ := config.GetLatestSnapshotIDAt(root)
 	if forkSnapshotID == "" {
-		forkSnapshotID = cfg.ForkSnapshotID
+		forkSnapshotID = cfg.BaseSnapshotID
 	}
 	if forkSnapshotID == "" {
-		return fmt.Errorf("current workspace has no snapshots - run 'fst snapshot' first to create a fork point")
+		return fmt.Errorf("current workspace has no snapshots - run 'fst snapshot' first to create a base point")
 	}
 
 	// Compute default target directory if not specified
@@ -224,7 +224,7 @@ func runCopy(name, targetDir string) error {
 	workspaceID := generateLocalID()
 
 	// Initialize the new workspace with its own .fst/ directory
-	// Set fork_snapshot_id to the fork point (source's current/last snapshot)
+	// Set base_snapshot_id to the base point (source's current/last snapshot)
 	if err := config.InitAt(targetDir, cfg.ProjectID, workspaceID, name, forkSnapshotID); err != nil {
 		os.RemoveAll(targetDir)
 		return fmt.Errorf("failed to initialize workspace: %w", err)
@@ -270,7 +270,7 @@ func runCopy(name, targetDir string) error {
 		ProjectID:      cfg.ProjectID,
 		Name:           name,
 		Path:           targetDir,
-		ForkSnapshotID: forkSnapshotID,
+		BaseSnapshotID: forkSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)
@@ -281,7 +281,7 @@ func runCopy(name, targetDir string) error {
 	fmt.Println()
 	fmt.Printf("  Name:      %s\n", name)
 	fmt.Printf("  Directory: %s\n", targetDir)
-	fmt.Printf("  Fork from: %s\n", forkSnapshotID)
+	fmt.Printf("  Base from: %s\n", forkSnapshotID)
 	fmt.Printf("  ID:        %s\n", workspaceID)
 	fmt.Println()
 	fmt.Println("  (blobs shared in global cache - no storage duplication)")

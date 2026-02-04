@@ -84,7 +84,7 @@ export class ConversationFiles {
   }
 
   /**
-   * Initialize workspace from fork snapshot if available
+   * Initialize workspace from base snapshot if available
    */
   async initializeWorkspace(
     sandbox: SandboxRunner,

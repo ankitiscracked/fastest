@@ -84,7 +84,7 @@ export interface Workspace {
   project_id: string;
   name: string;
   machine_id: string | null;
-  fork_snapshot_id: string | null;
+  base_snapshot_id: string | null;
   current_snapshot_id: string | null;
   current_manifest_hash: string | null;
   local_path: string | null;
@@ -227,7 +227,7 @@ export {
 // Drift types
 
 export interface DriftDetail {
-  fork_snapshot_id: string;
+  base_snapshot_id: string;
   files_added: string[];
   files_modified: string[];
   files_deleted: string[];
@@ -284,7 +284,7 @@ export interface CreateProjectResponse {
 
 export interface CreateWorkspaceRequest {
   name: string;
-  fork_snapshot_id?: string;
+  base_snapshot_id?: string;
   machine_id?: string;
   local_path?: string;
 }
