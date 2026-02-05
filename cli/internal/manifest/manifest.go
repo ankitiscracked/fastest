@@ -12,13 +12,21 @@ import (
 	"github.com/anthropics/fastest/cli/internal/ignore"
 )
 
-// FileEntry represents a single file in the manifest
+const (
+	EntryTypeFile    = "file"
+	EntryTypeDir     = "dir"
+	EntryTypeSymlink = "symlink"
+)
+
+// FileEntry represents a single entry in the manifest
 type FileEntry struct {
+	Type    string `json:"type"`
 	Path    string `json:"path"`
-	Hash    string `json:"hash"`
-	Size    int64  `json:"size"`
-	Mode    uint32 `json:"mode"`
+	Hash    string `json:"hash,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+	Mode    uint32 `json:"mode,omitempty"`
 	ModTime int64  `json:"mod_time,omitempty"` // Unix timestamp, optional for reproducibility
+	Target  string `json:"target,omitempty"`   // symlink target
 }
 
 // Manifest represents a complete project snapshot
@@ -83,13 +91,33 @@ func Generate(root string, includeModTime bool) (*Manifest, error) {
 			return nil
 		}
 
-		// Skip directories (we only track files)
-		if info.IsDir() {
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			entry := FileEntry{
+				Type:   EntryTypeSymlink,
+				Path:   relPath,
+				Target: target,
+			}
+			if includeModTime {
+				entry.ModTime = info.ModTime().Unix()
+			}
+			manifest.Files = append(manifest.Files, entry)
 			return nil
 		}
 
-		// Skip symlinks
-		if info.Mode()&os.ModeSymlink != 0 {
+		if info.IsDir() {
+			entry := FileEntry{
+				Type: EntryTypeDir,
+				Path: relPath,
+				Mode: uint32(info.Mode().Perm()),
+			}
+			if includeModTime {
+				entry.ModTime = info.ModTime().Unix()
+			}
+			manifest.Files = append(manifest.Files, entry)
 			return nil
 		}
 
@@ -100,6 +128,7 @@ func Generate(root string, includeModTime bool) (*Manifest, error) {
 		}
 
 		entry := FileEntry{
+			Type: EntryTypeFile,
 			Path: relPath,
 			Hash: hash,
 			Size: info.Size(),
@@ -120,6 +149,9 @@ func Generate(root string, includeModTime bool) (*Manifest, error) {
 
 	// Sort files for reproducibility
 	sort.Slice(manifest.Files, func(i, j int) bool {
+		if manifest.Files[i].Path == manifest.Files[j].Path {
+			return manifest.Files[i].Type < manifest.Files[j].Type
+		}
 		return manifest.Files[i].Path < manifest.Files[j].Path
 	})
 
@@ -167,7 +199,7 @@ func Diff(base, current *Manifest) (added, modified, deleted []string) {
 	for _, f := range current.Files {
 		if baseFile, exists := baseMap[f.Path]; !exists {
 			added = append(added, f.Path)
-		} else if baseFile.Hash != f.Hash {
+		} else if !entriesEqual(baseFile, f) {
 			modified = append(modified, f.Path)
 		}
 	}
@@ -186,16 +218,70 @@ func Diff(base, current *Manifest) (added, modified, deleted []string) {
 	return added, modified, deleted
 }
 
+func entriesEqual(a, b FileEntry) bool {
+	if a.Type != b.Type {
+		return false
+	}
+	switch a.Type {
+	case EntryTypeFile:
+		return a.Hash == b.Hash && a.Mode == b.Mode
+	case EntryTypeSymlink:
+		return a.Target == b.Target
+	case EntryTypeDir:
+		return a.Mode == b.Mode
+	default:
+		return a.Hash == b.Hash && a.Target == b.Target && a.Mode == b.Mode
+	}
+}
+
+func (m *Manifest) FileEntries() []FileEntry {
+	files := make([]FileEntry, 0, len(m.Files))
+	for _, f := range m.Files {
+		if f.Type == EntryTypeFile {
+			files = append(files, f)
+		}
+	}
+	return files
+}
+
+func (m *Manifest) DirEntries() []FileEntry {
+	dirs := make([]FileEntry, 0, len(m.Files))
+	for _, f := range m.Files {
+		if f.Type == EntryTypeDir {
+			dirs = append(dirs, f)
+		}
+	}
+	return dirs
+}
+
+func (m *Manifest) SymlinkEntries() []FileEntry {
+	links := make([]FileEntry, 0, len(m.Files))
+	for _, f := range m.Files {
+		if f.Type == EntryTypeSymlink {
+			links = append(links, f)
+		}
+	}
+	return links
+}
+
 // TotalSize returns the total size of all files in the manifest
 func (m *Manifest) TotalSize() int64 {
 	var total int64
 	for _, f := range m.Files {
-		total += f.Size
+		if f.Type == EntryTypeFile {
+			total += f.Size
+		}
 	}
 	return total
 }
 
 // FileCount returns the number of files in the manifest
 func (m *Manifest) FileCount() int {
-	return len(m.Files)
+	count := 0
+	for _, f := range m.Files {
+		if f.Type == EntryTypeFile {
+			count++
+		}
+	}
+	return count
 }

@@ -335,6 +335,7 @@ func TestSyncDownloadsManifestAndBlobsDryRun(t *testing.T) {
 		Version: "1",
 		Files: []manifest.FileEntry{
 			{
+				Type: manifest.EntryTypeFile,
 				Path: "remote.txt",
 				Hash: hashStr,
 				Size: int64(len(content)),
@@ -772,6 +773,7 @@ func TestSyncDryRunShowsConflicts(t *testing.T) {
 		Version: "1",
 		Files: []manifest.FileEntry{
 			{
+				Type: manifest.EntryTypeFile,
 				Path: "file.txt",
 				Hash: hashStr,
 				Size: int64(len(remoteContent)),
@@ -906,6 +908,7 @@ func TestSyncApplyNonConflicting(t *testing.T) {
 		Version: "1",
 		Files: []manifest.FileEntry{
 			{
+				Type: manifest.EntryTypeFile,
 				Path: "remote.txt",
 				Hash: hashStr,
 				Size: int64(len(content)),

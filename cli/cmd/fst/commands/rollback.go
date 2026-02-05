@@ -114,28 +114,28 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 		return fmt.Errorf("failed to load snapshot: %w", err)
 	}
 
-	// Build lookup map of target files
-	targetFiles := make(map[string]manifest.FileEntry)
+	// Build lookup map of target entries
+	targetEntries := make(map[string]manifest.FileEntry)
 	for _, f := range targetManifest.Files {
-		targetFiles[f.Path] = f
+		targetEntries[f.Path] = f
 	}
 
-	// Determine which files to restore
+	// Determine which entries to restore
 	var toRestore []manifest.FileEntry
 	var toDelete []string
 
 	if all {
-		// Restore all files from snapshot
+		// Restore all entries from snapshot
 		toRestore = targetManifest.Files
 
-		// Find files to delete (exist now but not in snapshot)
+		// Find files/symlinks to delete (exist now but not in snapshot)
 		currentManifest, err := manifest.Generate(root, false)
 		if err != nil {
 			return fmt.Errorf("failed to scan current files: %w", err)
 		}
 
-		for _, f := range currentManifest.Files {
-			if _, exists := targetFiles[f.Path]; !exists {
+		for _, f := range append(currentManifest.FileEntries(), currentManifest.SymlinkEntries()...) {
+			if _, exists := targetEntries[f.Path]; !exists {
 				toDelete = append(toDelete, f.Path)
 			}
 		}
@@ -148,7 +148,7 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 
 			matched := false
 			for _, f := range targetManifest.Files {
-				// Match exact file or directory prefix
+				// Match exact entry or directory prefix
 				if f.Path == pattern || strings.HasPrefix(f.Path, pattern+"/") {
 					toRestore = append(toRestore, f)
 					matched = true
@@ -172,13 +172,16 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 	})
 	sort.Strings(toDelete)
 
-	// Check blob availability in global cache
+	// Check blob availability in global cache (files only)
 	blobDir, err := config.GetGlobalBlobDir()
 	if err != nil {
 		return fmt.Errorf("failed to get global blob directory: %w", err)
 	}
 	missingBlobs := []string{}
 	for _, f := range toRestore {
+		if f.Type != manifest.EntryTypeFile {
+			continue
+		}
 		blobPath := filepath.Join(blobDir, f.Hash)
 		if _, err := os.Stat(blobPath); os.IsNotExist(err) {
 			missingBlobs = append(missingBlobs, f.Path)
@@ -201,19 +204,30 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 	fmt.Println()
 
 	if len(toRestore) > 0 {
-		fmt.Printf("Files to restore (%d):\n", len(toRestore))
+		fmt.Printf("Entries to restore (%d):\n", len(toRestore))
 		for _, f := range toRestore {
-			// Check if file differs from current
+			// Check if entry differs from current
 			currentPath := filepath.Join(root, f.Path)
 			status := ""
-			if _, err := os.Stat(currentPath); os.IsNotExist(err) {
+			if _, err := os.Lstat(currentPath); os.IsNotExist(err) {
 				status = " (missing)"
 			} else {
-				currentHash, _ := manifest.HashFile(currentPath)
-				if currentHash != f.Hash {
-					status = " (modified)"
-				} else {
-					status = " (unchanged)"
+				switch f.Type {
+				case manifest.EntryTypeFile:
+					currentHash, _ := manifest.HashFile(currentPath)
+					if currentHash != f.Hash {
+						status = " (modified)"
+					} else {
+						status = " (unchanged)"
+					}
+				case manifest.EntryTypeSymlink:
+					if target, err := os.Readlink(currentPath); err != nil || target != f.Target {
+						status = " (modified)"
+					} else {
+						status = " (unchanged)"
+					}
+				default:
+					status = ""
 				}
 			}
 			fmt.Printf("  \033[32m↩ %s\033[0m%s\n", f.Path, status)
@@ -239,12 +253,19 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 		hasChanges := false
 		for _, f := range toRestore {
 			currentPath := filepath.Join(root, f.Path)
-			if _, err := os.Stat(currentPath); err == nil {
-				currentHash, _ := manifest.HashFile(currentPath)
-				if currentHash != f.Hash {
-					// Check if it also differs from current base
-					// (meaning there are local uncommitted changes)
-					hasChanges = true
+			if _, err := os.Lstat(currentPath); err == nil {
+				switch f.Type {
+				case manifest.EntryTypeFile:
+					currentHash, _ := manifest.HashFile(currentPath)
+					if currentHash != f.Hash {
+						hasChanges = true
+					}
+				case manifest.EntryTypeSymlink:
+					if target, err := os.Readlink(currentPath); err != nil || target != f.Target {
+						hasChanges = true
+					}
+				}
+				if hasChanges {
 					break
 				}
 			}
@@ -262,28 +283,47 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 
 	for _, f := range toRestore {
 		targetPath := filepath.Join(root, f.Path)
-		blobPath := filepath.Join(blobDir, f.Hash)
-
-		// Ensure parent directory exists
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-			fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-			continue
+		switch f.Type {
+		case manifest.EntryTypeDir:
+			if err := os.MkdirAll(targetPath, 0755); err != nil {
+				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
+				continue
+			}
+			if f.Mode != 0 {
+				if err := os.Chmod(targetPath, os.FileMode(f.Mode)); err != nil {
+					fmt.Printf("  ✗ %s: %v\n", f.Path, err)
+					continue
+				}
+			}
+			restored++
+		case manifest.EntryTypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
+				continue
+			}
+			_ = os.RemoveAll(targetPath)
+			if err := os.Symlink(f.Target, targetPath); err != nil {
+				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
+				continue
+			}
+			restored++
+		case manifest.EntryTypeFile:
+			blobPath := filepath.Join(blobDir, f.Hash)
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
+				continue
+			}
+			content, err := os.ReadFile(blobPath)
+			if err != nil {
+				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
+				continue
+			}
+			if err := os.WriteFile(targetPath, content, os.FileMode(f.Mode)); err != nil {
+				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
+				continue
+			}
+			restored++
 		}
-
-		// Read blob
-		content, err := os.ReadFile(blobPath)
-		if err != nil {
-			fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-			continue
-		}
-
-		// Write file with original mode
-		if err := os.WriteFile(targetPath, content, os.FileMode(f.Mode)); err != nil {
-			fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-			continue
-		}
-
-		restored++
 	}
 
 	for _, f := range toDelete {

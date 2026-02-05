@@ -564,7 +564,7 @@ func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectCo
 	if err != nil {
 		return "", fmt.Errorf("failed to get blob directory: %w", err)
 	}
-	for _, f := range m.Files {
+	for _, f := range m.FileEntries() {
 		blobPath := filepath.Join(blobDir, f.Hash)
 		if _, err := os.Stat(blobPath); err == nil {
 			continue

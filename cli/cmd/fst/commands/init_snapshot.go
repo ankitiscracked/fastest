@@ -30,7 +30,7 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 	if err != nil {
 		return "", fmt.Errorf("failed to get global blob directory: %w", err)
 	}
-	for _, f := range m.Files {
+	for _, f := range m.FileEntries() {
 		blobPath := filepath.Join(blobDir, f.Hash)
 		if _, err := os.Stat(blobPath); err == nil {
 			continue

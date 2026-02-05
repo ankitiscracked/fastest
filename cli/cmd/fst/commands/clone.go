@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -184,9 +185,10 @@ func ensureEmptyDir(path string) error {
 }
 
 func materializeSnapshot(client *api.Client, root string, m *manifest.Manifest) error {
-	hashes := make([]string, 0, len(m.Files))
+	fileEntries := m.FileEntries()
+	hashes := make([]string, 0, len(fileEntries))
 	seen := make(map[string]struct{})
-	for _, f := range m.Files {
+	for _, f := range fileEntries {
 		if _, ok := seen[f.Hash]; ok {
 			continue
 		}
@@ -227,7 +229,37 @@ func materializeSnapshot(client *api.Client, root string, m *manifest.Manifest) 
 		}
 	}
 
-	for _, f := range m.Files {
+	// Create directories first (including empty dirs)
+	dirs := m.DirEntries()
+	sort.Slice(dirs, func(i, j int) bool {
+		return len(dirs[i].Path) < len(dirs[j].Path)
+	})
+	for _, d := range dirs {
+		destPath := filepath.Join(root, filepath.FromSlash(d.Path))
+		if err := os.MkdirAll(destPath, 0755); err != nil {
+			return err
+		}
+		if d.Mode != 0 {
+			if err := os.Chmod(destPath, os.FileMode(d.Mode)); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Create symlinks
+	for _, l := range m.SymlinkEntries() {
+		destPath := filepath.Join(root, filepath.FromSlash(l.Path))
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return err
+		}
+		_ = os.RemoveAll(destPath)
+		if err := os.Symlink(l.Target, destPath); err != nil {
+			return err
+		}
+	}
+
+	// Write files
+	for _, f := range fileEntries {
 		destPath := filepath.Join(root, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 			return err

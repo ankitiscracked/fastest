@@ -130,7 +130,7 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 	}
 
 	blobsCached := 0
-	for _, f := range m.Files {
+	for _, f := range m.FileEntries() {
 		blobPath := filepath.Join(blobDir, f.Hash)
 		// Skip if blob already cached
 		if _, err := os.Stat(blobPath); err == nil {
@@ -357,7 +357,7 @@ func CreateAutoSnapshot(message string) (string, error) {
 		return "", fmt.Errorf("failed to get global blob directory: %w", err)
 	}
 
-	for _, f := range m.Files {
+	for _, f := range m.FileEntries() {
 		blobPath := filepath.Join(blobDir, f.Hash)
 		if _, err := os.Stat(blobPath); err == nil {
 			continue
@@ -483,13 +483,13 @@ func generateSnapshotSummary(root string, cfg *config.ProjectConfig) (string, er
 }
 
 func uploadSnapshotToCloud(client *api.Client, root string, m *manifest.Manifest, manifestHash string, manifestJSON []byte) error {
-	if len(m.Files) == 0 {
+	if len(m.FileEntries()) == 0 {
 		return client.UploadManifest(manifestHash, manifestJSON)
 	}
 
 	hashToPath := make(map[string]string)
-	hashes := make([]string, 0, len(m.Files))
-	for _, f := range m.Files {
+	hashes := make([]string, 0, len(m.FileEntries()))
+	for _, f := range m.FileEntries() {
 		if _, exists := hashToPath[f.Hash]; !exists {
 			hashToPath[f.Hash] = f.Path
 			hashes = append(hashes, f.Hash)

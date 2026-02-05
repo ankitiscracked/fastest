@@ -40,15 +40,15 @@ type DivergenceReport struct {
 
 // SnapshotMeta represents snapshot metadata
 type SnapshotMeta struct {
-	ID               string `json:"id"`
-	WorkspaceID      string `json:"workspace_id"`
-	WorkspaceName    string `json:"workspace_name"`
-	ManifestHash     string `json:"manifest_hash"`
+	ID                string   `json:"id"`
+	WorkspaceID       string   `json:"workspace_id"`
+	WorkspaceName     string   `json:"workspace_name"`
+	ManifestHash      string   `json:"manifest_hash"`
 	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-	Message          string `json:"message"`
-	CreatedAt        string `json:"created_at"`
-	Files            int    `json:"files"`
-	Size             int64  `json:"size"`
+	Message           string   `json:"message"`
+	CreatedAt         string   `json:"created_at"`
+	Files             int      `json:"files"`
+	Size              int64    `json:"size"`
 }
 
 // LoadSnapshotMeta loads snapshot metadata from a workspace's snapshots directory
@@ -135,9 +135,11 @@ func ComputeFromCache(root string) (*Report, error) {
 
 		var added []string
 		var bytesChanged int64
-		for _, f := range current.Files {
+		for _, f := range append(current.FileEntries(), current.SymlinkEntries()...) {
 			added = append(added, f.Path)
-			bytesChanged += f.Size
+			if f.Type == manifest.EntryTypeFile {
+				bytesChanged += f.Size
+			}
 		}
 
 		return &Report{
@@ -190,9 +192,11 @@ func ComputeFromLatestSnapshot(root string) (*Report, error) {
 
 		var added []string
 		var bytesChanged int64
-		for _, f := range current.Files {
+		for _, f := range append(current.FileEntries(), current.SymlinkEntries()...) {
 			added = append(added, f.Path)
-			bytesChanged += f.Size
+			if f.Type == manifest.EntryTypeFile {
+				bytesChanged += f.Size
+			}
 		}
 
 		return &Report{
@@ -531,11 +535,11 @@ func calculateBytesChanged(base, current *manifest.Manifest, added, modified, de
 	var bytesChanged int64
 
 	currentMap := make(map[string]manifest.FileEntry)
-	for _, f := range current.Files {
+	for _, f := range current.FileEntries() {
 		currentMap[f.Path] = f
 	}
 	baseMap := make(map[string]manifest.FileEntry)
-	for _, f := range base.Files {
+	for _, f := range base.FileEntries() {
 		baseMap[f.Path] = f
 	}
 

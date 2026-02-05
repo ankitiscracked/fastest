@@ -15,11 +15,11 @@ import (
 
 // Hunk represents an overlapping change region
 type Hunk struct {
-	StartLine   int      `json:"start_line"`
-	EndLine     int      `json:"end_line"`
-	CurrentLines  []string `json:"local_lines"`
-	SourceLines []string `json:"remote_lines"`
-	BaseLines   []string `json:"base_lines"`
+	StartLine    int      `json:"start_line"`
+	EndLine      int      `json:"end_line"`
+	CurrentLines []string `json:"local_lines"`
+	SourceLines  []string `json:"remote_lines"`
+	BaseLines    []string `json:"base_lines"`
 }
 
 // FileConflict represents a git-style conflict in a file
@@ -84,7 +84,7 @@ func NewFileSystemAccessor(root string, m *manifest.Manifest) *FileSystemAccesso
 // Get retrieves file content from the filesystem
 func (a *FileSystemAccessor) Get(hash string) (string, error) {
 	// Find file path by hash
-	for _, f := range a.manifest.Files {
+	for _, f := range a.manifest.FileEntries() {
 		if f.Hash == hash {
 			data, err := os.ReadFile(filepath.Join(a.root, f.Path))
 			if err != nil {
@@ -271,7 +271,7 @@ func findOverlappingFiles(a, b map[string]bool) []string {
 // getFileEntry finds a file entry by path in a manifest
 func getFileEntry(m *manifest.Manifest, path string) *manifest.FileEntry {
 	for i := range m.Files {
-		if m.Files[i].Path == path {
+		if m.Files[i].Path == path && m.Files[i].Type == manifest.EntryTypeFile {
 			return &m.Files[i]
 		}
 	}
@@ -301,11 +301,11 @@ func findConflictingHunks(base, local, remote string) []Hunk {
 				remoteLines := getLinesFromDiff(base, remote, rr)
 
 				hunks = append(hunks, Hunk{
-					StartLine:   lr.start,
-					EndLine:     max(lr.end, rr.end),
-					BaseLines:   baseLines,
-					CurrentLines:  localLines,
-					SourceLines: remoteLines,
+					StartLine:    lr.start,
+					EndLine:      max(lr.end, rr.end),
+					BaseLines:    baseLines,
+					CurrentLines: localLines,
+					SourceLines:  remoteLines,
 				})
 			}
 		}

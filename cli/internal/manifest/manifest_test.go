@@ -97,10 +97,17 @@ func TestGenerateIgnoresAndModes(t *testing.T) {
 	if paths["run.sh"].Mode != 0755 {
 		t.Fatalf("expected run.sh mode 0755, got %o", paths["run.sh"].Mode)
 	}
+	if paths["run.sh"].Type != EntryTypeFile {
+		t.Fatalf("expected run.sh to be file")
+	}
 
 	if runtime.GOOS != "windows" {
-		if _, ok := paths["link.sh"]; ok {
-			t.Fatalf("expected symlink to be skipped")
+		link, ok := paths["link.sh"]
+		if !ok {
+			t.Fatalf("expected symlink to be included")
+		}
+		if link.Type != EntryTypeSymlink {
+			t.Fatalf("expected link.sh to be symlink")
 		}
 	}
 }
@@ -109,16 +116,16 @@ func TestDiff(t *testing.T) {
 	base := &Manifest{
 		Version: "1",
 		Files: []FileEntry{
-			{Path: "a.txt", Hash: "h1"},
-			{Path: "b.txt", Hash: "h2"},
+			{Type: EntryTypeFile, Path: "a.txt", Hash: "h1"},
+			{Type: EntryTypeFile, Path: "b.txt", Hash: "h2"},
 		},
 	}
 	current := &Manifest{
 		Version: "1",
 		Files: []FileEntry{
-			{Path: "a.txt", Hash: "h1"},
-			{Path: "b.txt", Hash: "h3"},
-			{Path: "c.txt", Hash: "h4"},
+			{Type: EntryTypeFile, Path: "a.txt", Hash: "h1"},
+			{Type: EntryTypeFile, Path: "b.txt", Hash: "h3"},
+			{Type: EntryTypeFile, Path: "c.txt", Hash: "h4"},
 		},
 	}
 

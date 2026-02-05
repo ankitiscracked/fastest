@@ -636,17 +636,17 @@ func computeMergeActions(base, current, source *manifest.Manifest) *mergeActions
 
 	// Build lookup maps
 	baseFiles := make(map[string]manifest.FileEntry)
-	for _, f := range base.Files {
+	for _, f := range base.FileEntries() {
 		baseFiles[f.Path] = f
 	}
 
 	currentFiles := make(map[string]manifest.FileEntry)
-	for _, f := range current.Files {
+	for _, f := range current.FileEntries() {
 		currentFiles[f.Path] = f
 	}
 
 	sourceFiles := make(map[string]manifest.FileEntry)
-	for _, f := range source.Files {
+	for _, f := range source.FileEntries() {
 		sourceFiles[f.Path] = f
 	}
 

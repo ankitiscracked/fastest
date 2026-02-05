@@ -386,11 +386,11 @@ func removeFilesNotInManifest(root string, target *manifest.Manifest) error {
 	}
 
 	targetSet := make(map[string]struct{}, len(target.Files))
-	for _, f := range target.Files {
+	for _, f := range append(target.FileEntries(), target.SymlinkEntries()...) {
 		targetSet[f.Path] = struct{}{}
 	}
 
-	for _, f := range current.Files {
+	for _, f := range append(current.FileEntries(), current.SymlinkEntries()...) {
 		if _, ok := targetSet[f.Path]; ok {
 			continue
 		}

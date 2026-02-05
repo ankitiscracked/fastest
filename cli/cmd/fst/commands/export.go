@@ -654,7 +654,7 @@ func restoreFilesFromManifest(root, configDir string, m *manifest.Manifest) erro
 	// First, remove files that shouldn't exist (except .git and .fst)
 	// We'll do this by tracking what should exist
 	shouldExist := make(map[string]bool)
-	for _, f := range m.Files {
+	for _, f := range m.FileEntries() {
 		shouldExist[f.Path] = true
 	}
 
@@ -687,7 +687,7 @@ func restoreFilesFromManifest(root, configDir string, m *manifest.Manifest) erro
 	})
 
 	// Now restore files from blobs
-	for _, f := range m.Files {
+	for _, f := range m.FileEntries() {
 		blobPath := filepath.Join(blobDir, f.Hash)
 		targetPath := filepath.Join(root, f.Path)
 
