@@ -196,6 +196,7 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		CreatedAt:   parentCfg.CreatedAt,
 		LocalOnly:   true,
 	})
+	_ = index.SetProjectMainWorkspace(projectID, workspaceID)
 
 	fmt.Println("✓ Project folder initialized")
 	fmt.Printf("  Project:   %s\n", projectName)
@@ -284,6 +285,7 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 		CreatedAt:   parentCfg.CreatedAt,
 		LocalOnly:   true,
 	})
+	_ = index.SetProjectMainWorkspace(projectID, workspaceID)
 
 	fmt.Println("✓ Project created")
 	fmt.Printf("  Project:   %s\n", projectName)

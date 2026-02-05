@@ -287,7 +287,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 		}
 	}
 
-	if err := runSnapshot("Pull merge", false, ""); err != nil {
+	if err := runSnapshot("Pull merge", false); err != nil {
 		return err
 	}
 

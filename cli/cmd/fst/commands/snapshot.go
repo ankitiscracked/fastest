@@ -25,12 +25,12 @@ func init() {
 
 func newSnapshotCmd() *cobra.Command {
 	var message string
-	var autoSummary bool
-	var agentName string
+	var agentMessage bool
 
 	cmd := &cobra.Command{
-		Use:   "snapshot",
-		Short: "Capture current state as a snapshot",
+		Use:     "snapshot",
+		Aliases: []string{"snap"},
+		Short:   "Capture current state as a snapshot",
 		Long: `Capture the current state of the project as an immutable snapshot.
 
 This will:
@@ -39,21 +39,19 @@ This will:
 3. Optionally sync to cloud if authenticated
 4. Set this as the new base for drift calculations
 
-Use --agent-summary to auto-generate a description using your local coding agent.
-Use --agent to record which AI agent made these changes.`,
+Use --agent-message to generate a description using your local coding agent.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSnapshot(message, autoSummary, agentName)
+			return runSnapshot(message, agentMessage)
 		},
 	}
 
 	cmd.Flags().StringVarP(&message, "message", "m", "", "Description for this snapshot")
-	cmd.Flags().BoolVar(&autoSummary, "agent-summary", false, "Auto-generate description using local coding agent")
-	cmd.Flags().StringVar(&agentName, "agent", "", "Name of the AI agent (auto-detected if not specified)")
+	cmd.Flags().BoolVar(&agentMessage, "agent-message", false, "Generate description using local coding agent")
 
 	return cmd
 }
 
-func runSnapshot(message string, autoSummary bool, agentName string) error {
+func runSnapshot(message string, agentMessage bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -64,13 +62,15 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	// Detect agent if not specified
-	if agentName == "" {
-		agentName = detectAgent()
+	if message != "" && agentMessage {
+		return fmt.Errorf("cannot use --message with --agent-message")
 	}
-
-	if message == "" && !autoSummary {
-		return fmt.Errorf("snapshot message is required (use --message or --agent-summary)")
+	if message == "" && !agentMessage {
+		entered, err := promptSnapshotMessage("")
+		if err != nil {
+			return err
+		}
+		message = entered
 	}
 
 	fmt.Println("Scanning files...")
@@ -109,18 +109,23 @@ func runSnapshot(message string, autoSummary bool, agentName string) error {
 		manifestExists = true
 	}
 
+	agentName := ""
 	// Generate summary if requested
-	if autoSummary && message == "" {
-		fmt.Println("Generating summary...")
-		summary, err := generateSnapshotSummary(root, cfg)
+	if agentMessage {
+		preferredAgent, err := agent.GetPreferredAgent()
 		if err != nil {
-			return fmt.Errorf("failed to generate summary: %w", err)
-		} else {
-			message, err = promptSnapshotMessage(summary)
-			if err != nil {
-				return err
-			}
+			return err
 		}
+		fmt.Println("Generating message...")
+		summary, err := generateSnapshotSummary(root, cfg, preferredAgent)
+		if err != nil {
+			return fmt.Errorf("failed to generate message: %w", err)
+		}
+		message, err = promptSnapshotMessage(summary)
+		if err != nil {
+			return err
+		}
+		agentName = preferredAgent.Name
 	}
 
 	// Cache blobs (file contents) in global cache for rollback support
@@ -415,27 +420,10 @@ func CreateAutoSnapshot(message string) (string, error) {
 	return snapshotID, nil
 }
 
-// detectAgent attempts to auto-detect the coding agent from environment
-func detectAgent() string {
-	// Check explicit FST_AGENT env var first
-	if agentName := os.Getenv("FST_AGENT"); agentName != "" {
-		return agentName
-	}
-
-	preferred, err := agent.GetPreferredAgent()
-	if err == nil && preferred != nil {
-		return preferred.Name
-	}
-
-	return ""
-}
-
 // generateSnapshotSummary uses the coding agent to describe changes
-func generateSnapshotSummary(root string, cfg *config.ProjectConfig) (string, error) {
-	// Get preferred agent
-	preferredAgent, err := agent.GetPreferredAgent()
-	if err != nil {
-		return "", err
+func generateSnapshotSummary(root string, cfg *config.ProjectConfig, preferredAgent *agent.Agent) (string, error) {
+	if preferredAgent == nil {
+		return "", fmt.Errorf("no agent available")
 	}
 
 	// Compute changes since latest snapshot
@@ -449,7 +437,7 @@ func generateSnapshotSummary(root string, cfg *config.ProjectConfig) (string, er
 		return "No changes since last snapshot", nil
 	}
 
-	fmt.Printf("Using %s to generate summary...\n", preferredAgent.Name)
+	fmt.Printf("Using %s to generate message...\n", preferredAgent.Name)
 
 	// Build context with file contents
 	fileContents := make(map[string]string)

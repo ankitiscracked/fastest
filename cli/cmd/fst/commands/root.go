@@ -2,6 +2,8 @@ package commands
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -51,7 +53,25 @@ func NewRootCmd() *cobra.Command {
 }
 
 func Execute() error {
+	if len(os.Args) > 1 {
+		rootCmd.SetArgs(rewriteArgs(os.Args[1:]))
+	}
 	return rootCmd.Execute()
+}
+
+func rewriteArgs(args []string) []string {
+	rewritten := make([]string, 0, len(args))
+	for _, arg := range args {
+		switch {
+		case arg == "-am":
+			rewritten = append(rewritten, "--agent-message")
+		case strings.HasPrefix(arg, "-am="):
+			rewritten = append(rewritten, "--agent-message"+arg[len("-am"):])
+		default:
+			rewritten = append(rewritten, arg)
+		}
+	}
+	return rewritten
 }
 
 func newVersionCmd() *cobra.Command {

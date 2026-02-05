@@ -13,53 +13,45 @@ import (
 )
 
 func init() {
-	register(func(root *cobra.Command) { root.AddCommand(newHistoryCmd()) })
+	register(func(root *cobra.Command) {
+		root.AddCommand(newEditCmd())
+		root.AddCommand(newDropCmd())
+		root.AddCommand(newSquashCmd())
+		root.AddCommand(newRebaseCmd())
+	})
 }
 
-func newHistoryCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "history",
-		Short: "Rewrite snapshot history",
-	}
-
-	cmd.AddCommand(newHistoryEditCmd())
-	cmd.AddCommand(newHistoryDropCmd())
-	cmd.AddCommand(newHistorySquashCmd())
-	cmd.AddCommand(newHistoryRebaseCmd())
-
-	return cmd
-}
-
-func newHistoryEditCmd() *cobra.Command {
+func newEditCmd() *cobra.Command {
 	var message string
 	cmd := &cobra.Command{
-		Use:   "edit <snapshot>",
-		Short: "Edit snapshot metadata",
-		Args:  cobra.ExactArgs(1),
+		Use:     "edit <snapshot>",
+		Aliases: []string{"amend"},
+		Short:   "Edit snapshot message",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(message) == "" {
 				return fmt.Errorf("message is required")
 			}
-			return runHistoryEdit(args[0], message)
+			return runEdit(args[0], message)
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "", "New snapshot message")
 	return cmd
 }
 
-func newHistoryDropCmd() *cobra.Command {
+func newDropCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "drop <snapshot>",
 		Short: "Drop a snapshot from history",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runHistoryDrop(args[0])
+			return runDrop(args[0])
 		},
 	}
 	return cmd
 }
 
-func newHistorySquashCmd() *cobra.Command {
+func newSquashCmd() *cobra.Command {
 	var message string
 	cmd := &cobra.Command{
 		Use:   "squash <from>..<to>",
@@ -70,14 +62,14 @@ func newHistorySquashCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runHistorySquash(from, to, message)
+			return runSquash(from, to, message)
 		},
 	}
 	cmd.Flags().StringVarP(&message, "message", "m", "", "New message for the squashed snapshot")
 	return cmd
 }
 
-func newHistoryRebaseCmd() *cobra.Command {
+func newRebaseCmd() *cobra.Command {
 	var onto string
 	cmd := &cobra.Command{
 		Use:   "rebase <from>..<to> --onto <snapshot>",
@@ -91,7 +83,7 @@ func newHistoryRebaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runHistoryRebase(from, to, onto)
+			return runRebase(from, to, onto)
 		},
 	}
 	cmd.Flags().StringVar(&onto, "onto", "", "New parent snapshot for the range")
@@ -104,7 +96,7 @@ type historySnapshotMeta struct {
 	Message           string   `json:"message"`
 }
 
-func runHistoryEdit(snapshotID, message string) error {
+func runEdit(snapshotID, message string) error {
 	root, err := config.FindProjectRoot()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -129,7 +121,7 @@ func runHistoryEdit(snapshotID, message string) error {
 	return nil
 }
 
-func runHistoryDrop(snapshotID string) error {
+func runDrop(snapshotID string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -208,7 +200,7 @@ func runHistoryDrop(snapshotID string) error {
 	return nil
 }
 
-func runHistorySquash(fromArg, toArg, message string) error {
+func runSquash(fromArg, toArg, message string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -282,7 +274,7 @@ func runHistorySquash(fromArg, toArg, message string) error {
 	return nil
 }
 
-func runHistoryRebase(fromArg, toArg, ontoArg string) error {
+func runRebase(fromArg, toArg, ontoArg string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")

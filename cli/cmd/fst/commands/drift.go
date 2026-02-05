@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/conflicts"
 	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/drift"
+	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -228,51 +229,42 @@ func resolveTargetWorkspace(target string, cfg *config.ProjectConfig) (root, nam
 		return ws.Path, ws.Name, nil
 	}
 
-	// No target — compare against main workspace
-	token, err := deps.AuthGetToken()
+	// No target — compare against main workspace (local only)
+	localMainID, err := index.GetProjectMainWorkspaceID(cfg.ProjectID)
 	if err != nil {
-		return "", "", deps.AuthFormatError(err)
+		return "", "", err
 	}
-	if token == "" {
-		return "", "", fmt.Errorf("not logged in - run 'fst login' first\nOr specify a workspace: fst drift <workspace-name>")
-	}
-
-	client := deps.NewAPIClient(token, cfg)
-	project, workspacesList, err := client.GetProject(cfg.ProjectID)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to fetch project: %w", err)
-	}
-
-	if project.MainWorkspaceID == nil || *project.MainWorkspaceID == "" {
+	if localMainID == "" {
 		return "", "", fmt.Errorf("no main workspace configured for this project\nSet one with: fst workspace set-main <workspace>")
 	}
 
-	if *project.MainWorkspaceID == cfg.WorkspaceID {
+	return resolveLocalMainWorkspace(cfg, localMainID, "")
+}
+
+func resolveLocalMainWorkspace(cfg *config.ProjectConfig, mainID, mainName string) (root, name string, err error) {
+	if mainID == "" {
+		return "", "", fmt.Errorf("no main workspace configured for this project\nSet one with: fst workspace set-main <workspace>")
+	}
+	if mainID == cfg.WorkspaceID {
 		return "", "", fmt.Errorf("this is the main workspace - specify a workspace to compare against:\n  fst drift <workspace-name>")
 	}
 
-	// Find main workspace name from API response
-	var mainName string
-	for _, ws := range workspacesList {
-		if ws.ID == *project.MainWorkspaceID {
-			mainName = ws.Name
-			break
-		}
-	}
-
-	// Look up main workspace path from local registry
 	registry, err := LoadRegistry()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to load workspace registry: %w", err)
 	}
 
 	for _, ws := range registry.Workspaces {
-		if ws.ID == *project.MainWorkspaceID {
+		if ws.ID == mainID {
 			return ws.Path, ws.Name, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("main workspace '%s' not found locally\nIt may be on a different machine. Use 'fst workspace copy' to clone it.", mainName)
+	displayName := mainName
+	if displayName == "" {
+		displayName = mainID
+	}
+	return "", "", fmt.Errorf("main workspace '%s' not found locally\nIt may be on a different machine. Use 'fst workspace copy' to clone it.", displayName)
 }
 
 // loadManifestForDrift loads a workspace manifest for drift comparison

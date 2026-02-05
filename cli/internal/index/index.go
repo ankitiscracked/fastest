@@ -24,12 +24,13 @@ type Index struct {
 }
 
 type ProjectEntry struct {
-	ProjectID   string `json:"project_id"`
-	ProjectName string `json:"project_name"`
-	ProjectPath string `json:"project_path,omitempty"`
-	CreatedAt   string `json:"created_at,omitempty"`
-	LastSeenAt  string `json:"last_seen_at,omitempty"`
-	LocalOnly   bool   `json:"local_only,omitempty"`
+	ProjectID       string `json:"project_id"`
+	ProjectName     string `json:"project_name"`
+	ProjectPath     string `json:"project_path,omitempty"`
+	MainWorkspaceID string `json:"main_workspace_id,omitempty"`
+	CreatedAt       string `json:"created_at,omitempty"`
+	LastSeenAt      string `json:"last_seen_at,omitempty"`
+	LocalOnly       bool   `json:"local_only,omitempty"`
 }
 
 type WorkspaceEntry struct {
@@ -160,6 +161,9 @@ func UpsertProject(entry ProjectEntry) error {
 			if entry.ProjectPath != "" {
 				idx.Projects[i].ProjectPath = entry.ProjectPath
 			}
+			if entry.MainWorkspaceID != "" {
+				idx.Projects[i].MainWorkspaceID = entry.MainWorkspaceID
+			}
 			if entry.CreatedAt != "" {
 				idx.Projects[i].CreatedAt = entry.CreatedAt
 			}
@@ -243,4 +247,48 @@ func TouchProject(projectID string) error {
 		}
 	}
 	return nil
+}
+
+func SetProjectMainWorkspace(projectID, workspaceID string) error {
+	if projectID == "" {
+		return fmt.Errorf("project ID is required")
+	}
+	if workspaceID == "" {
+		return fmt.Errorf("workspace ID is required")
+	}
+	idx, err := Load()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(timeFormatRFC3339)
+	for i := range idx.Projects {
+		if idx.Projects[i].ProjectID == projectID {
+			idx.Projects[i].MainWorkspaceID = workspaceID
+			idx.Projects[i].LastSeenAt = now
+			return Save(idx)
+		}
+	}
+	idx.Projects = append(idx.Projects, ProjectEntry{
+		ProjectID:       projectID,
+		MainWorkspaceID: workspaceID,
+		LastSeenAt:      now,
+		LocalOnly:       true,
+	})
+	return Save(idx)
+}
+
+func GetProjectMainWorkspaceID(projectID string) (string, error) {
+	if projectID == "" {
+		return "", fmt.Errorf("project ID is required")
+	}
+	idx, err := Load()
+	if err != nil {
+		return "", err
+	}
+	for i := range idx.Projects {
+		if idx.Projects[i].ProjectID == projectID {
+			return idx.Projects[i].MainWorkspaceID, nil
+		}
+	}
+	return "", nil
 }

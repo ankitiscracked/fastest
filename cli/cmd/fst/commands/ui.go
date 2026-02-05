@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/index"
 )
 
 func init() {
@@ -65,6 +66,8 @@ type workspaceItem struct {
 	LastActivity  time.Time
 	IsCurrent     bool
 	SameProject   bool // same project as current workspace
+	IsMain        bool
+	MainMissing   bool
 }
 
 // String returns the searchable string for fuzzy matching
@@ -136,6 +139,10 @@ var (
 			Foreground(lipgloss.Color("82")).
 			Bold(true)
 
+	mainStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("81")).
+			Bold(true)
+
 	mergeableStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("82"))
 
@@ -181,6 +188,17 @@ func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 		return items
 	}
 
+	mainByProject := map[string]string{}
+	projectIDs := map[string]struct{}{}
+	for _, ws := range registry.Workspaces {
+		projectIDs[ws.ProjectID] = struct{}{}
+	}
+	for projectID := range projectIDs {
+		if mainID, err := index.GetProjectMainWorkspaceID(projectID); err == nil && mainID != "" {
+			mainByProject[projectID] = mainID
+		}
+	}
+
 	// Group by project for better display
 	projectNames := make(map[string]string) // projectID -> name (use first workspace's project)
 
@@ -190,12 +208,15 @@ func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 			continue
 		}
 
+		mainID, hasMain := mainByProject[ws.ProjectID]
 		item := workspaceItem{
 			ProjectID:     ws.ProjectID,
 			WorkspaceID:   ws.ID,
 			WorkspaceName: ws.Name,
 			Path:          ws.Path,
 			SameProject:   ws.ProjectID == currentProjectID,
+			IsMain:        hasMain && mainID == ws.ID,
+			MainMissing:   !hasMain,
 		}
 
 		// Try to get project name from workspace config
@@ -596,7 +617,11 @@ func (m model) buildPreviewPane(width, height int) string {
 	item := m.filtered[m.cursor]
 
 	// Header
-	b.WriteString(previewTitle.Render(item.WorkspaceName))
+	header := item.WorkspaceName
+	if item.IsMain {
+		header += " (main)"
+	}
+	b.WriteString(previewTitle.Render(header))
 	b.WriteString("\n\n")
 
 	// Path
@@ -686,9 +711,14 @@ func (m model) buildPreviewPane(width, height int) string {
 	}
 
 	// Agent & Activity
-	if item.Agent != "" || !item.LastActivity.IsZero() {
+	if item.IsMain || item.MainMissing || item.Agent != "" || !item.LastActivity.IsZero() {
 		b.WriteString(sectionTitle.Render("Info"))
 		b.WriteString("\n")
+		if item.IsMain {
+			b.WriteString(fmt.Sprintf("  Role: %s\n", mainStyle.Render("main")))
+		} else if item.MainMissing {
+			b.WriteString("  Main: not set  (run: fst workspace set-main <workspace>)\n")
+		}
 		if item.Agent != "" {
 			b.WriteString(fmt.Sprintf("  Agent: %s\n", agentStyle.Render(item.Agent)))
 		}
@@ -745,7 +775,12 @@ func (m model) renderItemCompact(item workspaceItem, selected bool) string {
 		mergeInd = "●"
 	}
 
-	line := fmt.Sprintf("%s%-25s %s %s", indicator, name, drift, mergeInd)
+	mainTag := ""
+	if item.IsMain {
+		mainTag = mainStyle.Render("main")
+	}
+
+	line := fmt.Sprintf("%s%-25s %s %s %s", indicator, name, drift, mergeInd, mainTag)
 
 	if selected {
 		line = selectedStyle.Render(line)
@@ -904,6 +939,11 @@ func (m model) renderItem(item workspaceItem, selected bool) string {
 	// Agent
 	if item.Agent != "" {
 		parts = append(parts, agentStyle.Render(fmt.Sprintf("[%s]", item.Agent)))
+	}
+
+	// Main indicator
+	if item.IsMain {
+		parts = append(parts, mainStyle.Render("[main]"))
 	}
 
 	// Last activity

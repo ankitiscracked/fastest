@@ -557,7 +557,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 	autoSnapshotFailed := false
 	autoSnapshotSucceeded := false
 	if !dryRun && len(result.Conflicts) == 0 && len(result.Failed) == 0 && len(result.Applied) > 0 {
-		if err := runSnapshot(fmt.Sprintf("Merged %s", sourceDisplayName), false, ""); err != nil {
+		if err := runSnapshot(fmt.Sprintf("Merged %s", sourceDisplayName), false); err != nil {
 			autoSnapshotFailed = true
 			fmt.Printf("Warning: Could not create post-merge snapshot: %v\n", err)
 		} else {

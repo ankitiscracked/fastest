@@ -277,6 +277,116 @@ func TestDriftBetweenWorkspacesNoDirtyJSON(t *testing.T) {
 	}
 }
 
+func TestDriftUsesLocalMainWorkspace(t *testing.T) {
+	rootA := setupWorkspace(t, "ws-a", map[string]string{
+		"a.txt": "base",
+	})
+	if err := os.MkdirAll(filepath.Join(rootA, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots A: %v", err)
+	}
+
+	cacheDir := filepath.Join(rootA, "cache")
+	setenv(t, "XDG_CACHE_HOME", cacheDir)
+
+	baseSnapID, err := createInitialSnapshot(rootA, "ws-a-id", "ws-a", false)
+	if err != nil {
+		t.Fatalf("createInitialSnapshot A: %v", err)
+	}
+
+	rootB := setupWorkspace(t, "ws-b", map[string]string{
+		"a.txt": "base",
+	})
+	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "snapshots"), 0755); err != nil {
+		t.Fatalf("mkdir snapshots B: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "manifests"), 0755); err != nil {
+		t.Fatalf("mkdir manifests B: %v", err)
+	}
+
+	copySnapshotArtifacts(t, rootA, rootB, baseSnapID)
+
+	cfgB, _ := config.LoadAt(rootB)
+	cfgB.BaseSnapshotID = baseSnapID
+	cfgB.CurrentSnapshotID = baseSnapID
+	if err := config.SaveAt(rootB, cfgB); err != nil {
+		t.Fatalf("SaveAt B: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(rootA, "a.txt"), []byte("one"), 0644); err != nil {
+		t.Fatalf("write A a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "a.txt"), []byte("two"), 0644); err != nil {
+		t.Fatalf("write B a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "b.txt"), []byte("new"), 0644); err != nil {
+		t.Fatalf("write B b.txt: %v", err)
+	}
+
+	restoreCwd := chdir(t, rootA)
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "snap A"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("snapshot A: %v", err)
+	}
+	restoreCwd()
+
+	restoreCwd = chdir(t, rootB)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "snap B"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("snapshot B: %v", err)
+	}
+	restoreCwd()
+
+	cfgB, _ = config.LoadAt(rootB)
+	copySnapshotArtifacts(t, rootB, rootA, cfgB.CurrentSnapshotID)
+
+	configDir := filepath.Join(rootA, "config")
+	setenv(t, "XDG_CONFIG_HOME", configDir)
+	registerTestWorkspace(t, "ws-b-id", "proj-1", "ws-b", rootB)
+	if err := index.SetProjectMainWorkspace("proj-1", "ws-b-id"); err != nil {
+		t.Fatalf("SetProjectMainWorkspace: %v", err)
+	}
+
+	restoreCwd = chdir(t, rootA)
+	defer restoreCwd()
+
+	var output string
+	err = captureStdout(func() error {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"drift", "--json"})
+		return cmd.Execute()
+	}, &output)
+	if err != nil {
+		t.Fatalf("drift failed: %v", err)
+	}
+
+	var result struct {
+		TheirWorkspace string `json:"their_workspace"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
+		t.Fatalf("failed to parse drift JSON: %v\noutput: %s", err, output)
+	}
+	if result.TheirWorkspace != "ws-b" {
+		t.Fatalf("expected their_workspace ws-b, got %q", result.TheirWorkspace)
+	}
+}
+
+func TestSnapshotRejectsMessageAndAgentMessage(t *testing.T) {
+	root := setupWorkspace(t, "ws-snap", map[string]string{
+		"a.txt": "hello",
+	})
+
+	restoreCwd := chdir(t, root)
+	defer restoreCwd()
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "test", "--agent-message"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatalf("expected snapshot with --message and --agent-message to fail")
+	}
+}
+
 func setupWorkspace(t *testing.T, name string, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()

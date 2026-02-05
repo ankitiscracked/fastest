@@ -64,6 +64,8 @@ func printWorkspaceInfo(cfg *config.ProjectConfig, jsonOutput bool) error {
 	}
 
 	parentRoot, parentCfg, _ := config.FindParentRootFrom(root)
+	mainID, mainName := lookupMainWorkspace(cfg.ProjectID)
+	isMain := mainID != "" && mainID == cfg.WorkspaceID
 	baseTime := ""
 	if cfg.BaseSnapshotID != "" {
 		metaPath := filepath.Join(root, ".fst", config.SnapshotsDirName, cfg.BaseSnapshotID+".meta.json")
@@ -97,6 +99,9 @@ func printWorkspaceInfo(cfg *config.ProjectConfig, jsonOutput bool) error {
 			"workspace_mode":        cfg.Mode,
 			"upstream_id":           upstreamID,
 			"upstream_name":         upstreamName,
+			"is_main":               isMain,
+			"main_workspace_id":     mainID,
+			"main_workspace_name":   mainName,
 		}
 		if parentCfg != nil && parentRoot != "" {
 			payload["project_name"] = parentCfg.ProjectName
@@ -111,11 +116,23 @@ func printWorkspaceInfo(cfg *config.ProjectConfig, jsonOutput bool) error {
 	fmt.Printf("  ID:      %s\n", cfg.WorkspaceID)
 	fmt.Printf("  Path:    %s\n", root)
 	fmt.Printf("  Mode:    %s\n", cfg.Mode)
+	if isMain {
+		fmt.Printf("  Role:    main\n")
+	}
 	fmt.Println()
 	fmt.Printf("Project:   %s\n", cfg.ProjectID)
 	if parentCfg != nil {
 		fmt.Printf("  Name:    %s\n", parentCfg.ProjectName)
 		fmt.Printf("  Path:    %s\n", parentRoot)
+	}
+	if !isMain && mainID != "" {
+		displayMain := mainID
+		if mainName != "" {
+			displayMain = fmt.Sprintf("%s (%s)", mainName, mainID)
+		}
+		fmt.Printf("  Main:    %s\n", displayMain)
+	} else if mainID == "" {
+		fmt.Printf("  Main:    (not set)  Run: fst workspace set-main <workspace>\n")
 	}
 	if cfg.BaseSnapshotID != "" {
 		fmt.Printf("  Base:    %s", cfg.BaseSnapshotID)
@@ -146,6 +163,7 @@ func printProjectInfo(parentRoot string, parentCfg *config.ParentConfig, jsonOut
 	}
 
 	var workspaces []index.WorkspaceEntry
+	mainID, mainName := lookupMainWorkspace(parentCfg.ProjectID)
 	if listWorkspaces {
 		if idx, err := index.Load(); err == nil {
 			for _, ws := range idx.Workspaces {
@@ -158,13 +176,15 @@ func printProjectInfo(parentRoot string, parentCfg *config.ParentConfig, jsonOut
 
 	if jsonOutput {
 		payload := map[string]any{
-			"mode":              "project",
-			"project_id":        parentCfg.ProjectID,
-			"project_name":      parentCfg.ProjectName,
-			"project_path":      parentRoot,
-			"base_snapshot_id":  parentCfg.BaseSnapshotID,
-			"base_workspace_id": parentCfg.BaseWorkspaceID,
-			"workspaces":        workspaces,
+			"mode":                "project",
+			"project_id":          parentCfg.ProjectID,
+			"project_name":        parentCfg.ProjectName,
+			"project_path":        parentRoot,
+			"base_snapshot_id":    parentCfg.BaseSnapshotID,
+			"base_workspace_id":   parentCfg.BaseWorkspaceID,
+			"main_workspace_id":   mainID,
+			"main_workspace_name": mainName,
+			"workspaces":          workspaces,
 		}
 		if !listWorkspaces {
 			delete(payload, "workspaces")
@@ -183,12 +203,48 @@ func printProjectInfo(parentRoot string, parentCfg *config.ParentConfig, jsonOut
 	if parentCfg.BaseWorkspaceID != "" {
 		fmt.Printf("  Base Workspace: %s\n", parentCfg.BaseWorkspaceID)
 	}
+	if mainID != "" {
+		displayMain := mainID
+		if mainName != "" {
+			displayMain = fmt.Sprintf("%s (%s)", mainName, mainID)
+		}
+		fmt.Printf("  Main Workspace: %s\n", displayMain)
+	} else {
+		fmt.Printf("  Main Workspace: (not set)  Run: fst workspace set-main <workspace>\n")
+	}
 	if listWorkspaces {
 		fmt.Println()
 		fmt.Printf("Workspaces (%d):\n", len(workspaces))
 		for _, ws := range workspaces {
-			fmt.Printf("  %s  %s  %s\n", ws.WorkspaceID, ws.WorkspaceName, ws.Path)
+			role := ""
+			if ws.WorkspaceID == mainID {
+				role = " (main)"
+			}
+			fmt.Printf("  %s  %s  %s%s\n", ws.WorkspaceID, ws.WorkspaceName, ws.Path, role)
 		}
 	}
 	return nil
+}
+
+func lookupMainWorkspace(projectID string) (string, string) {
+	if projectID == "" {
+		return "", ""
+	}
+	mainID, err := index.GetProjectMainWorkspaceID(projectID)
+	if err != nil {
+		return "", ""
+	}
+	if mainID == "" {
+		return "", ""
+	}
+	idx, err := index.Load()
+	if err != nil {
+		return mainID, ""
+	}
+	for _, ws := range idx.Workspaces {
+		if ws.WorkspaceID == mainID {
+			return mainID, ws.WorkspaceName
+		}
+	}
+	return mainID, ""
 }

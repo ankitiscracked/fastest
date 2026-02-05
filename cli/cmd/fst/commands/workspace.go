@@ -226,6 +226,15 @@ func runWorkspaces(showAll bool) error {
 		return fmt.Errorf("failed to load workspace registry: %w", err)
 	}
 
+	mainByProject := map[string]string{}
+	if idx, err := index.Load(); err == nil {
+		for _, project := range idx.Projects {
+			if project.MainWorkspaceID != "" {
+				mainByProject[project.ProjectID] = project.MainWorkspaceID
+			}
+		}
+	}
+
 	localWorkspaces := map[string]RegisteredWorkspace{}
 	for _, ws := range registry.Workspaces {
 		if showAll || ws.ProjectID == currentProjectID {
@@ -277,6 +286,7 @@ func runWorkspaces(showAll bool) error {
 			ProjectID:      ws.ProjectID,
 			BaseSnapshotID: ws.BaseSnapshotID,
 			Local:          true,
+			IsMain:         mainByProject[ws.ProjectID] == ws.ID,
 		}
 	}
 	for _, ws := range cloudWorkspaces {
@@ -291,6 +301,9 @@ func runWorkspaces(showAll bool) error {
 		}
 		if entry.Name == "" {
 			entry.Name = ws.Name
+		}
+		if mainByProject[ws.ProjectID] == ws.ID {
+			entry.IsMain = true
 		}
 		entry.Cloud = true
 	}
@@ -329,10 +342,11 @@ func runWorkspaces(showAll bool) error {
 		fmt.Printf("Workspaces for project (%d):\n\n", len(workspaces))
 	}
 
-	fmt.Printf("  %-10s  %-10s  %-15s  %-35s  %s\n", "LOC", "STATUS", "NAME", "PATH", "DRIFT")
-	fmt.Printf("  %-10s  %-10s  %-15s  %-35s  %s\n",
+	fmt.Printf("  %-10s  %-10s  %-6s  %-15s  %-35s  %s\n", "LOC", "STATUS", "ROLE", "NAME", "PATH", "DRIFT")
+	fmt.Printf("  %-10s  %-10s  %-6s  %-15s  %-35s  %s\n",
 		strings.Repeat("-", 10),
 		strings.Repeat("-", 10),
+		strings.Repeat("-", 6),
 		strings.Repeat("-", 15),
 		strings.Repeat("-", 35),
 		strings.Repeat("-", 15))
@@ -352,6 +366,7 @@ type mergedWorkspace struct {
 	BaseSnapshotID string
 	Local          bool
 	Cloud          bool
+	IsMain         bool
 	LocationTag    string
 }
 
@@ -404,6 +419,11 @@ func displayMergedWorkspace(ws mergedWorkspace, currentPath string) {
 		name = name[:12] + "..."
 	}
 
+	role := "-"
+	if ws.IsMain {
+		role = "main"
+	}
+
 	// Status with color
 	statusStr := status
 	if status == "missing" {
@@ -414,10 +434,11 @@ func displayMergedWorkspace(ws mergedWorkspace, currentPath string) {
 		statusStr = "\033[36mcloud\033[0m"
 	}
 
-	fmt.Printf("%s %-10s  %-10s  %-15s  %-35s  %s\n",
+	fmt.Printf("%s %-10s  %-10s  %-6s  %-15s  %-35s  %s\n",
 		indicator,
 		ws.LocationTag,
 		statusStr,
+		role,
 		name,
 		displayPath,
 		driftStr)
@@ -518,13 +539,9 @@ func runSetMain(workspaceName string) error {
 
 	token, err := deps.AuthGetToken()
 	if err != nil {
-		return deps.AuthFormatError(err)
+		fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
+		token = ""
 	}
-	if token == "" {
-		return fmt.Errorf("not logged in - run 'fst login' first")
-	}
-
-	client := deps.NewAPIClient(token, cfg)
 
 	var targetWorkspaceID string
 	var targetWorkspaceName string
@@ -534,26 +551,39 @@ func runSetMain(workspaceName string) error {
 		targetWorkspaceID = cfg.WorkspaceID
 		targetWorkspaceName = cfg.WorkspaceName
 	} else {
-		// Look up workspace by name
-		_, workspaces, err := client.GetProject(cfg.ProjectID)
+		registry, err := LoadRegistry()
 		if err != nil {
-			return fmt.Errorf("failed to fetch project: %w", err)
+			return fmt.Errorf("failed to load workspace registry: %w", err)
 		}
-		ws, err := resolveWorkspaceFromAPI(workspaceName, workspaces)
+		ws, found, err := resolveWorkspaceFromRegistry(workspaceName, registry.Workspaces, cfg.ProjectID)
 		if err != nil {
 			return err
+		}
+		if !found {
+			return fmt.Errorf("workspace '%s' not found locally\nRun 'fst workspaces' to see available workspaces.", workspaceName)
 		}
 		targetWorkspaceID = ws.ID
 		targetWorkspaceName = ws.Name
 	}
 
-	// Set as main workspace
-	if err := client.SetMainWorkspace(targetWorkspaceID); err != nil {
-		return err
+	if token != "" {
+		// Set as main workspace in cloud
+		client := deps.NewAPIClient(token, cfg)
+		if err := client.SetMainWorkspace(targetWorkspaceID); err != nil {
+			return err
+		}
+	}
+
+	if err := index.SetProjectMainWorkspace(cfg.ProjectID, targetWorkspaceID); err != nil {
+		return fmt.Errorf("failed to store main workspace locally: %w", err)
 	}
 
 	fmt.Printf("✓ Set '%s' as the main workspace for this project.\n", targetWorkspaceName)
 	fmt.Println()
+	if token == "" {
+		fmt.Println("Saved locally only (not synced to cloud).")
+		fmt.Println()
+	}
 	fmt.Println("Other workspaces can now use 'fst drift' to compare against this workspace.")
 
 	return nil

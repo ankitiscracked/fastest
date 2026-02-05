@@ -238,7 +238,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		}
 	}
 
-	if err := runSnapshot("Sync merge", false, ""); err != nil {
+	if err := runSnapshot("Sync merge", false); err != nil {
 		return err
 	}
 

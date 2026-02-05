@@ -95,3 +95,55 @@ func TestUpsertWorkspaceReplacesOldPath(t *testing.T) {
 		t.Fatalf("expected new path, got %s", idx.Workspaces[0].Path)
 	}
 }
+
+func TestSetProjectMainWorkspaceCreatesEntry(t *testing.T) {
+	root := t.TempDir()
+	setenv(t, "XDG_CONFIG_HOME", root)
+
+	if err := SetProjectMainWorkspace("proj-1", "ws-1"); err != nil {
+		t.Fatalf("SetProjectMainWorkspace: %v", err)
+	}
+
+	idx, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(idx.Projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(idx.Projects))
+	}
+	if idx.Projects[0].MainWorkspaceID != "ws-1" {
+		t.Fatalf("expected main workspace ws-1, got %s", idx.Projects[0].MainWorkspaceID)
+	}
+}
+
+func TestUpsertProjectPreservesMainWorkspace(t *testing.T) {
+	root := t.TempDir()
+	setenv(t, "XDG_CONFIG_HOME", root)
+
+	if err := UpsertProject(ProjectEntry{
+		ProjectID:       "proj-1",
+		ProjectName:     "demo",
+		MainWorkspaceID: "ws-1",
+		LocalOnly:       true,
+	}); err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	if err := UpsertProject(ProjectEntry{
+		ProjectID:   "proj-1",
+		ProjectName: "demo-updated",
+		LocalOnly:   true,
+	}); err != nil {
+		t.Fatalf("UpsertProject update: %v", err)
+	}
+
+	idx, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(idx.Projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(idx.Projects))
+	}
+	if idx.Projects[0].MainWorkspaceID != "ws-1" {
+		t.Fatalf("expected main workspace ws-1, got %s", idx.Projects[0].MainWorkspaceID)
+	}
+}

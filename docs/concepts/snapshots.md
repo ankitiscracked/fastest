@@ -82,6 +82,10 @@ Options:
 
 Implementation: `cli/cmd/fst/commands/log.go` (`walkSnapshotChain`).
 
+### TODO
+
+- Add `fst history gc` to delete orphaned snapshots/manifests not reachable from the current/base heads.
+
 ## Cloud Snapshots
 
 The server-side snapshot schema (in `api/src/db/schema.ts`) stores:
