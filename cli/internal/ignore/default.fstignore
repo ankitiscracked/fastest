@@ -1,0 +1,22 @@
+# Fastest ignore file
+# Add patterns to exclude files from snapshots.
+#
+# Common defaults:
+.fst/
+.fst
+.git/
+.svn/
+.hg/
+node_modules/
+__pycache__/
+.DS_Store
+Thumbs.db
+*.pyc
+*.pyo
+*.class
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/anthropics/fastest/cli/internal/ignore"
 )
 
 // Global cache directory name
@@ -480,6 +482,16 @@ merge-parents.json
 	gitignorePath := filepath.Join(configDir, ".gitignore")
 	if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
 		return fmt.Errorf("failed to write .gitignore: %w", err)
+	}
+
+	// Create .fstignore in workspace root if missing
+	fstignorePath := filepath.Join(root, ".fstignore")
+	if _, err := os.Stat(fstignorePath); os.IsNotExist(err) {
+		if err := os.WriteFile(fstignorePath, []byte(ignore.DefaultFileContents()), 0644); err != nil {
+			return fmt.Errorf("failed to write .fstignore: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to check .fstignore: %w", err)
 	}
 
 	return nil

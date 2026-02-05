@@ -2,32 +2,14 @@ package ignore
 
 import (
 	"bufio"
+	_ "embed"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// DefaultPatterns are always ignored
-var DefaultPatterns = []string{
-	".fst/",
-	".fst", // For linked workspaces where .fst is a file
-	".git/",
-	".svn/",
-	".hg/",
-	"node_modules/",
-	"__pycache__/",
-	".DS_Store",
-	"Thumbs.db",
-	"*.pyc",
-	"*.pyo",
-	"*.class",
-	"*.o",
-	"*.obj",
-	"*.exe",
-	"*.dll",
-	"*.so",
-	"*.dylib",
-}
+//go:embed default.fstignore
+var defaultIgnoreFile string
 
 // Matcher handles .fstignore pattern matching
 type Matcher struct {
@@ -52,18 +34,23 @@ func NewMatcher(patterns []string) *Matcher {
 	return m
 }
 
+// DefaultFileContents returns the default .fstignore contents.
+func DefaultFileContents() string {
+	return defaultIgnoreFile
+}
+
 // LoadFromFile loads ignore patterns from a file
 func LoadFromFile(path string) (*Matcher, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return NewMatcher(DefaultPatterns), nil
+			return NewMatcher(defaultPatterns()), nil
 		}
 		return nil, err
 	}
 	defer file.Close()
 
-	patterns := append([]string{}, DefaultPatterns...)
+	patterns := append([]string{}, defaultPatterns()...)
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -80,6 +67,23 @@ func LoadFromFile(path string) (*Matcher, error) {
 // LoadFromDir loads ignore patterns from .fstignore in the given directory
 func LoadFromDir(dir string) (*Matcher, error) {
 	return LoadFromFile(filepath.Join(dir, ".fstignore"))
+}
+
+func defaultPatterns() []string {
+	return parsePatterns(defaultIgnoreFile)
+}
+
+func parsePatterns(input string) []string {
+	var patterns []string
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
 }
 
 func (m *Matcher) addPattern(raw string) {

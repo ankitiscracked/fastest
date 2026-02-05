@@ -20,7 +20,6 @@ func init() {
 func newRollbackCmd() *cobra.Command {
 	var toSnapshot string
 	var toBase bool
-	var all bool
 	var dryRun bool
 	var force bool
 
@@ -29,31 +28,28 @@ func newRollbackCmd() *cobra.Command {
 		Short: "Restore files from a snapshot",
 		Long: `Restore files from a previous snapshot.
 
-By default, restores files from the last snapshot (most recent save point).
+By default, restores the entire workspace from the last snapshot (most recent save point).
 Use --to to specify a different snapshot.
 Use --to-base to restore to the base/base point snapshot.
 
 Examples:
   fst rollback src/main.py           # Restore single file from last snapshot
   fst rollback src/                  # Restore all files in directory
-  fst rollback --all                 # Restore entire workspace to last snapshot
-  fst rollback --all --to snap-abc   # Restore to specific snapshot
-  fst rollback --all --to-base       # Restore to base point
-  fst rollback --dry-run --all       # Show what would be restored`,
+  fst rollback                       # Restore entire workspace to last snapshot
+  fst rollback --to snap-abc         # Restore to specific snapshot
+  fst rollback --to-base             # Restore to base point
+  fst rollback --dry-run             # Show what would be restored`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !all && len(args) == 0 {
-				return fmt.Errorf("specify files to rollback, or use --all")
-			}
 			if toSnapshot != "" && toBase {
 				return fmt.Errorf("cannot use both --to and --to-base")
 			}
+			all := len(args) == 0
 			return runRollback(args, toSnapshot, toBase, all, dryRun, force)
 		},
 	}
 
 	cmd.Flags().StringVar(&toSnapshot, "to", "", "Target snapshot ID (default: last snapshot)")
 	cmd.Flags().BoolVar(&toBase, "to-base", false, "Restore to base/base point snapshot")
-	cmd.Flags().BoolVar(&all, "all", false, "Rollback entire workspace")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be restored without making changes")
 	cmd.Flags().BoolVar(&force, "force", false, "Force rollback even if files have local changes")
 
