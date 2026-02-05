@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
+	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -281,7 +281,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 	}
 
 	// Determine merge base (common ancestor) from snapshot DAG
-	mergeBaseID, err := getMergeBaseDAG(currentRoot, sourceRoot, currentSnapshotID, sourceSnapshotID)
+	mergeBaseID, err := dag.GetMergeBase(currentRoot, sourceRoot, currentSnapshotID, sourceSnapshotID)
 	var baseManifest *manifest.Manifest
 	if err != nil {
 		if !force {
@@ -1010,137 +1010,6 @@ func loadBaseManifest(cfg *config.ProjectConfig) (*manifest.Manifest, error) {
 	}
 
 	return manifest.FromJSON(data)
-}
-
-// snapshotMeta represents snapshot metadata for merge base computation
-type snapshotMeta struct {
-	ID          string   `json:"id"`
-	WorkspaceID string   `json:"workspace_id"`
-	CreatedAt   string   `json:"created_at"`
-	ParentIDs   []string `json:"parent_snapshot_ids"`
-}
-
-// loadSnapshotMetaFromDir loads snapshot metadata from a specific snapshots directory
-func loadSnapshotMetaFromDir(snapshotsDir, snapshotID string) (*snapshotMeta, error) {
-	if snapshotID == "" {
-		return nil, fmt.Errorf("empty snapshot ID")
-	}
-
-	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		return nil, fmt.Errorf("snapshot metadata not found: %w", err)
-	}
-
-	var meta snapshotMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("failed to parse snapshot metadata: %w", err)
-	}
-	return &meta, nil
-}
-
-func loadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, snapshotID string) (*snapshotMeta, error) {
-	meta, err := loadSnapshotMetaFromDir(targetSnapshotsDir, snapshotID)
-	if err == nil {
-		return meta, nil
-	}
-	meta, err = loadSnapshotMetaFromDir(sourceSnapshotsDir, snapshotID)
-	if err == nil {
-		return meta, nil
-	}
-	return nil, err
-}
-
-func getMergeBaseDAG(targetRoot, sourceRoot, targetHead, sourceHead string) (string, error) {
-	if targetHead == "" || sourceHead == "" {
-		return "", fmt.Errorf("missing snapshots in one or both workspaces")
-	}
-
-	targetSnapshotsDir := config.GetSnapshotsDirAt(targetRoot)
-	sourceSnapshotsDir := config.GetSnapshotsDirAt(sourceRoot)
-
-	type node struct {
-		id   string
-		dist int
-	}
-
-	targetDist := make(map[string]int)
-	queue := []node{{id: targetHead, dist: 0}}
-	for i := 0; i < len(queue); i++ {
-		item := queue[i]
-		if _, ok := targetDist[item.id]; ok {
-			continue
-		}
-		meta, err := loadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, item.id)
-		if err != nil {
-			return "", fmt.Errorf("missing snapshot metadata for %s", item.id)
-		}
-		targetDist[item.id] = item.dist
-		for _, parent := range meta.ParentIDs {
-			if parent == "" {
-				continue
-			}
-			if _, ok := targetDist[parent]; ok {
-				continue
-			}
-			queue = append(queue, node{id: parent, dist: item.dist + 1})
-		}
-	}
-
-	bestID := ""
-	bestScore := -1
-	bestTime := time.Time{}
-
-	queue = []node{{id: sourceHead, dist: 0}}
-	seenSource := make(map[string]struct{})
-	for i := 0; i < len(queue); i++ {
-		item := queue[i]
-		if _, ok := seenSource[item.id]; ok {
-			continue
-		}
-		if bestScore != -1 && item.dist > bestScore {
-			break
-		}
-		seenSource[item.id] = struct{}{}
-		meta, err := loadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, item.id)
-		if err != nil {
-			return "", fmt.Errorf("missing snapshot metadata for %s", item.id)
-		}
-		if tdist, ok := targetDist[item.id]; ok {
-			score := item.dist + tdist
-			if bestScore == -1 || score < bestScore {
-				bestScore = score
-				bestID = item.id
-				if ts, err := time.Parse(time.RFC3339, meta.CreatedAt); err == nil {
-					bestTime = ts
-				} else {
-					bestTime = time.Time{}
-				}
-			} else if score == bestScore {
-				if ts, err := time.Parse(time.RFC3339, meta.CreatedAt); err == nil {
-					if bestTime.IsZero() || ts.After(bestTime) {
-						bestID = item.id
-						bestTime = ts
-					}
-				}
-			}
-		}
-
-		for _, parent := range meta.ParentIDs {
-			if parent == "" {
-				continue
-			}
-			if _, ok := seenSource[parent]; ok {
-				continue
-			}
-			queue = append(queue, node{id: parent, dist: item.dist + 1})
-		}
-	}
-
-	if bestID == "" {
-		return "", fmt.Errorf("no common ancestor found between workspaces")
-	}
-	return bestID, nil
 }
 
 func warnIfRemoteHeadDiff(label string, client *api.Client, cfg *config.ProjectConfig, root string) {

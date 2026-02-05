@@ -433,6 +433,152 @@ func (r *Report) FormatSummary() string {
 		r.TrueConflicts, totalHunks)
 }
 
+// DetectFromAncestor performs 3-way merge analysis using an explicit common ancestor.
+// Unlike Detect, this is symmetric: includeDirty applies to BOTH workspaces.
+// When includeDirty=false, both sides use their latest snapshots.
+// When includeDirty=true, both sides use current working tree files.
+func DetectFromAncestor(root, otherRoot, commonAncestorID string, includeDirty bool) (*Report, error) {
+	if commonAncestorID == "" {
+		return nil, fmt.Errorf("no common ancestor ID provided")
+	}
+
+	// Load ancestor manifest (try both workspace dirs)
+	ancestorManifest, err := loadManifestFromSnapshots(root, commonAncestorID)
+	if err != nil {
+		ancestorManifest, err = loadManifestFromSnapshots(otherRoot, commonAncestorID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load common ancestor manifest: %w", err)
+		}
+	}
+
+	// Load manifests and create accessors for both workspaces
+	var currentManifest, otherManifest *manifest.Manifest
+	var currentAccessor, otherAccessor BlobAccessor
+
+	if includeDirty {
+		currentManifest, err = manifest.Generate(root, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate current manifest: %w", err)
+		}
+		currentAccessor = NewFileSystemAccessor(root, currentManifest)
+
+		otherManifest, err = manifest.Generate(otherRoot, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate other manifest: %w", err)
+		}
+		otherAccessor = NewFileSystemAccessor(otherRoot, otherManifest)
+	} else {
+		// Both sides use latest snapshots
+		currentSnapshotID, _ := config.GetLatestSnapshotIDAt(root)
+		if currentSnapshotID == "" {
+			cfg, cfgErr := config.LoadAt(root)
+			if cfgErr == nil {
+				currentSnapshotID = cfg.CurrentSnapshotID
+			}
+		}
+		if currentSnapshotID == "" {
+			return nil, fmt.Errorf("current workspace has no snapshots")
+		}
+
+		currentManifest, err = loadManifestFromSnapshots(root, currentSnapshotID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load current snapshot manifest: %w", err)
+		}
+
+		otherSnapshotID, _ := config.GetLatestSnapshotIDAt(otherRoot)
+		if otherSnapshotID == "" {
+			otherCfg, cfgErr := config.LoadAt(otherRoot)
+			if cfgErr == nil {
+				otherSnapshotID = otherCfg.CurrentSnapshotID
+			}
+		}
+		if otherSnapshotID == "" {
+			return nil, fmt.Errorf("other workspace has no snapshots")
+		}
+
+		otherManifest, err = loadManifestFromSnapshots(otherRoot, otherSnapshotID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load other snapshot manifest: %w", err)
+		}
+
+		blobAccessor, blobErr := NewFileBlobAccessor()
+		if blobErr != nil {
+			return nil, blobErr
+		}
+		currentAccessor = blobAccessor
+		otherAccessor = blobAccessor
+	}
+
+	// Ancestor blob accessor
+	ancestorAccessor, err := NewFileBlobAccessor()
+	if err != nil {
+		return nil, err
+	}
+
+	// Find files modified in both workspaces since ancestor
+	currentChanges := getModifiedFiles(ancestorManifest, currentManifest)
+	otherChanges := getModifiedFiles(ancestorManifest, otherManifest)
+	overlapping := findOverlappingFiles(currentChanges, otherChanges)
+
+	// For each overlapping file, perform 3-way diff
+	var conflicts []FileConflict
+	for _, path := range overlapping {
+		baseEntry := getFileEntry(ancestorManifest, path)
+		currentEntry := getFileEntry(currentManifest, path)
+		otherEntry := getFileEntry(otherManifest, path)
+
+		if baseEntry == nil || currentEntry == nil || otherEntry == nil {
+			if currentEntry == nil && otherEntry != nil {
+				conflicts = append(conflicts, FileConflict{
+					Path:  path,
+					Hunks: []Hunk{{StartLine: 1, EndLine: 1}},
+				})
+			} else if currentEntry != nil && otherEntry == nil {
+				conflicts = append(conflicts, FileConflict{
+					Path:  path,
+					Hunks: []Hunk{{StartLine: 1, EndLine: 1}},
+				})
+			}
+			continue
+		}
+
+		if currentEntry.Hash == otherEntry.Hash {
+			continue
+		}
+
+		baseContent, err := ancestorAccessor.Get(baseEntry.Hash)
+		if err != nil {
+			continue
+		}
+		currentContent, err := currentAccessor.Get(currentEntry.Hash)
+		if err != nil {
+			continue
+		}
+		otherContent, err := otherAccessor.Get(otherEntry.Hash)
+		if err != nil {
+			continue
+		}
+
+		hunks := findConflictingHunks(baseContent, currentContent, otherContent)
+		if len(hunks) > 0 {
+			conflicts = append(conflicts, FileConflict{
+				Path:          path,
+				BaseContent:   baseContent,
+				LocalContent:  currentContent,
+				RemoteContent: otherContent,
+				Hunks:         hunks,
+			})
+		}
+	}
+
+	return &Report{
+		BaseSnapshotID:   commonAncestorID,
+		Conflicts:        conflicts,
+		OverlappingFiles: overlapping,
+		TrueConflicts:    len(conflicts),
+	}, nil
+}
+
 func max(a, b int) int {
 	if a > b {
 		return a

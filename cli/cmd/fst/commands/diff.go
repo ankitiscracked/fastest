@@ -375,3 +375,8 @@ func printUnifiedDiff(diffs []diffmatchpatch.Diff, contextLines int, noColor boo
 		}
 	}
 }
+
+// isPath determines if a string looks like a file path
+func isPath(s string) bool {
+	return strings.Contains(s, "/") || strings.HasPrefix(s, ".")
+}

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/drift"
+	"github.com/anthropics/fastest/cli/internal/index"
 )
 
 func TestSnapshotCreatesLocalArtifacts(t *testing.T) {
@@ -68,94 +68,212 @@ func TestStatusRunsInWorkspace(t *testing.T) {
 }
 
 func TestDriftBetweenWorkspacesIncludeDirtyJSON(t *testing.T) {
+	// Create workspace A with a shared base snapshot
 	rootA := setupWorkspace(t, "ws-a", map[string]string{
-		"a.txt": "one",
-	})
-	rootB := setupWorkspace(t, "ws-b", map[string]string{
-		"a.txt": "two",
-		"b.txt": "new",
+		"a.txt": "base",
 	})
 	if err := os.MkdirAll(filepath.Join(rootA, ".fst", "snapshots"), 0755); err != nil {
 		t.Fatalf("mkdir snapshots A: %v", err)
 	}
+
+	cacheDir := filepath.Join(rootA, "cache")
+	setenv(t, "XDG_CACHE_HOME", cacheDir)
+
+	baseSnapID, err := createInitialSnapshot(rootA, "ws-a-id", "ws-a", false)
+	if err != nil {
+		t.Fatalf("createInitialSnapshot A: %v", err)
+	}
+
+	// Create workspace B sharing the same base snapshot
+	rootB := setupWorkspace(t, "ws-b", map[string]string{
+		"a.txt": "base",
+	})
 	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "snapshots"), 0755); err != nil {
 		t.Fatalf("mkdir snapshots B: %v", err)
 	}
-	if _, err := createInitialSnapshot(rootA, "ws-a-id", "ws-a", false); err != nil {
-		t.Fatalf("createInitialSnapshot A: %v", err)
-	}
-	if _, err := createInitialSnapshot(rootB, "ws-b-id", "ws-b", false); err != nil {
-		t.Fatalf("createInitialSnapshot B: %v", err)
+	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "manifests"), 0755); err != nil {
+		t.Fatalf("mkdir manifests B: %v", err)
 	}
 
+	// Copy base snapshot metadata and manifest to B
+	copySnapshotArtifacts(t, rootA, rootB, baseSnapID)
+
+	cfgB, _ := config.LoadAt(rootB)
+	cfgB.BaseSnapshotID = baseSnapID
+	cfgB.CurrentSnapshotID = baseSnapID
+	if err := config.SaveAt(rootB, cfgB); err != nil {
+		t.Fatalf("SaveAt B: %v", err)
+	}
+
+	// Add divergent changes: A modifies a.txt, B adds b.txt and modifies a.txt
+	if err := os.WriteFile(filepath.Join(rootA, "a.txt"), []byte("one"), 0644); err != nil {
+		t.Fatalf("write A a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "a.txt"), []byte("two"), 0644); err != nil {
+		t.Fatalf("write B a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "b.txt"), []byte("new"), 0644); err != nil {
+		t.Fatalf("write B b.txt: %v", err)
+	}
+
+	// Create snapshots on both sides
 	restoreCwd := chdir(t, rootA)
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "snap A"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("snapshot A: %v", err)
+	}
+	restoreCwd()
+
+	restoreCwd = chdir(t, rootB)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "snap B"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("snapshot B: %v", err)
+	}
+	restoreCwd()
+
+	// Copy B's snapshot artifacts to A so DAG traversal works
+	cfgB, _ = config.LoadAt(rootB)
+	copySnapshotArtifacts(t, rootB, rootA, cfgB.CurrentSnapshotID)
+
+	// Register workspace B in the index
+	configDir := filepath.Join(rootA, "config")
+	setenv(t, "XDG_CONFIG_HOME", configDir)
+	registerTestWorkspace(t, "ws-b-id", "proj-1", "ws-b", rootB)
+
+	restoreCwd = chdir(t, rootA)
 	defer restoreCwd()
 
 	var output string
-	err := captureStdout(func() error {
+	err = captureStdout(func() error {
 		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"drift", rootB, "--json"})
+		cmd.SetArgs([]string{"drift", "ws-b", "--json"})
 		return cmd.Execute()
 	}, &output)
 	if err != nil {
 		t.Fatalf("drift failed: %v", err)
 	}
 
-	var report drift.Report
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &report); err != nil {
+	var result struct {
+		TheirChanges struct {
+			FilesAdded    []string `json:"files_added"`
+			FilesModified []string `json:"files_modified"`
+		} `json:"their_changes"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
 		t.Fatalf("failed to parse drift JSON: %v\noutput: %s", err, output)
 	}
-	if !contains(report.FilesAdded, "b.txt") {
-		t.Fatalf("expected b.txt in added, got %v", report.FilesAdded)
+	if !contains(result.TheirChanges.FilesAdded, "b.txt") {
+		t.Fatalf("expected b.txt in their added, got %v", result.TheirChanges.FilesAdded)
 	}
-	if !contains(report.FilesModified, "a.txt") {
-		t.Fatalf("expected a.txt in modified, got %v", report.FilesModified)
+	if !contains(result.TheirChanges.FilesModified, "a.txt") {
+		t.Fatalf("expected a.txt in their modified, got %v", result.TheirChanges.FilesModified)
 	}
 }
 
 func TestDriftBetweenWorkspacesNoDirtyJSON(t *testing.T) {
+	// Create workspace A with a shared base snapshot
 	rootA := setupWorkspace(t, "ws-a", map[string]string{
-		"a.txt": "one",
-	})
-	rootB := setupWorkspace(t, "ws-b", map[string]string{
-		"a.txt": "two",
-		"b.txt": "new",
+		"a.txt": "base",
 	})
 	if err := os.MkdirAll(filepath.Join(rootA, ".fst", "snapshots"), 0755); err != nil {
 		t.Fatalf("mkdir snapshots A: %v", err)
 	}
+
+	cacheDir := filepath.Join(rootA, "cache")
+	setenv(t, "XDG_CACHE_HOME", cacheDir)
+
+	baseSnapID, err := createInitialSnapshot(rootA, "ws-a-id", "ws-a", false)
+	if err != nil {
+		t.Fatalf("createInitialSnapshot A: %v", err)
+	}
+
+	// Create workspace B sharing the same base snapshot
+	rootB := setupWorkspace(t, "ws-b", map[string]string{
+		"a.txt": "base",
+	})
 	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "snapshots"), 0755); err != nil {
 		t.Fatalf("mkdir snapshots B: %v", err)
 	}
-	if _, err := createInitialSnapshot(rootA, "ws-a-id", "ws-a", false); err != nil {
-		t.Fatalf("createInitialSnapshot A: %v", err)
-	}
-	if _, err := createInitialSnapshot(rootB, "ws-b-id", "ws-b", false); err != nil {
-		t.Fatalf("createInitialSnapshot B: %v", err)
+	if err := os.MkdirAll(filepath.Join(rootB, ".fst", "manifests"), 0755); err != nil {
+		t.Fatalf("mkdir manifests B: %v", err)
 	}
 
+	// Copy base snapshot metadata and manifest to B
+	copySnapshotArtifacts(t, rootA, rootB, baseSnapID)
+
+	cfgB, _ := config.LoadAt(rootB)
+	cfgB.BaseSnapshotID = baseSnapID
+	cfgB.CurrentSnapshotID = baseSnapID
+	if err := config.SaveAt(rootB, cfgB); err != nil {
+		t.Fatalf("SaveAt B: %v", err)
+	}
+
+	// Add divergent changes
+	if err := os.WriteFile(filepath.Join(rootA, "a.txt"), []byte("one"), 0644); err != nil {
+		t.Fatalf("write A a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "a.txt"), []byte("two"), 0644); err != nil {
+		t.Fatalf("write B a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "b.txt"), []byte("new"), 0644); err != nil {
+		t.Fatalf("write B b.txt: %v", err)
+	}
+
+	// Create snapshots on both sides
 	restoreCwd := chdir(t, rootA)
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "snap A"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("snapshot A: %v", err)
+	}
+	restoreCwd()
+
+	restoreCwd = chdir(t, rootB)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "snap B"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("snapshot B: %v", err)
+	}
+	restoreCwd()
+
+	// Copy B's snapshot artifacts to A so DAG traversal works
+	cfgB, _ = config.LoadAt(rootB)
+	copySnapshotArtifacts(t, rootB, rootA, cfgB.CurrentSnapshotID)
+
+	// Register workspace B in the index
+	configDir := filepath.Join(rootA, "config")
+	setenv(t, "XDG_CONFIG_HOME", configDir)
+	registerTestWorkspace(t, "ws-b-id", "proj-1", "ws-b", rootB)
+
+	restoreCwd = chdir(t, rootA)
 	defer restoreCwd()
 
 	var output string
-	err := captureStdout(func() error {
+	err = captureStdout(func() error {
 		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"drift", rootB, "--no-dirty", "--json"})
+		cmd.SetArgs([]string{"drift", "ws-b", "--no-dirty", "--json"})
 		return cmd.Execute()
 	}, &output)
 	if err != nil {
 		t.Fatalf("drift failed: %v", err)
 	}
 
-	var report drift.Report
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &report); err != nil {
+	var result struct {
+		TheirChanges struct {
+			FilesAdded    []string `json:"files_added"`
+			FilesModified []string `json:"files_modified"`
+		} `json:"their_changes"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
 		t.Fatalf("failed to parse drift JSON: %v\noutput: %s", err, output)
 	}
-	if !contains(report.FilesAdded, "b.txt") {
-		t.Fatalf("expected b.txt in added, got %v", report.FilesAdded)
+	if !contains(result.TheirChanges.FilesAdded, "b.txt") {
+		t.Fatalf("expected b.txt in their added, got %v", result.TheirChanges.FilesAdded)
 	}
-	if !contains(report.FilesModified, "a.txt") {
-		t.Fatalf("expected a.txt in modified, got %v", report.FilesModified)
+	if !contains(result.TheirChanges.FilesModified, "a.txt") {
+		t.Fatalf("expected a.txt in their modified, got %v", result.TheirChanges.FilesModified)
 	}
 }
 
@@ -234,4 +352,56 @@ func contains(list []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// copySnapshotArtifacts copies a snapshot's metadata and manifest from src to dst workspace
+func copySnapshotArtifacts(t *testing.T, srcRoot, dstRoot, snapshotID string) {
+	t.Helper()
+
+	// Copy snapshot metadata
+	srcMeta := filepath.Join(srcRoot, ".fst", "snapshots", snapshotID+".meta.json")
+	dstMeta := filepath.Join(dstRoot, ".fst", "snapshots", snapshotID+".meta.json")
+	metaBytes, err := os.ReadFile(srcMeta)
+	if err != nil {
+		t.Fatalf("read snapshot meta %s: %v", snapshotID, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dstMeta), 0755); err != nil {
+		t.Fatalf("mkdir dst snapshots: %v", err)
+	}
+	if err := os.WriteFile(dstMeta, metaBytes, 0644); err != nil {
+		t.Fatalf("write snapshot meta: %v", err)
+	}
+
+	// Parse to get manifest hash
+	var meta config.SnapshotMeta
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		t.Fatalf("parse snapshot meta: %v", err)
+	}
+
+	// Copy manifest
+	srcManifest := filepath.Join(srcRoot, ".fst", "manifests", meta.ManifestHash+".json")
+	dstManifest := filepath.Join(dstRoot, ".fst", "manifests", meta.ManifestHash+".json")
+	manifestBytes, err := os.ReadFile(srcManifest)
+	if err != nil {
+		t.Fatalf("read manifest %s: %v", meta.ManifestHash, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dstManifest), 0755); err != nil {
+		t.Fatalf("mkdir dst manifests: %v", err)
+	}
+	if err := os.WriteFile(dstManifest, manifestBytes, 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+}
+
+// registerTestWorkspace registers a workspace in the local index for FindWorkspaceByName
+func registerTestWorkspace(t *testing.T, workspaceID, projectID, name, path string) {
+	t.Helper()
+	if err := index.UpsertWorkspace(index.WorkspaceEntry{
+		WorkspaceID:   workspaceID,
+		ProjectID:     projectID,
+		WorkspaceName: name,
+		Path:          path,
+	}, ""); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
 }

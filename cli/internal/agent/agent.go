@@ -312,6 +312,104 @@ Summary:`, conflictContext)
 	return invokeAgent(agent, prompt)
 }
 
+// InvokeDriftSummary generates a risk-focused summary of workspace drift
+func InvokeDriftSummary(agent *Agent, driftContext string) (string, error) {
+	prompt := fmt.Sprintf(`Analyze the drift between two workspaces and assess the risk of merge pain.
+Focus on:
+1. How far the workspaces have drifted apart (scope and severity)
+2. Which conflicts will be hardest to resolve and why
+3. What the developer should do NOW to minimize merge pain later
+
+Keep your response to 2-3 actionable sentences.
+
+Drift data:
+%s
+
+Assessment:`, driftContext)
+
+	return invokeAgent(agent, prompt)
+}
+
+// FileConflictSummary represents aggregated conflict info for a single file
+type FileConflictSummary struct {
+	Path          string
+	ConflictCount int
+}
+
+// BuildDriftContext creates a context string for LLM drift risk assessment
+func BuildDriftContext(ourName, theirName string, ourAdded, ourModified, ourDeleted, theirAdded, theirModified, theirDeleted []string, snapshotConflicts, dirtyConflicts []FileConflictSummary) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("Comparing workspace '%s' against '%s':\n\n", ourName, theirName))
+
+	// Our changes
+	sb.WriteString(fmt.Sprintf("'%s' changes from common ancestor:\n", ourName))
+	if len(ourAdded) > 0 {
+		sb.WriteString(fmt.Sprintf("  Added: %d files\n", len(ourAdded)))
+		for _, f := range ourAdded {
+			sb.WriteString(fmt.Sprintf("    + %s\n", f))
+		}
+	}
+	if len(ourModified) > 0 {
+		sb.WriteString(fmt.Sprintf("  Modified: %d files\n", len(ourModified)))
+		for _, f := range ourModified {
+			sb.WriteString(fmt.Sprintf("    ~ %s\n", f))
+		}
+	}
+	if len(ourDeleted) > 0 {
+		sb.WriteString(fmt.Sprintf("  Deleted: %d files\n", len(ourDeleted)))
+		for _, f := range ourDeleted {
+			sb.WriteString(fmt.Sprintf("    - %s\n", f))
+		}
+	}
+
+	// Their changes
+	sb.WriteString(fmt.Sprintf("\n'%s' changes from common ancestor:\n", theirName))
+	if len(theirAdded) > 0 {
+		sb.WriteString(fmt.Sprintf("  Added: %d files\n", len(theirAdded)))
+		for _, f := range theirAdded {
+			sb.WriteString(fmt.Sprintf("    + %s\n", f))
+		}
+	}
+	if len(theirModified) > 0 {
+		sb.WriteString(fmt.Sprintf("  Modified: %d files\n", len(theirModified)))
+		for _, f := range theirModified {
+			sb.WriteString(fmt.Sprintf("    ~ %s\n", f))
+		}
+	}
+	if len(theirDeleted) > 0 {
+		sb.WriteString(fmt.Sprintf("  Deleted: %d files\n", len(theirDeleted)))
+		for _, f := range theirDeleted {
+			sb.WriteString(fmt.Sprintf("    - %s\n", f))
+		}
+	}
+
+	// Conflicts
+	if len(snapshotConflicts) > 0 {
+		totalRegions := 0
+		for _, c := range snapshotConflicts {
+			totalRegions += c.ConflictCount
+		}
+		sb.WriteString(fmt.Sprintf("\nSnapshot conflicts: %d regions across %d files\n", totalRegions, len(snapshotConflicts)))
+		for _, c := range snapshotConflicts {
+			sb.WriteString(fmt.Sprintf("  ! %s (%d conflicts)\n", c.Path, c.ConflictCount))
+		}
+	}
+
+	if len(dirtyConflicts) > 0 {
+		totalRegions := 0
+		for _, c := range dirtyConflicts {
+			totalRegions += c.ConflictCount
+		}
+		sb.WriteString(fmt.Sprintf("\nAdditional dirty conflicts: %d regions across %d files\n", totalRegions, len(dirtyConflicts)))
+		for _, c := range dirtyConflicts {
+			sb.WriteString(fmt.Sprintf("  ! %s (%d conflicts)\n", c.Path, c.ConflictCount))
+		}
+	}
+
+	return sb.String()
+}
+
 // MergeResult contains the agent's merge output
 type MergeResult struct {
 	Strategy   []string // Bullet points explaining merge decisions
