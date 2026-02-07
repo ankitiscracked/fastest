@@ -9,8 +9,9 @@ Created by `fst workspace init` or `fst project init` in the workspace root.
 ```
 .fst/
   config.json       # Workspace configuration
+  author.json       # Optional project-level author identity (name, email)
   snapshots/        # Snapshot metadata files
-    <id>.meta.json  # SnapshotMeta: ID, CreatedAt, ManifestHash, ParentID, Message, AgentSummary
+    <id>.meta.json  # SnapshotMeta: ID, ManifestHash, Parents, Author, CreatedAt, Message
   manifests/        # Manifest files (file tree hashes)
     <hash>.json     # Manifest: map of relative paths to content hashes
   export/           # Git export state (created by `fst git export`)
@@ -42,6 +43,7 @@ Respects `XDG_CONFIG_HOME`. Contains cross-workspace state.
 ~/.config/fst/
   index.json        # Workspace and project registry
   agents.json       # Preferred agent configuration
+  author.json       # Global author identity (name, email)
   auth.json         # Authentication tokens (managed by login/logout)
 ```
 

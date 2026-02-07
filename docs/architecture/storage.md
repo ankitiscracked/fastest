@@ -28,8 +28,9 @@ When `fst workspace init` runs, it creates the `.fst/` directory inside the work
   .fst/
     config.json            # ProjectConfig (project_id, workspace_id, etc.)
     .gitignore             # Excludes snapshots/, manifests/, blobs/ from Git
+    author.json            # Optional project-level author identity override
     snapshots/
-      <snap-id>.meta.json  # Snapshot metadata (id, manifest_hash, parents, message)
+      <snap-id>.meta.json  # Snapshot metadata (id, manifest_hash, parents, author, message)
     manifests/
       <hash>.json          # Full manifest JSON, keyed by SHA-256 of content
     blobs/

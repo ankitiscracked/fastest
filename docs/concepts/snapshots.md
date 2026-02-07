@@ -4,15 +4,17 @@ A snapshot is an immutable record of a workspace's file state at a point in time
 
 ## Snapshot Metadata
 
-Each snapshot is stored as a `.meta.json` file in `.fst/snapshots/`. The full metadata structure (defined in `cli/cmd/fst/commands/log.go` as `SnapshotMeta`):
+Each snapshot is stored as a `.meta.json` file in `.fst/snapshots/`. The full metadata structure:
 
 ```json
 {
-  "id": "snap-abc123...",
+  "id": "a3f2b1c4d5e6...",
   "workspace_id": "ws-...",
   "workspace_name": "main",
   "manifest_hash": "sha256hex...",
-  "parent_snapshot_ids": ["snap-parent1...", "snap-parent2..."],
+  "parent_snapshot_ids": ["parent1hex...", "parent2hex..."],
+  "author_name": "John Doe",
+  "author_email": "john@example.com",
   "message": "Add authentication module",
   "agent": "claude",
   "created_at": "2025-01-15T10:30:00Z",
@@ -23,13 +25,35 @@ Each snapshot is stored as a `.meta.json` file in `.fst/snapshots/`. The full me
 
 The `manifest_hash` links to a manifest JSON file in `.fst/manifests/{hash}.json` that contains the full file listing with per-file SHA-256 hashes, sizes, and modes.
 
-A minimal `SnapshotMeta` (in `cli/internal/config/config.go`) is used for resolution: just `id`, `created_at`, and `manifest_hash`.
+A minimal `SnapshotMeta` (in `cli/internal/config/config.go`) is used for resolution: `id`, `created_at`, `manifest_hash`, `parent_snapshot_ids`, `author_name`, and `author_email`.
 
 ## Snapshot IDs
 
-Snapshot IDs are randomly generated with a `snap-` prefix (via `generateSnapshotID()`). They can be resolved by prefix -- if a short prefix uniquely matches one `.meta.json` file, it resolves to the full ID. Ambiguous prefixes return an error.
+Snapshot IDs are content-addressed: the ID is a 64-character lowercase hex SHA-256 hash derived from the snapshot's identity fields. This means any tampering with metadata is detectable — the ID won't match the recomputed hash.
 
-Implementation: `cli/internal/config/config.go` (`ResolveSnapshotIDAt`).
+The hash input is a canonical byte string:
+
+```
+snapshot\0
+manifest_hash <hash>\n
+parent <sorted-parent-id>\n
+author <name> <email>\n
+created_at <rfc3339>\n
+```
+
+Parents are sorted lexicographically before hashing for determinism. Fields excluded from the hash (mutable metadata): `message`, `agent`, `workspace_id`, `files`, `size`.
+
+Implementation: `cli/internal/config/snapshot_id.go` (`ComputeSnapshotID`, `VerifySnapshotID`, `IsContentAddressedSnapshotID`).
+
+IDs can be resolved by prefix — if a short prefix uniquely matches one `.meta.json` file, it resolves to the full ID. Ambiguous prefixes return an error. Implementation: `cli/internal/config/config.go` (`ResolveSnapshotIDAt`).
+
+### Legacy IDs
+
+Older snapshots may have a `snap-` prefix (randomly generated). These are recognized as legacy IDs and skip integrity verification on read. New snapshots always use content-addressed IDs.
+
+### Integrity Verification
+
+When reading a content-addressed snapshot (via `ManifestHashFromSnapshotIDAt` or `SnapshotParentIDsAt`), the ID is re-derived from the stored metadata fields and compared. If they don't match, the read fails with an integrity error. This catches accidental or malicious edits to `.meta.json` files.
 
 ## The DAG
 
@@ -58,14 +82,15 @@ Snapshot metadata is loaded from either workspace's `.fst/snapshots/` directory 
 
 `fst snapshot` (implemented in `cli/cmd/fst/commands/snapshot.go`):
 
-1. Generates a manifest of the current filesystem (respecting `.fstignore`)
-2. Computes the manifest's SHA-256 content hash
-3. Generates a new random snapshot ID
-4. Caches all file blobs in the global blob cache (`~/.cache/fst/blobs/`)
-5. Saves the manifest JSON to `.fst/manifests/{hash}.json`
-6. Writes snapshot metadata to `.fst/snapshots/{id}.meta.json`
-7. Updates `current_snapshot_id` in config
-8. Clears any pending merge parents
+1. Resolves the author identity (project-level > global > interactive prompt)
+2. Generates a manifest of the current filesystem (respecting `.fstignore`)
+3. Computes the manifest's SHA-256 content hash
+4. Computes the content-addressed snapshot ID from identity fields
+5. Caches all file blobs in the project-level blob store (`.fst/blobs/`)
+6. Saves the manifest JSON to `.fst/manifests/{hash}.json`
+7. Writes snapshot metadata to `.fst/snapshots/{id}.meta.json`
+8. Updates `current_snapshot_id` in config
+9. Clears any pending merge parents
 
 Options:
 - `--message` / `-m`: Required description for the snapshot

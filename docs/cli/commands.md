@@ -119,6 +119,20 @@ Git export stores commit-to-snapshot mapping in `.fst/export/git-map.json`. GitH
 | `fst agents list` | `ls` | Show all known agents with availability | `agents.go` |
 | `fst agents set-preferred [name]` | | Set the preferred agent for summaries/merges | `agents.go` |
 
+## Configuration
+
+| Command | Description | Source |
+|---------|-------------|--------|
+| `fst config` | Interactive author identity setup (project-level) | `cmd_config.go` |
+| `fst config --global` | Interactive author identity setup (global) | `cmd_config.go` |
+| `fst config name "John Doe"` | Set author name (project-level) | `cmd_config.go` |
+| `fst config email "john@example.com"` | Set author email (project-level) | `cmd_config.go` |
+| `fst config --show` | Show resolved author identity | `cmd_config.go` |
+
+**`config` flags:** `--global` (use global instead of project-level), `--show` (display resolved author)
+
+Author identity is embedded in snapshot metadata and used to compute content-addressed snapshot IDs. Project-level config (`.fst/author.json`) overrides global config (`~/.config/fst/author.json`). If no author is configured when creating a snapshot interactively, a prompt is shown.
+
 ## Deprecated
 
 | Command | Replacement | Source |

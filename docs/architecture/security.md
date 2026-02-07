@@ -28,6 +28,7 @@
 
 ## Content integrity
 
+- **Snapshot IDs** are content-addressed: each ID is the SHA-256 hash of the snapshot's identity fields (manifest hash, sorted parent IDs, author name/email, timestamp). When reading a snapshot, the ID is recomputed and verified. Tampering with any identity field in a `.meta.json` file causes the read to fail with an integrity error. Legacy IDs (with `snap-` prefix) skip this check for backward compatibility. Implementation: `cli/internal/config/snapshot_id.go`.
 - Blob uploads are verified server-side: the API computes SHA-256 of the uploaded content and rejects requests where the hash does not match the URL parameter (`api/src/routes/blobs.ts`).
 - Manifests are similarly hash-verified on upload.
 - Locally, `fst merge` verifies blob hashes when reading from the cache to detect corruption.
