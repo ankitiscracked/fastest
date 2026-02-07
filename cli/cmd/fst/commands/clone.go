@@ -13,6 +13,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -139,10 +140,10 @@ func runClone(target string, targetDir string) error {
 		_ = config.SaveAt(absTargetDir, cfg)
 	}
 
-	if err := RegisterWorkspace(RegisteredWorkspace{
-		ID:             workspaceID,
+	if err := index.RegisterWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    workspaceID,
 		ProjectID:      projectID,
-		Name:           workspaceName,
+		WorkspaceName:  workspaceName,
 		Path:           absTargetDir,
 		BaseSnapshotID: forkSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),

@@ -182,14 +182,15 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		}
 	}
 
-	if err := UpdateWorkspaceRegistry(originalWorkspaceRoot, RegisteredWorkspace{
-		ID:             workspaceID,
+	if err := index.UpsertWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    workspaceID,
 		ProjectID:      projectID,
-		Name:           workspaceName,
+		WorkspaceName:  workspaceName,
 		Path:           workspaceRoot,
 		BaseSnapshotID: baseSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
+		LocalOnly:      true,
+	}, originalWorkspaceRoot); err != nil {
 		fmt.Printf("Warning: Could not update workspace registry: %v\n", err)
 	}
 
@@ -278,10 +279,10 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 		}
 	}
 
-	if err := RegisterWorkspace(RegisteredWorkspace{
-		ID:             workspaceID,
+	if err := index.RegisterWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    workspaceID,
 		ProjectID:      projectID,
-		Name:           workspaceName,
+		WorkspaceName:  workspaceName,
 		Path:           workspacePath,
 		BaseSnapshotID: snapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),

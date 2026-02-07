@@ -277,6 +277,84 @@ func SetProjectMainWorkspace(projectID, workspaceID string) error {
 	return Save(idx)
 }
 
+// RegisterWorkspace adds or updates a workspace in the index and ensures
+// the parent project is also registered.
+func RegisterWorkspace(ws WorkspaceEntry) error {
+	ws.LocalOnly = true
+	if err := UpsertWorkspace(ws, ""); err != nil {
+		return err
+	}
+	parentRoot, parentCfg, err := config.FindParentRootFrom(ws.Path)
+	if err == nil && parentCfg != nil {
+		_ = UpsertProject(ProjectEntry{
+			ProjectID:   parentCfg.ProjectID,
+			ProjectName: parentCfg.ProjectName,
+			ProjectPath: parentRoot,
+			LocalOnly:   true,
+		})
+	}
+	return nil
+}
+
+// UnregisterWorkspace removes a workspace from the index by path.
+func UnregisterWorkspace(path string) error {
+	idx, err := Load()
+	if err != nil {
+		return err
+	}
+	filtered := make([]WorkspaceEntry, 0, len(idx.Workspaces))
+	for _, ws := range idx.Workspaces {
+		if ws.Path != path {
+			filtered = append(filtered, ws)
+		}
+	}
+	idx.Workspaces = filtered
+	return Save(idx)
+}
+
+// GetProjectWorkspaces returns all workspaces for a given project.
+func GetProjectWorkspaces(projectID string) ([]WorkspaceEntry, error) {
+	idx, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	var result []WorkspaceEntry
+	for _, ws := range idx.Workspaces {
+		if ws.ProjectID == projectID {
+			result = append(result, ws)
+		}
+	}
+	return result, nil
+}
+
+// FindWorkspaceByName finds a workspace by name within a project.
+func FindWorkspaceByName(projectID, name string) (*WorkspaceEntry, error) {
+	idx, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	for i := range idx.Workspaces {
+		if idx.Workspaces[i].ProjectID == projectID && idx.Workspaces[i].WorkspaceName == name {
+			return &idx.Workspaces[i], nil
+		}
+	}
+	return nil, fmt.Errorf("workspace '%s' not found in project", name)
+}
+
+// FindWorkspaceByPath finds a workspace by its filesystem path.
+func FindWorkspaceByPath(path string) (*WorkspaceEntry, error) {
+	idx, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	for i := range idx.Workspaces {
+		if idx.Workspaces[i].Path == path {
+			return &idx.Workspaces[i], nil
+		}
+	}
+	return nil, fmt.Errorf("workspace not found at path: %s", path)
+}
+
 func GetProjectMainWorkspaceID(projectID string) (string, error) {
 	if projectID == "" {
 		return "", fmt.Errorf("project ID is required")

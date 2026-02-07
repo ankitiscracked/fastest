@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -436,10 +437,10 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 		return fmt.Errorf("failed to save workspace config: %w", err)
 	}
 
-	if err := RegisterWorkspace(RegisteredWorkspace{
-		ID:             cfg.WorkspaceID,
+	if err := index.RegisterWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    cfg.WorkspaceID,
 		ProjectID:      cfg.ProjectID,
-		Name:           cfg.WorkspaceName,
+		WorkspaceName:  cfg.WorkspaceName,
 		Path:           targetRoot,
 		BaseSnapshotID: cfg.BaseSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),

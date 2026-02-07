@@ -185,14 +185,14 @@ func initialModel() model {
 func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 	var items []workspaceItem
 
-	registry, err := LoadRegistry()
+	idx, err := index.Load()
 	if err != nil {
 		return items
 	}
 
 	mainByProject := map[string]string{}
 	projectIDs := map[string]struct{}{}
-	for _, ws := range registry.Workspaces {
+	for _, ws := range idx.Workspaces {
 		projectIDs[ws.ProjectID] = struct{}{}
 	}
 	for projectID := range projectIDs {
@@ -204,7 +204,7 @@ func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 	// Group by project for better display
 	projectNames := make(map[string]string) // projectID -> name (use first workspace's project)
 
-	for _, ws := range registry.Workspaces {
+	for _, ws := range idx.Workspaces {
 		// Check if workspace still exists
 		if _, err := os.Stat(filepath.Join(ws.Path, ".fst")); os.IsNotExist(err) {
 			continue
@@ -213,11 +213,11 @@ func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 		mainID, hasMain := mainByProject[ws.ProjectID]
 		item := workspaceItem{
 			ProjectID:     ws.ProjectID,
-			WorkspaceID:   ws.ID,
-			WorkspaceName: ws.Name,
+			WorkspaceID:   ws.WorkspaceID,
+			WorkspaceName: ws.WorkspaceName,
 			Path:          ws.Path,
 			SameProject:   ws.ProjectID == currentProjectID,
-			IsMain:        hasMain && mainID == ws.ID,
+			IsMain:        hasMain && mainID == ws.WorkspaceID,
 			MainMissing:   !hasMain,
 		}
 
@@ -1030,7 +1030,7 @@ func max(a, b int) int {
 }
 
 // getWorkspaceChanges computes drift from the base snapshot for a workspace.
-func getWorkspaceChanges(ws RegisteredWorkspace) (*drift.Report, error) {
+func getWorkspaceChanges(ws index.WorkspaceEntry) (*drift.Report, error) {
 	wsCfg, err := config.LoadAt(ws.Path)
 	if err != nil {
 		return nil, err

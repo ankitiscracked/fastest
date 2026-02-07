@@ -16,6 +16,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
 	"github.com/anthropics/fastest/cli/internal/dag"
+	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -184,13 +185,13 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 		}
 	} else {
 		// Look up workspace from local registry first
-		registry, err := LoadRegistry()
+		idx, err := index.Load()
 		if err != nil {
 			return fmt.Errorf("failed to load workspace registry: %w", err)
 		}
 
-		var found *RegisteredWorkspace
-		if w, ok, err := resolveWorkspaceFromRegistry(sourceName, registry.Workspaces, cfg.ProjectID); err != nil {
+		var found *index.WorkspaceEntry
+		if w, ok, err := resolveWorkspaceFromRegistry(sourceName, idx.Workspaces, cfg.ProjectID); err != nil {
 			return err
 		} else if ok {
 			found = w
@@ -222,7 +223,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 			}
 		} else {
 			sourceRoot = found.Path
-			sourceDisplayName = found.Name
+			sourceDisplayName = found.WorkspaceName
 		}
 	}
 

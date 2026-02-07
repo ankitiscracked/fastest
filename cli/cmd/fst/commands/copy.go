@@ -14,6 +14,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/ignore"
+	"github.com/anthropics/fastest/cli/internal/index"
 )
 
 func newCopyCmd() *cobra.Command {
@@ -268,10 +269,10 @@ func runCopy(name, targetDir string) error {
 	}
 
 	// Register workspace in global registry
-	if err := RegisterWorkspace(RegisteredWorkspace{
-		ID:             workspaceID,
+	if err := index.RegisterWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    workspaceID,
 		ProjectID:      cfg.ProjectID,
-		Name:           name,
+		WorkspaceName:  name,
 		Path:           targetDir,
 		BaseSnapshotID: forkSnapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),

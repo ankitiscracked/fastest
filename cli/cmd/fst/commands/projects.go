@@ -217,10 +217,10 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	}
 
 	// Register workspace in global registry
-	if err := RegisterWorkspace(RegisteredWorkspace{
-		ID:             workspaceID,
+	if err := index.RegisterWorkspace(index.WorkspaceEntry{
+		WorkspaceID:    workspaceID,
 		ProjectID:      projectID,
-		Name:           workspaceName,
+		WorkspaceName:  workspaceName,
 		Path:           cwd,
 		BaseSnapshotID: snapshotID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),

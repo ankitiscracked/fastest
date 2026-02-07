@@ -11,6 +11,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
+	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
@@ -82,16 +83,16 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 		}
 
 		// Look up upstream workspace path from registry
-		registry, err := LoadRegistry()
+		idx, err := index.Load()
 		if err != nil {
 			return fmt.Errorf("failed to load workspace registry: %w", err)
 		}
 
 		found := false
-		for _, ws := range registry.Workspaces {
-			if ws.ID == upstreamID || ws.Name == upstreamName {
+		for _, ws := range idx.Workspaces {
+			if ws.WorkspaceID == upstreamID || ws.WorkspaceName == upstreamName {
 				otherRoot = ws.Path
-				otherName = ws.Name
+				otherName = ws.WorkspaceName
 				found = true
 				break
 			}
@@ -119,16 +120,16 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 			}
 		} else {
 			// Treat as workspace name
-			registry, err := LoadRegistry()
+			idx, err := index.Load()
 			if err != nil {
 				return fmt.Errorf("failed to load workspace registry: %w", err)
 			}
 
 			found := false
-			for _, ws := range registry.Workspaces {
-				if ws.Name == target && ws.ProjectID == cfg.ProjectID {
+			for _, ws := range idx.Workspaces {
+				if ws.WorkspaceName == target && ws.ProjectID == cfg.ProjectID {
 					otherRoot = ws.Path
-					otherName = ws.Name
+					otherName = ws.WorkspaceName
 					found = true
 					break
 				}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/anthropics/fastest/cli/internal/api"
+	"github.com/anthropics/fastest/cli/internal/index"
 )
 
 func resolveWorkspaceFromAPI(input string, workspaces []api.Workspace) (*api.Workspace, error) {
@@ -39,11 +40,11 @@ func resolveWorkspaceFromAPI(input string, workspaces []api.Workspace) (*api.Wor
 	return nil, fmt.Errorf("workspace %q not found in project", input)
 }
 
-func resolveWorkspaceFromRegistry(input string, workspaces []RegisteredWorkspace, projectID string) (*RegisteredWorkspace, bool, error) {
+func resolveWorkspaceFromRegistry(input string, workspaces []index.WorkspaceEntry, projectID string) (*index.WorkspaceEntry, bool, error) {
 	if input == "" {
 		return nil, false, fmt.Errorf("workspace is required")
 	}
-	candidates := make([]RegisteredWorkspace, 0, len(workspaces))
+	candidates := make([]index.WorkspaceEntry, 0, len(workspaces))
 	for _, ws := range workspaces {
 		if ws.ProjectID == projectID {
 			candidates = append(candidates, ws)
@@ -51,12 +52,12 @@ func resolveWorkspaceFromRegistry(input string, workspaces []RegisteredWorkspace
 	}
 
 	for i := range candidates {
-		if candidates[i].ID == input {
+		if candidates[i].WorkspaceID == input {
 			return &candidates[i], true, nil
 		}
 	}
 	for i := range candidates {
-		if candidates[i].Name == input {
+		if candidates[i].WorkspaceName == input {
 			return &candidates[i], true, nil
 		}
 	}
@@ -64,11 +65,11 @@ func resolveWorkspaceFromRegistry(input string, workspaces []RegisteredWorkspace
 	if strings.HasPrefix(input, "ws-") {
 		ids := make([]string, 0, len(candidates))
 		for _, ws := range candidates {
-			ids = append(ids, ws.ID)
+			ids = append(ids, ws.WorkspaceID)
 		}
 		if resolved, err := resolveIDPrefix(input, ids, "workspace"); err == nil {
 			for i := range candidates {
-				if candidates[i].ID == resolved {
+				if candidates[i].WorkspaceID == resolved {
 					return &candidates[i], true, nil
 				}
 			}

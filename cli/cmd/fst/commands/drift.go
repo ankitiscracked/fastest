@@ -222,11 +222,11 @@ func runDrift(target string, jsonOutput, generateSummary, noDirty bool) error {
 func resolveTargetWorkspace(target string, cfg *config.ProjectConfig) (root, name string, err error) {
 	if target != "" {
 		// Look up by name only
-		ws, err := FindWorkspaceByName(cfg.ProjectID, target)
+		ws, err := index.FindWorkspaceByName(cfg.ProjectID, target)
 		if err != nil {
 			return "", "", fmt.Errorf("workspace '%s' not found in project\nRun 'fst workspaces' to see available workspaces.", target)
 		}
-		return ws.Path, ws.Name, nil
+		return ws.Path, ws.WorkspaceName, nil
 	}
 
 	// No target — compare against main workspace (local only)
@@ -249,14 +249,14 @@ func resolveLocalMainWorkspace(cfg *config.ProjectConfig, mainID, mainName strin
 		return "", "", fmt.Errorf("this is the main workspace - specify a workspace to compare against:\n  fst drift <workspace-name>")
 	}
 
-	registry, err := LoadRegistry()
+	idx, err := index.Load()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to load workspace registry: %w", err)
 	}
 
-	for _, ws := range registry.Workspaces {
-		if ws.ID == mainID {
-			return ws.Path, ws.Name, nil
+	for _, ws := range idx.Workspaces {
+		if ws.WorkspaceID == mainID {
+			return ws.Path, ws.WorkspaceName, nil
 		}
 	}
 

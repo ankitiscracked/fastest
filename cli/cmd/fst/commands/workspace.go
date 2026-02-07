@@ -21,174 +21,6 @@ func init() {
 	register(func(root *cobra.Command) { root.AddCommand(newWorkspaceCmd()) })
 }
 
-// WorkspaceRegistry holds all registered workspaces
-type WorkspaceRegistry struct {
-	Workspaces []RegisteredWorkspace `json:"workspaces"`
-}
-
-// RegisteredWorkspace represents a workspace in the registry
-type RegisteredWorkspace struct {
-	ID             string `json:"id"`
-	ProjectID      string `json:"project_id"`
-	Name           string `json:"name"`
-	Path           string `json:"path"`
-	BaseSnapshotID string `json:"base_snapshot_id"`
-	CreatedAt      string `json:"created_at"`
-}
-
-// GetRegistryPath returns the path to the workspace registry
-func GetRegistryPath() (string, error) {
-	return index.GetIndexPath()
-}
-
-// LoadRegistry loads the workspace registry
-func LoadRegistry() (*WorkspaceRegistry, error) {
-	idx, err := index.Load()
-	if err != nil {
-		return nil, err
-	}
-	registry := &WorkspaceRegistry{Workspaces: []RegisteredWorkspace{}}
-	for _, ws := range idx.Workspaces {
-		registry.Workspaces = append(registry.Workspaces, RegisteredWorkspace{
-			ID:             ws.WorkspaceID,
-			ProjectID:      ws.ProjectID,
-			Name:           ws.WorkspaceName,
-			Path:           ws.Path,
-			BaseSnapshotID: ws.BaseSnapshotID,
-			CreatedAt:      ws.CreatedAt,
-		})
-	}
-	return registry, nil
-}
-
-// SaveRegistry saves the workspace registry
-func SaveRegistry(registry *WorkspaceRegistry) error {
-	if registry == nil {
-		return fmt.Errorf("registry is nil")
-	}
-	idx, err := index.Load()
-	if err != nil {
-		return err
-	}
-	idx.Workspaces = []index.WorkspaceEntry{}
-	for _, ws := range registry.Workspaces {
-		idx.Workspaces = append(idx.Workspaces, index.WorkspaceEntry{
-			WorkspaceID:    ws.ID,
-			WorkspaceName:  ws.Name,
-			ProjectID:      ws.ProjectID,
-			Path:           ws.Path,
-			BaseSnapshotID: ws.BaseSnapshotID,
-			CreatedAt:      ws.CreatedAt,
-			LocalOnly:      true,
-		})
-	}
-	return index.Save(idx)
-}
-
-// RegisterWorkspace adds a workspace to the registry
-func RegisterWorkspace(ws RegisteredWorkspace) error {
-	if err := index.UpsertWorkspace(index.WorkspaceEntry{
-		WorkspaceID:    ws.ID,
-		WorkspaceName:  ws.Name,
-		ProjectID:      ws.ProjectID,
-		Path:           ws.Path,
-		BaseSnapshotID: ws.BaseSnapshotID,
-		CreatedAt:      ws.CreatedAt,
-		LocalOnly:      true,
-	}, ""); err != nil {
-		return err
-	}
-
-	parentRoot, parentCfg, err := config.FindParentRootFrom(ws.Path)
-	if err == nil && parentCfg != nil {
-		_ = index.UpsertProject(index.ProjectEntry{
-			ProjectID:   parentCfg.ProjectID,
-			ProjectName: parentCfg.ProjectName,
-			ProjectPath: parentRoot,
-			LocalOnly:   true,
-		})
-	}
-
-	return nil
-}
-
-// UpdateWorkspaceRegistry updates an existing workspace entry by ID or path, or inserts it if missing.
-func UpdateWorkspaceRegistry(oldPath string, ws RegisteredWorkspace) error {
-	return index.UpsertWorkspace(index.WorkspaceEntry{
-		WorkspaceID:    ws.ID,
-		WorkspaceName:  ws.Name,
-		ProjectID:      ws.ProjectID,
-		Path:           ws.Path,
-		BaseSnapshotID: ws.BaseSnapshotID,
-		CreatedAt:      ws.CreatedAt,
-		LocalOnly:      true,
-	}, oldPath)
-}
-
-// UnregisterWorkspace removes a workspace from the registry
-func UnregisterWorkspace(path string) error {
-	registry, err := LoadRegistry()
-	if err != nil {
-		return err
-	}
-
-	filtered := []RegisteredWorkspace{}
-	for _, ws := range registry.Workspaces {
-		if ws.Path != path {
-			filtered = append(filtered, ws)
-		}
-	}
-
-	registry.Workspaces = filtered
-	return SaveRegistry(registry)
-}
-
-// GetProjectWorkspaces returns all workspaces for a given project
-func GetProjectWorkspaces(projectID string) ([]RegisteredWorkspace, error) {
-	registry, err := LoadRegistry()
-	if err != nil {
-		return nil, err
-	}
-
-	var result []RegisteredWorkspace
-	for _, ws := range registry.Workspaces {
-		if ws.ProjectID == projectID {
-			result = append(result, ws)
-		}
-	}
-	return result, nil
-}
-
-// FindWorkspaceByName finds a workspace by name within a project
-func FindWorkspaceByName(projectID, name string) (*RegisteredWorkspace, error) {
-	registry, err := LoadRegistry()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, ws := range registry.Workspaces {
-		if ws.ProjectID == projectID && ws.Name == name {
-			return &ws, nil
-		}
-	}
-	return nil, fmt.Errorf("workspace '%s' not found in project", name)
-}
-
-// FindWorkspaceByPath finds a workspace by its path
-func FindWorkspaceByPath(path string) (*RegisteredWorkspace, error) {
-	registry, err := LoadRegistry()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, ws := range registry.Workspaces {
-		if ws.Path == path {
-			return &ws, nil
-		}
-	}
-	return nil, fmt.Errorf("workspace not found at path: %s", path)
-}
-
 func newWorkspacesCmd() *cobra.Command {
 	var showAll bool
 
@@ -221,24 +53,22 @@ func runWorkspaces(showAll bool) error {
 		currentProjectID = cfg.ProjectID
 	}
 
-	registry, err := LoadRegistry()
+	idx, err := index.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load workspace registry: %w", err)
 	}
 
 	mainByProject := map[string]string{}
-	if idx, err := index.Load(); err == nil {
-		for _, project := range idx.Projects {
-			if project.MainWorkspaceID != "" {
-				mainByProject[project.ProjectID] = project.MainWorkspaceID
-			}
+	for _, project := range idx.Projects {
+		if project.MainWorkspaceID != "" {
+			mainByProject[project.ProjectID] = project.MainWorkspaceID
 		}
 	}
 
-	localWorkspaces := map[string]RegisteredWorkspace{}
-	for _, ws := range registry.Workspaces {
+	localWorkspaces := map[string]index.WorkspaceEntry{}
+	for _, ws := range idx.Workspaces {
 		if showAll || ws.ProjectID == currentProjectID {
-			localWorkspaces[ws.ID] = ws
+			localWorkspaces[ws.WorkspaceID] = ws
 		}
 	}
 
@@ -279,14 +109,14 @@ func runWorkspaces(showAll bool) error {
 
 	merged := map[string]*mergedWorkspace{}
 	for _, ws := range localWorkspaces {
-		merged[ws.ID] = &mergedWorkspace{
-			ID:             ws.ID,
-			Name:           ws.Name,
+		merged[ws.WorkspaceID] = &mergedWorkspace{
+			ID:             ws.WorkspaceID,
+			Name:           ws.WorkspaceName,
 			Path:           ws.Path,
 			ProjectID:      ws.ProjectID,
 			BaseSnapshotID: ws.BaseSnapshotID,
 			Local:          true,
-			IsMain:         mainByProject[ws.ProjectID] == ws.ID,
+			IsMain:         mainByProject[ws.ProjectID] == ws.WorkspaceID,
 		}
 	}
 	for _, ws := range cloudWorkspaces {
@@ -552,19 +382,19 @@ func runSetMain(workspaceName string) error {
 		targetWorkspaceID = cfg.WorkspaceID
 		targetWorkspaceName = cfg.WorkspaceName
 	} else {
-		registry, err := LoadRegistry()
+		idx, err := index.Load()
 		if err != nil {
 			return fmt.Errorf("failed to load workspace registry: %w", err)
 		}
-		ws, found, err := resolveWorkspaceFromRegistry(workspaceName, registry.Workspaces, cfg.ProjectID)
+		ws, found, err := resolveWorkspaceFromRegistry(workspaceName, idx.Workspaces, cfg.ProjectID)
 		if err != nil {
 			return err
 		}
 		if !found {
 			return fmt.Errorf("workspace '%s' not found locally\nRun 'fst workspaces' to see available workspaces.", workspaceName)
 		}
-		targetWorkspaceID = ws.ID
-		targetWorkspaceName = ws.Name
+		targetWorkspaceID = ws.WorkspaceID
+		targetWorkspaceName = ws.WorkspaceName
 	}
 
 	if token != "" {

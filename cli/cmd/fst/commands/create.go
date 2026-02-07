@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/index"
 )
 
 func init() {
@@ -105,10 +106,10 @@ func runCreate(args []string) error {
 			}
 		}
 
-		if err := RegisterWorkspace(RegisteredWorkspace{
-			ID:             workspaceID,
+		if err := index.RegisterWorkspace(index.WorkspaceEntry{
+			WorkspaceID:    workspaceID,
 			ProjectID:      parentCfg.ProjectID,
-			Name:           workspaceName,
+			WorkspaceName:  workspaceName,
 			Path:           workspaceDir,
 			BaseSnapshotID: snapshotID,
 			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -148,22 +149,22 @@ func copyBaseSnapshotToWorkspace(parentCfg *config.ParentConfig, workspaceDir, b
 		return nil
 	}
 
-	registry, err := LoadRegistry()
+	idx, err := index.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load workspace registry: %w", err)
 	}
 
 	sourcePath := ""
 	if parentCfg.BaseWorkspaceID != "" {
-		for _, ws := range registry.Workspaces {
-			if ws.ID == parentCfg.BaseWorkspaceID {
+		for _, ws := range idx.Workspaces {
+			if ws.WorkspaceID == parentCfg.BaseWorkspaceID {
 				sourcePath = ws.Path
 				break
 			}
 		}
 	}
 	if sourcePath == "" {
-		for _, ws := range registry.Workspaces {
+		for _, ws := range idx.Workspaces {
 			if ws.ProjectID != parentCfg.ProjectID {
 				continue
 			}
