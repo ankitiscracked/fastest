@@ -1,12 +1,10 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/workspace"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -52,15 +51,11 @@ Use --agent-message to generate a description using your local coding agent.`,
 }
 
 func runSnapshot(message string, agentMessage bool) error {
-	cfg, err := config.Load()
+	ws, err := workspace.Open()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
-
-	root, err := config.FindProjectRoot()
-	if err != nil {
-		return fmt.Errorf("failed to find project root: %w", err)
-	}
+	defer ws.Close()
 
 	if message != "" && agentMessage {
 		return fmt.Errorf("cannot use --message with --agent-message")
@@ -73,7 +68,7 @@ func runSnapshot(message string, agentMessage bool) error {
 		message = entered
 	}
 
-	// Resolve author identity
+	// Resolve author identity (interactive — may prompt via TUI)
 	author, err := resolveAuthor()
 	if err != nil {
 		return err
@@ -81,49 +76,14 @@ func runSnapshot(message string, agentMessage bool) error {
 
 	fmt.Println("Scanning files...")
 
-	// Generate manifest (without mod times for reproducibility)
-	m, err := manifest.Generate(root, false)
-	if err != nil {
-		return fmt.Errorf("failed to scan files: %w", err)
-	}
-
-	// Populate stat cache so subsequent status/drift checks are fast.
-	manifest.BuildStatCacheFromManifest(root, m, config.GetStatCachePath(root))
-
-	fmt.Printf("Found %d files (%s)\n", m.FileCount(), formatBytesLong(m.TotalSize()))
-
-	// Compute manifest hash (snapshot ID is generated separately)
-	manifestHash, err := m.Hash()
-	if err != nil {
-		return fmt.Errorf("failed to create snapshot: %w", err)
-	}
-
-	// Check if this exact snapshot already exists in local snapshots dir
-	snapshotsDir, err := config.GetSnapshotsDir()
-	if err != nil {
-		return fmt.Errorf("failed to get snapshots directory: %w", err)
-	}
-
-	manifestsDir, err := config.GetManifestsDir()
-	if err != nil {
-		return fmt.Errorf("failed to get manifests directory: %w", err)
-	}
-
-	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-	manifestExists := false
-	if _, err := os.Stat(manifestPath); err == nil {
-		manifestExists = true
-	}
-
 	agentName := ""
-	// Generate summary if requested
 	if agentMessage {
 		preferredAgent, err := agent.GetPreferredAgent()
 		if err != nil {
 			return err
 		}
 		fmt.Println("Generating message...")
-		summary, err := generateSnapshotSummary(root, cfg, preferredAgent)
+		summary, err := generateSnapshotSummary(ws.Root(), ws.Config(), preferredAgent)
 		if err != nil {
 			return fmt.Errorf("failed to generate message: %w", err)
 		}
@@ -134,106 +94,35 @@ func runSnapshot(message string, agentMessage bool) error {
 		agentName = preferredAgent.Name
 	}
 
-	// Cache blobs (file contents) in project store for rollback support
-	blobDir, err := config.GetBlobsDir()
+	result, err := ws.Snapshot(workspace.SnapshotOpts{
+		Message: message,
+		Agent:   agentName,
+		Author:  author,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to get blob directory: %w", err)
-	}
-
-	blobsCached := 0
-	for _, f := range m.FileEntries() {
-		blobPath := filepath.Join(blobDir, f.Hash)
-		// Skip if blob already cached
-		if _, err := os.Stat(blobPath); err == nil {
-			continue
-		}
-
-		// Read file content and cache it
-		srcPath := filepath.Join(root, f.Path)
-		content, err := os.ReadFile(srcPath)
-		if err != nil {
-			fmt.Printf("Warning: Could not cache %s: %v\n", f.Path, err)
-			continue
-		}
-
-		if err := os.WriteFile(blobPath, content, 0644); err != nil {
-			fmt.Printf("Warning: Could not cache %s: %v\n", f.Path, err)
-			continue
-		}
-		blobsCached++
-	}
-
-	if blobsCached > 0 {
-		fmt.Printf("Cached %d new blobs.\n", blobsCached)
-	}
-
-	// Serialize manifest once (used for local save and cloud upload)
-	manifestJSON, err := m.ToJSON()
-	if err != nil {
-		return fmt.Errorf("failed to save snapshot: %w", err)
-	}
-
-	// Save snapshot locally
-	if !manifestExists {
-		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-			return fmt.Errorf("failed to save snapshot: %w", err)
-		}
-	}
-
-	// Save snapshot metadata
-	parents := resolveSnapshotParents(root, cfg)
-	createdAt := time.Now().UTC().Format(time.RFC3339)
-	snapshotID := config.ComputeSnapshotID(manifestHash, parents, author.Name, author.Email, createdAt)
-
-	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	parentIDsJSON, _ := json.Marshal(parents)
-	metadata := fmt.Sprintf(`{
-  "id": "%s",
-  "workspace_id": "%s",
-  "workspace_name": "%s",
-  "manifest_hash": "%s",
-  "parent_snapshot_ids": %s,
-  "author_name": "%s",
-  "author_email": "%s",
-  "message": "%s",
-  "agent": "%s",
-  "created_at": "%s",
-  "files": %d,
-  "size": %d
-}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
-		escapeJSON(author.Name), escapeJSON(author.Email),
-		escapeJSON(message), escapeJSON(agentName), createdAt, m.FileCount(), m.TotalSize())
-
-	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
-		return fmt.Errorf("failed to save metadata: %w", err)
-	}
-
-	cfg.CurrentSnapshotID = snapshotID
-	if err := config.ClearPendingMergeParentsAt(root); err != nil {
-		fmt.Printf("Warning: Could not clear pending merge parents: %v\n", err)
-	}
-
-	// Save config
-	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("failed to update config: %w", err)
+		return err
 	}
 
 	// Output result
+	fmt.Printf("Found %d files (%s)\n", result.Files, formatBytesLong(result.Size))
+	if result.BlobsCached > 0 {
+		fmt.Printf("Cached %d new blobs.\n", result.BlobsCached)
+	}
 	fmt.Println()
 	fmt.Println("✓ Snapshot created!")
 	fmt.Println()
-	fmt.Printf("  ID:       %s\n", snapshotID)
-	fmt.Printf("  Hash:     %s\n", manifestHash[:16]+"...")
-	fmt.Printf("  Files:    %d\n", m.FileCount())
-	fmt.Printf("  Size:     %s\n", formatBytesLong(m.TotalSize()))
+	fmt.Printf("  ID:       %s\n", result.SnapshotID)
+	fmt.Printf("  Hash:     %s\n", result.ManifestHash[:16]+"...")
+	fmt.Printf("  Files:    %d\n", result.Files)
+	fmt.Printf("  Size:     %s\n", formatBytesLong(result.Size))
 	if agentName != "" {
 		fmt.Printf("  Agent:    %s\n", agentName)
 	}
 	if message != "" {
 		fmt.Printf("  Message:  %s\n", message)
 	}
-	if cfg.BaseSnapshotID != "" {
-		fmt.Printf("  Base:     %s\n", cfg.BaseSnapshotID)
+	if ws.BaseSnapshotID() != "" {
+		fmt.Printf("  Base:     %s\n", ws.BaseSnapshotID())
 	}
 	fmt.Println("  (local only - not synced to cloud)")
 
@@ -318,131 +207,16 @@ func (m snapshotMessageModel) View() string {
 	return b.String()
 }
 
-// CreateAutoSnapshot creates a snapshot silently (for use before merge/destructive operations)
-// Returns the snapshot ID or empty string if snapshot already exists (no changes)
+// CreateAutoSnapshot creates a snapshot silently (for use before merge/destructive operations).
+// Returns the snapshot ID or empty string if no changes since the current snapshot.
 func CreateAutoSnapshot(message string) (string, error) {
-	cfg, err := config.Load()
+	ws, err := workspace.Open()
 	if err != nil {
 		return "", fmt.Errorf("not in a workspace directory")
 	}
+	defer ws.Close()
 
-	root, err := config.FindProjectRoot()
-	if err != nil {
-		return "", fmt.Errorf("failed to find project root: %w", err)
-	}
-
-	// Generate manifest
-	m, err := manifest.Generate(root, false)
-	if err != nil {
-		return "", fmt.Errorf("failed to scan files: %w", err)
-	}
-
-	// Populate stat cache so subsequent status/drift checks are fast.
-	manifest.BuildStatCacheFromManifest(root, m, config.GetStatCachePath(root))
-
-	// Compute manifest hash
-	manifestHash, err := m.Hash()
-	if err != nil {
-		return "", fmt.Errorf("failed to create snapshot: %w", err)
-	}
-
-	// Skip if no changes since current snapshot
-	if cfg.CurrentSnapshotID != "" {
-		if currentHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.CurrentSnapshotID); err == nil && currentHash == manifestHash {
-			return "", nil
-		}
-	}
-
-	// Resolve author (non-interactive, use empty if not configured)
-	author, _ := config.LoadAuthor()
-	if author == nil {
-		author = &config.Author{}
-	}
-
-	// Check if snapshot already exists
-	snapshotsDir, err := config.GetSnapshotsDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get snapshots directory: %w", err)
-	}
-
-	manifestsDir, err := config.GetManifestsDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get manifests directory: %w", err)
-	}
-	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-	manifestExists := false
-	if _, err := os.Stat(manifestPath); err == nil {
-		manifestExists = true
-	}
-
-	// Cache blobs
-	blobDir, err := config.GetBlobsDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get blob directory: %w", err)
-	}
-
-	for _, f := range m.FileEntries() {
-		blobPath := filepath.Join(blobDir, f.Hash)
-		if _, err := os.Stat(blobPath); err == nil {
-			continue
-		}
-
-		srcPath := filepath.Join(root, f.Path)
-		content, err := os.ReadFile(srcPath)
-		if err != nil {
-			continue
-		}
-
-		os.WriteFile(blobPath, content, 0644)
-	}
-
-	// Save manifest
-	manifestJSON, err := m.ToJSON()
-	if err != nil {
-		return "", fmt.Errorf("failed to serialize snapshot: %w", err)
-	}
-
-	if !manifestExists {
-		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-			return "", fmt.Errorf("failed to save snapshot: %w", err)
-		}
-	}
-
-	// Save metadata
-	parentSnapshotID := cfg.CurrentSnapshotID
-	parentIDs := []string{}
-	if parentSnapshotID != "" {
-		parentIDs = append(parentIDs, parentSnapshotID)
-	}
-	createdAt := time.Now().UTC().Format(time.RFC3339)
-	snapshotID := config.ComputeSnapshotID(manifestHash, parentIDs, author.Name, author.Email, createdAt)
-
-	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	parentIDsJSON, _ := json.Marshal(parentIDs)
-	metadata := fmt.Sprintf(`{
-  "id": "%s",
-  "workspace_id": "%s",
-  "workspace_name": "%s",
-  "manifest_hash": "%s",
-  "parent_snapshot_ids": %s,
-  "author_name": "%s",
-  "author_email": "%s",
-  "message": "%s",
-  "agent": "",
-  "created_at": "%s",
-  "files": %d,
-  "size": %d
-}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
-		escapeJSON(author.Name), escapeJSON(author.Email),
-		escapeJSON(message), createdAt, m.FileCount(), m.TotalSize())
-
-	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
-		return "", fmt.Errorf("failed to save metadata: %w", err)
-	}
-
-	// Config doesn't need updating - last snapshot is derived from snapshots dir
-
-	return snapshotID, nil
+	return ws.AutoSnapshot(message)
 }
 
 // generateSnapshotSummary uses the coding agent to describe changes
@@ -577,34 +351,6 @@ func escapeJSON(s string) string {
 	return result
 }
 
-func resolveSnapshotParents(root string, cfg *config.ProjectConfig) []string {
-	if cfg == nil {
-		return nil
-	}
-	if parents, err := config.ReadPendingMergeParentsAt(root); err == nil && len(parents) > 0 {
-		return normalizeParentList(parents)
-	}
-	if cfg.CurrentSnapshotID != "" {
-		return []string{cfg.CurrentSnapshotID}
-	}
-	return nil
-}
-
-func normalizeParentList(parents []string) []string {
-	seen := make(map[string]struct{}, len(parents))
-	out := make([]string, 0, len(parents))
-	for _, p := range parents {
-		if p == "" {
-			continue
-		}
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		out = append(out, p)
-	}
-	return out
-}
 
 func formatBytesLong(bytes int64) string {
 	if bytes == 0 {
