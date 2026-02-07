@@ -66,9 +66,10 @@ func printWorkspaceInfo(cfg *config.ProjectConfig, jsonOutput bool) error {
 	parentRoot, parentCfg, _ := config.FindParentRootFrom(root)
 	mainID, mainName := lookupMainWorkspace(cfg.ProjectID)
 	isMain := mainID != "" && mainID == cfg.WorkspaceID
+	snapshotsDir := config.GetSnapshotsDirAt(root)
 	baseTime := ""
 	if cfg.BaseSnapshotID != "" {
-		metaPath := filepath.Join(root, ".fst", config.SnapshotsDirName, cfg.BaseSnapshotID+".meta.json")
+		metaPath := filepath.Join(snapshotsDir, cfg.BaseSnapshotID+".meta.json")
 		if info, err := os.Stat(metaPath); err == nil {
 			baseTime = info.ModTime().UTC().Format(time.RFC3339)
 		}
@@ -76,7 +77,7 @@ func printWorkspaceInfo(cfg *config.ProjectConfig, jsonOutput bool) error {
 
 	currentTime := ""
 	if cfg.CurrentSnapshotID != "" {
-		metaPath := filepath.Join(root, ".fst", config.SnapshotsDirName, cfg.CurrentSnapshotID+".meta.json")
+		metaPath := filepath.Join(snapshotsDir, cfg.CurrentSnapshotID+".meta.json")
 		if info, err := os.Stat(metaPath); err == nil {
 			currentTime = info.ModTime().UTC().Format(time.RFC3339)
 		}

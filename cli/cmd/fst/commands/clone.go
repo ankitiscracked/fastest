@@ -278,12 +278,12 @@ func materializeSnapshot(client *api.Client, root string, m *manifest.Manifest) 
 }
 
 func writeSnapshotFiles(root string, snapshot *api.Snapshot, manifestJSON []byte, m *manifest.Manifest, workspaceName string) error {
-	snapshotsDir := filepath.Join(root, config.ConfigDirName, config.SnapshotsDirName)
+	snapshotsDir := config.GetSnapshotsDirAt(root)
 	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
 		return err
 	}
 
-	manifestsDir := filepath.Join(root, config.ConfigDirName, config.ManifestsDirName)
+	manifestsDir := config.GetManifestsDirAt(root)
 	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
 		return err
 	}

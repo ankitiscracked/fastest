@@ -187,7 +187,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 	}
 
 	// Build snapshot chain (walk back through parents)
-	chain, err := buildSnapshotDAG(configDir, cfg.CurrentSnapshotID)
+	chain, err := buildSnapshotDAG(root, cfg.CurrentSnapshotID)
 	if err != nil {
 		return fmt.Errorf("failed to build snapshot chain: %w", err)
 	}
@@ -224,7 +224,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		if err != nil {
 			return fmt.Errorf("invalid snapshot id %s: %w", snap.ID, err)
 		}
-		manifestPath := filepath.Join(configDir, config.ManifestsDirName, manifestHash+".json")
+		manifestPath := filepath.Join(config.GetManifestsDirAt(root), manifestHash+".json")
 		manifestData, err := os.ReadFile(manifestPath)
 		if err != nil {
 			return fmt.Errorf("failed to load snapshot %s: %w", snap.ID, err)
@@ -351,7 +351,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		if err == nil {
 			baseManifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.BaseSnapshotID)
 			if err == nil {
-				baseManifestPath := filepath.Join(configDir, config.ManifestsDirName, baseManifestHash+".json")
+				baseManifestPath := filepath.Join(config.GetManifestsDirAt(root), baseManifestHash+".json")
 				if baseData, err := os.ReadFile(baseManifestPath); err == nil {
 					if baseManifest, err := manifest.FromJSON(baseData); err == nil {
 						added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
@@ -378,13 +378,14 @@ type SnapshotInfo struct {
 }
 
 // buildSnapshotDAG walks all reachable parents and returns snapshots in parent-before-child order.
-func buildSnapshotDAG(configDir, startID string) ([]SnapshotInfo, error) {
+func buildSnapshotDAG(root, startID string) ([]SnapshotInfo, error) {
 	if startID == "" {
 		return nil, fmt.Errorf("empty snapshot id")
 	}
 
+	snapshotsDir := config.GetSnapshotsDirAt(root)
 	loadMeta := func(snapshotID string) (*SnapshotInfo, error) {
-		metaPath := filepath.Join(configDir, config.SnapshotsDirName, snapshotID+".meta.json")
+		metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 		data, err := os.ReadFile(metaPath)
 		if err != nil {
 			return nil, err

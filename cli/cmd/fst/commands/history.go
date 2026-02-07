@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -153,12 +154,6 @@ func runDrop(snapshotID string) error {
 		return fmt.Errorf("cannot drop merge snapshot %s", resolved)
 	}
 
-	children := buildSnapshotChildren(metas)
-	kids := children[resolved]
-	if len(kids) > 1 {
-		return fmt.Errorf("cannot drop snapshot %s (has multiple children)", resolved)
-	}
-
 	parent := ""
 	if len(meta.ParentSnapshotIDs) == 1 {
 		parent = meta.ParentSnapshotIDs[0]
@@ -167,33 +162,38 @@ func runDrop(snapshotID string) error {
 		return fmt.Errorf("cannot drop root snapshot %s", resolved)
 	}
 
-	child := ""
-	if len(kids) == 1 {
-		child = kids[0]
-		if childMeta := metas[child]; childMeta != nil && len(childMeta.ParentSnapshotIDs) > 1 {
-			return fmt.Errorf("cannot drop snapshot %s (child %s is a merge snapshot)", resolved, child)
-		}
+	// Build workspace chain from base to HEAD
+	wsChain, err := buildWorkspaceChain(metas, cfg.CurrentSnapshotID, cfg.BaseSnapshotID)
+	if err != nil {
+		return fmt.Errorf("failed to build workspace history: %w", err)
 	}
 
-	if child != "" {
-		if err := updateSnapshotParents(root, child, []string{parent}); err != nil {
-			return err
+	dropIdx := -1
+	for i, id := range wsChain {
+		if id == resolved {
+			dropIdx = i
+			break
 		}
 	}
-
-	if err := os.Remove(snapshotMetaPath(root, resolved)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove snapshot metadata: %w", err)
+	if dropIdx == -1 {
+		return fmt.Errorf("snapshot %s is not in this workspace's history", resolved)
 	}
 
-	if cfg.CurrentSnapshotID == resolved {
-		if child != "" {
-			cfg.CurrentSnapshotID = child
-		} else {
-			cfg.CurrentSnapshotID = parent
+	if dropIdx == len(wsChain)-1 {
+		// Dropping HEAD - just move HEAD to parent
+		cfg.CurrentSnapshotID = parent
+	} else {
+		// Rewrite chain from the snapshot after the dropped one to HEAD
+		continuationChain := wsChain[dropIdx+1:]
+		idMap, err := rewriteChainFrom(root, continuationChain, parent, nil)
+		if err != nil {
+			return fmt.Errorf("failed to rewrite chain: %w", err)
 		}
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to update config: %w", err)
-		}
+		cfg.CurrentSnapshotID = idMap[wsChain[len(wsChain)-1]]
+	}
+
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("failed to update config: %w", err)
 	}
 
 	fmt.Printf("✓ Dropped snapshot %s\n", resolved)
@@ -226,51 +226,70 @@ func runSquash(fromArg, toArg, message string) error {
 	if err != nil {
 		return err
 	}
-	children := buildSnapshotChildren(metas)
-	chain, err := buildLinearChain(metas, children, from, to)
+
+	// Build workspace chain and find positions
+	wsChain, err := buildWorkspaceChain(metas, cfg.CurrentSnapshotID, cfg.BaseSnapshotID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to build workspace history: %w", err)
 	}
 
-	parent := ""
-	if meta := metas[from]; meta != nil && len(meta.ParentSnapshotIDs) == 1 {
-		parent = meta.ParentSnapshotIDs[0]
-	}
-
-	if err := updateSnapshotParents(root, to, normalizeParents([]string{parent})); err != nil {
-		return err
-	}
-	if strings.TrimSpace(message) != "" {
-		if err := updateSnapshotMessage(root, to, message); err != nil {
-			return err
+	fromIdx, toIdx := -1, -1
+	for i, id := range wsChain {
+		if id == from {
+			fromIdx = i
 		}
-	}
-
-	for _, id := range chain {
 		if id == to {
-			continue
+			toIdx = i
 		}
-		if err := os.Remove(snapshotMetaPath(root, id)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove snapshot %s: %w", id, err)
+	}
+	if fromIdx == -1 {
+		return fmt.Errorf("snapshot %s not in workspace history", from)
+	}
+	if toIdx == -1 {
+		return fmt.Errorf("snapshot %s not in workspace history", to)
+	}
+	if fromIdx >= toIdx {
+		return fmt.Errorf("from must come before to in history")
+	}
+
+	// Validate the range is linear (no merge snapshots)
+	for i := fromIdx; i <= toIdx; i++ {
+		m := metas[wsChain[i]]
+		if m != nil && len(m.ParentSnapshotIDs) > 1 {
+			return fmt.Errorf("snapshot %s is a merge snapshot", wsChain[i])
 		}
 	}
 
-	changedConfig := false
+	// Find from's parent (the new parent for the squashed result)
+	fromMeta := metas[from]
+	squashParent := ""
+	if fromMeta != nil && len(fromMeta.ParentSnapshotIDs) == 1 {
+		squashParent = fromMeta.ParentSnapshotIDs[0]
+	}
+
+	// Build rewrite chain: [to, ..., HEAD]
+	// The `to` snapshot gets squashParent as its parent, collapsing from..to into one
+	rewriteChain := wsChain[toIdx:]
+	messageOverrides := map[string]string{}
+	if strings.TrimSpace(message) != "" {
+		messageOverrides[to] = message
+	}
+
+	idMap, err := rewriteChainFrom(root, rewriteChain, squashParent, messageOverrides)
+	if err != nil {
+		return fmt.Errorf("failed to rewrite chain: %w", err)
+	}
+
+	cfg.CurrentSnapshotID = idMap[wsChain[len(wsChain)-1]]
 	if cfg.BaseSnapshotID == from {
-		cfg.BaseSnapshotID = to
-		changedConfig = true
+		cfg.BaseSnapshotID = idMap[to]
 	}
-	if snapshotInChain(chain, cfg.CurrentSnapshotID) && cfg.CurrentSnapshotID != to {
-		cfg.CurrentSnapshotID = to
-		changedConfig = true
-	}
-	if changedConfig {
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to update config: %w", err)
-		}
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("failed to update config: %w", err)
 	}
 
-	fmt.Printf("✓ Squashed %d snapshots into %s\n", len(chain), to)
+	squashCount := toIdx - fromIdx + 1
+	fmt.Printf("✓ Squashed %d snapshots into %s\n", squashCount, idMap[to])
 	return nil
 }
 
@@ -307,26 +326,52 @@ func runRebase(fromArg, toArg, ontoArg string) error {
 	if err != nil {
 		return err
 	}
-	children := buildSnapshotChildren(metas)
-	chain, err := buildLinearChain(metas, children, from, to)
+
+	// Build workspace chain and find positions
+	wsChain, err := buildWorkspaceChain(metas, cfg.CurrentSnapshotID, cfg.BaseSnapshotID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to build workspace history: %w", err)
 	}
 
-	if snapshotInChain(chain, onto) {
+	fromIdx, toIdx := -1, -1
+	for i, id := range wsChain {
+		if id == from {
+			fromIdx = i
+		}
+		if id == to {
+			toIdx = i
+		}
+	}
+	if fromIdx == -1 {
+		return fmt.Errorf("snapshot %s not in workspace history", from)
+	}
+	if toIdx == -1 {
+		return fmt.Errorf("snapshot %s not in workspace history", to)
+	}
+	if fromIdx >= toIdx {
+		return fmt.Errorf("from must come before to in history")
+	}
+
+	// Validate range doesn't contain onto
+	rangeChain := wsChain[fromIdx : toIdx+1]
+	if snapshotInChain(rangeChain, onto) {
 		return fmt.Errorf("cannot rebase onto a snapshot within the range")
 	}
-	if isDescendantOf(metas, onto, chain) {
+	if isDescendantOf(metas, onto, rangeChain) {
 		return fmt.Errorf("cannot rebase onto a descendant of the range")
 	}
 
-	prevParents := []string{}
-	if meta := metas[from]; meta != nil {
-		prevParents = meta.ParentSnapshotIDs
+	if metas[onto] == nil {
+		return fmt.Errorf("snapshot not found: %s", onto)
+	}
+
+	fromMeta := metas[from]
+	if fromMeta == nil {
+		return fmt.Errorf("snapshot not found: %s", from)
 	}
 	prevParent := ""
-	if len(prevParents) > 0 {
-		prevParent = prevParents[0]
+	if len(fromMeta.ParentSnapshotIDs) > 0 {
+		prevParent = fromMeta.ParentSnapshotIDs[0]
 	}
 	if prevParent == "" {
 		return fmt.Errorf("cannot rebase root snapshot %s", from)
@@ -335,18 +380,22 @@ func runRebase(fromArg, toArg, ontoArg string) error {
 		return fmt.Errorf("cannot rebase onto %s; it is not an ancestor of %s", onto, from)
 	}
 
-	if err := updateSnapshotParents(root, from, []string{onto}); err != nil {
-		return err
+	// Build rewrite chain: [from, ..., HEAD] with from's parent replaced by onto
+	rewriteChain := wsChain[fromIdx:]
+	idMap, err := rewriteChainFrom(root, rewriteChain, onto, nil)
+	if err != nil {
+		return fmt.Errorf("failed to rewrite chain: %w", err)
 	}
 
+	cfg.CurrentSnapshotID = idMap[wsChain[len(wsChain)-1]]
 	if prevParent == cfg.BaseSnapshotID {
 		cfg.BaseSnapshotID = onto
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to update config: %w", err)
-		}
+	}
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("failed to update config: %w", err)
 	}
 
-	fmt.Printf("✓ Rebased %d snapshots onto %s\n", len(chain), onto)
+	fmt.Printf("✓ Rebased %d snapshots onto %s\n", len(rangeChain), onto)
 	return nil
 }
 
@@ -378,7 +427,7 @@ func resolveSnapshotIDArg(root, snapshotID string) (string, error) {
 }
 
 func snapshotMetaPath(root, snapshotID string) string {
-	return filepath.Join(root, config.ConfigDirName, config.SnapshotsDirName, snapshotID+".meta.json")
+	return filepath.Join(config.GetSnapshotsDirAt(root), snapshotID+".meta.json")
 }
 
 func loadSnapshotMetaMap(path string) (map[string]any, error) {
@@ -401,30 +450,82 @@ func writeSnapshotMetaMap(path string, meta map[string]any) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-func updateSnapshotParents(root, snapshotID string, parents []string) error {
-	metaPath := snapshotMetaPath(root, snapshotID)
-	meta, err := loadSnapshotMetaMap(metaPath)
-	if err != nil {
-		return err
+// buildWorkspaceChain walks from headID backward following first parents until
+// it reaches stopID (inclusive). Returns the chain in forward order: [stopID, ..., headID].
+func buildWorkspaceChain(metas map[string]*historySnapshotMeta, headID, stopID string) ([]string, error) {
+	var chain []string
+	current := headID
+	seen := make(map[string]struct{})
+	for {
+		if _, ok := seen[current]; ok {
+			return nil, fmt.Errorf("cycle detected in snapshot history")
+		}
+		seen[current] = struct{}{}
+		chain = append(chain, current)
+		if current == stopID {
+			break
+		}
+		meta := metas[current]
+		if meta == nil {
+			break
+		}
+		if len(meta.ParentSnapshotIDs) == 0 {
+			break
+		}
+		current = meta.ParentSnapshotIDs[0]
 	}
-	meta["parent_snapshot_ids"] = normalizeParents(parents)
-	if err := writeSnapshotMetaMap(metaPath, meta); err != nil {
-		return fmt.Errorf("failed to update snapshot %s: %w", snapshotID, err)
+	// Reverse to get forward order
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
 	}
-	return nil
+	return chain, nil
 }
 
-func updateSnapshotMessage(root, snapshotID, message string) error {
-	metaPath := snapshotMetaPath(root, snapshotID)
-	meta, err := loadSnapshotMetaMap(metaPath)
-	if err != nil {
-		return err
+// rewriteChainFrom creates new snapshot copies for each ID in chain with rewritten parents.
+// The first snapshot gets newFirstParent as its parent. Each subsequent snapshot's parent
+// is the previous new snapshot. messageOverrides can optionally change the message for
+// specific original IDs. Returns a map from original ID to new ID.
+func rewriteChainFrom(root string, chain []string, newFirstParent string, messageOverrides map[string]string) (map[string]string, error) {
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("empty chain")
 	}
-	meta["message"] = message
-	if err := writeSnapshotMetaMap(metaPath, meta); err != nil {
-		return fmt.Errorf("failed to update snapshot %s: %w", snapshotID, err)
+
+	snapshotsDir := config.GetSnapshotsDirAt(root)
+	prevNewID := newFirstParent
+	idMap := make(map[string]string, len(chain))
+
+	for _, origID := range chain {
+		metaPath := filepath.Join(snapshotsDir, origID+".meta.json")
+		meta, err := loadSnapshotMetaMap(metaPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read snapshot %s: %w", origID, err)
+		}
+
+		newID := generateSnapshotID()
+		meta["id"] = newID
+		if prevNewID != "" {
+			meta["parent_snapshot_ids"] = []string{prevNewID}
+		} else {
+			meta["parent_snapshot_ids"] = []string{}
+		}
+		meta["created_at"] = time.Now().UTC().Format(time.RFC3339)
+
+		if messageOverrides != nil {
+			if msg, ok := messageOverrides[origID]; ok {
+				meta["message"] = msg
+			}
+		}
+
+		newMetaPath := filepath.Join(snapshotsDir, newID+".meta.json")
+		if err := writeSnapshotMetaMap(newMetaPath, meta); err != nil {
+			return nil, fmt.Errorf("failed to write new snapshot %s: %w", newID, err)
+		}
+
+		idMap[origID] = newID
+		prevNewID = newID
 	}
-	return nil
+
+	return idMap, nil
 }
 
 func normalizeParents(parents []string) []string {
@@ -444,7 +545,7 @@ func normalizeParents(parents []string) []string {
 }
 
 func loadHistorySnapshots(root string) (map[string]*historySnapshotMeta, error) {
-	snapshotsDir := filepath.Join(root, config.ConfigDirName, config.SnapshotsDirName)
+	snapshotsDir := config.GetSnapshotsDirAt(root)
 	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -479,72 +580,6 @@ func loadHistorySnapshots(root string) (map[string]*historySnapshotMeta, error) 
 	}
 
 	return metas, nil
-}
-
-func buildSnapshotChildren(metas map[string]*historySnapshotMeta) map[string][]string {
-	children := make(map[string][]string, len(metas))
-	for id, meta := range metas {
-		if meta == nil {
-			continue
-		}
-		for _, parent := range meta.ParentSnapshotIDs {
-			children[parent] = append(children[parent], id)
-		}
-		if _, ok := children[id]; !ok {
-			children[id] = nil
-		}
-	}
-	return children
-}
-
-func buildLinearChain(metas map[string]*historySnapshotMeta, children map[string][]string, from, to string) ([]string, error) {
-	chain := []string{to}
-	current := to
-	for current != from {
-		meta := metas[current]
-		if meta == nil {
-			return nil, fmt.Errorf("snapshot not found: %s", current)
-		}
-		if len(meta.ParentSnapshotIDs) != 1 {
-			return nil, fmt.Errorf("snapshot %s is not linear", current)
-		}
-		parent := meta.ParentSnapshotIDs[0]
-		if parent == "" {
-			return nil, fmt.Errorf("snapshot %s has no parent", current)
-		}
-		chain = append(chain, parent)
-		current = parent
-	}
-
-	// reverse chain to from -> to
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
-		chain[i], chain[j] = chain[j], chain[i]
-	}
-
-	for i, id := range chain {
-		meta := metas[id]
-		if meta == nil {
-			return nil, fmt.Errorf("snapshot not found: %s", id)
-		}
-		if len(meta.ParentSnapshotIDs) > 1 {
-			return nil, fmt.Errorf("snapshot %s is a merge snapshot", id)
-		}
-		kids := children[id]
-		if i < len(chain)-1 {
-			if len(kids) != 1 || kids[0] != chain[i+1] {
-				return nil, fmt.Errorf("snapshot %s is not linear", id)
-			}
-		} else if len(kids) > 1 {
-			return nil, fmt.Errorf("snapshot %s has multiple children", id)
-		} else if len(kids) == 1 {
-			childMeta := metas[kids[0]]
-			if childMeta != nil && len(childMeta.ParentSnapshotIDs) > 1 {
-				return nil, fmt.Errorf("snapshot %s has a merge child %s", id, kids[0])
-			}
-		}
-	}
-
-	return chain, nil
 }
 
 func snapshotInChain(chain []string, id string) bool {

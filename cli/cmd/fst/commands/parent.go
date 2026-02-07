@@ -147,6 +147,16 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 
 	workspaceRoot = filepath.Join(parentPath, workspaceName)
 
+	// Save parent config FIRST so InitAt/snapshot creation uses shared store
+	parentCfg := &config.ParentConfig{
+		ProjectID:   projectID,
+		ProjectName: projectName,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := config.SaveParentConfigAt(parentPath, parentCfg); err != nil {
+		return err
+	}
+
 	var workspaceID string
 	var baseSnapshotID string
 	if workspaceCfg == nil {
@@ -166,6 +176,10 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		}
 		workspaceID = workspaceCfg.WorkspaceID
 		baseSnapshotID = workspaceCfg.BaseSnapshotID
+		// Migrate existing workspace snapshots to shared store
+		if err := config.MigrateToSharedStore(workspaceRoot); err != nil {
+			fmt.Printf("Warning: Could not migrate snapshots to shared store: %v\n", err)
+		}
 	}
 
 	if err := UpdateWorkspaceRegistry(originalWorkspaceRoot, RegisteredWorkspace{
@@ -179,13 +193,9 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		fmt.Printf("Warning: Could not update workspace registry: %v\n", err)
 	}
 
-	parentCfg := &config.ParentConfig{
-		ProjectID:       projectID,
-		ProjectName:     projectName,
-		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
-		BaseSnapshotID:  baseSnapshotID,
-		BaseWorkspaceID: workspaceID,
-	}
+	// Update parent config with base snapshot and workspace IDs
+	parentCfg.BaseSnapshotID = baseSnapshotID
+	parentCfg.BaseWorkspaceID = workspaceID
 	if err := config.SaveParentConfigAt(parentPath, parentCfg); err != nil {
 		return err
 	}
@@ -246,6 +256,16 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 		return fmt.Errorf("failed to create workspace directory: %w", err)
 	}
 
+	// Save parent config FIRST so InitAt can find parent and use shared store
+	parentCfg := &config.ParentConfig{
+		ProjectID:   projectID,
+		ProjectName: projectName,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := config.SaveParentConfigAt(projectPath, parentCfg); err != nil {
+		return err
+	}
+
 	if err := config.InitAt(workspacePath, projectID, workspaceID, workspaceName, ""); err != nil {
 		return fmt.Errorf("failed to initialize workspace: %w", err)
 	}
@@ -267,15 +287,6 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)
-	}
-
-	parentCfg := &config.ParentConfig{
-		ProjectID:   projectID,
-		ProjectName: projectName,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-	}
-	if err := config.SaveParentConfigAt(projectPath, parentCfg); err != nil {
-		return err
 	}
 
 	_ = index.UpsertProject(index.ProjectEntry{

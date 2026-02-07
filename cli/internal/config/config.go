@@ -70,39 +70,63 @@ func GetGlobalConfigDir() (string, error) {
 	return configDir, nil
 }
 
-// GetSnapshotsDir returns the local snapshots directory for the current workspace
+// GetSnapshotsDir returns the snapshots directory for the current workspace.
+// If the workspace is under a project (fst.json), returns the shared project-level directory.
 func GetSnapshotsDir() (string, error) {
 	root, err := FindProjectRoot()
 	if err != nil {
 		return "", err
 	}
-	snapshotsDir := filepath.Join(root, ConfigDirName, SnapshotsDirName)
+	snapshotsDir := GetSnapshotsDirAt(root)
 	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
 		return "", fmt.Errorf("could not create snapshots directory: %w", err)
 	}
 	return snapshotsDir, nil
 }
 
-// GetManifestsDir returns the local manifests directory for the current workspace
+// GetManifestsDir returns the manifests directory for the current workspace.
+// If the workspace is under a project (fst.json), returns the shared project-level directory.
 func GetManifestsDir() (string, error) {
 	root, err := FindProjectRoot()
 	if err != nil {
 		return "", err
 	}
-	manifestsDir := filepath.Join(root, ConfigDirName, ManifestsDirName)
+	manifestsDir := GetManifestsDirAt(root)
 	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
 		return "", fmt.Errorf("could not create manifests directory: %w", err)
 	}
 	return manifestsDir, nil
 }
 
-// GetSnapshotsDirAt returns the snapshots directory for a specific workspace root
+// GetSnapshotsDirAt returns the snapshots directory for a specific workspace root.
+// If the workspace is under a project (fst.json), returns the shared project-level directory.
+// For standalone workspaces, returns the workspace-local directory.
 func GetSnapshotsDirAt(root string) string {
+	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+		return filepath.Join(projectRoot, ConfigDirName, SnapshotsDirName)
+	}
 	return filepath.Join(root, ConfigDirName, SnapshotsDirName)
 }
 
-// GetManifestsDirAt returns the manifests directory for a specific workspace root
+// GetManifestsDirAt returns the manifests directory for a specific workspace root.
+// If the workspace is under a project (fst.json), returns the shared project-level directory.
+// For standalone workspaces, returns the workspace-local directory.
 func GetManifestsDirAt(root string) string {
+	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+		return filepath.Join(projectRoot, ConfigDirName, ManifestsDirName)
+	}
+	return filepath.Join(root, ConfigDirName, ManifestsDirName)
+}
+
+// GetWorkspaceLocalSnapshotsDirAt returns the workspace-local snapshots directory,
+// bypassing the project-level shared store. Used for migration.
+func GetWorkspaceLocalSnapshotsDirAt(root string) string {
+	return filepath.Join(root, ConfigDirName, SnapshotsDirName)
+}
+
+// GetWorkspaceLocalManifestsDirAt returns the workspace-local manifests directory,
+// bypassing the project-level shared store. Used for migration.
+func GetWorkspaceLocalManifestsDirAt(root string) string {
 	return filepath.Join(root, ConfigDirName, ManifestsDirName)
 }
 
@@ -193,6 +217,7 @@ func ResolveSnapshotIDAt(root, snapshotID string) (string, error) {
 // SnapshotMeta represents snapshot metadata
 type SnapshotMeta struct {
 	ID           string `json:"id"`
+	WorkspaceID  string `json:"workspace_id"`
 	CreatedAt    string `json:"created_at"`
 	ManifestHash string `json:"manifest_hash"`
 }
@@ -237,6 +262,54 @@ func GetLatestSnapshotIDAt(root string) (string, error) {
 			}
 
 			// Compare timestamps (RFC3339 format sorts lexicographically)
+			if meta.CreatedAt > latestTime {
+				latestTime = meta.CreatedAt
+				latestID = meta.ID
+			}
+		}
+	}
+
+	return latestID, nil
+}
+
+// GetLatestSnapshotIDForWorkspaceAt returns the most recent snapshot ID for a specific
+// workspace, filtering by workspace_id. This is needed when using a shared project-level
+// snapshot store where multiple workspaces' snapshots coexist.
+func GetLatestSnapshotIDForWorkspaceAt(root string, workspaceID string) (string, error) {
+	if workspaceID == "" {
+		return GetLatestSnapshotIDAt(root)
+	}
+
+	snapshotsDir := GetSnapshotsDirAt(root)
+	entries, err := os.ReadDir(snapshotsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	var latestID string
+	var latestTime string
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && len(name) > 10 && name[len(name)-10:] == ".meta.json" {
+			metaPath := filepath.Join(snapshotsDir, name)
+			data, err := os.ReadFile(metaPath)
+			if err != nil {
+				continue
+			}
+
+			var meta SnapshotMeta
+			if err := json.Unmarshal(data, &meta); err != nil {
+				continue
+			}
+
+			if meta.WorkspaceID != workspaceID {
+				continue
+			}
+
 			if meta.CreatedAt > latestTime {
 				latestTime = meta.CreatedAt
 				latestID = meta.ID
@@ -318,10 +391,8 @@ func Load() (*ProjectConfig, error) {
 
 	normalizeConfig(&config)
 	if config.CurrentSnapshotID == "" {
-		if root, err := FindProjectRoot(); err == nil {
-			if latest, err := GetLatestSnapshotIDAt(root); err == nil && latest != "" {
-				config.CurrentSnapshotID = latest
-			}
+		if latest, err := GetLatestSnapshotIDForWorkspaceAt(root, config.WorkspaceID); err == nil && latest != "" {
+			config.CurrentSnapshotID = latest
 		}
 	}
 
@@ -355,7 +426,7 @@ func LoadAt(root string) (*ProjectConfig, error) {
 
 	normalizeConfig(&config)
 	if config.CurrentSnapshotID == "" {
-		if latest, err := GetLatestSnapshotIDAt(root); err == nil && latest != "" {
+		if latest, err := GetLatestSnapshotIDForWorkspaceAt(root, config.WorkspaceID); err == nil && latest != "" {
 			config.CurrentSnapshotID = latest
 		}
 	}
@@ -441,16 +512,33 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	// Create snapshots directory
-	snapshotsDir := filepath.Join(configDir, SnapshotsDirName)
-	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create snapshots directory: %w", err)
-	}
+	// If under a project, ensure the shared store exists at the project level
+	// and skip creating workspace-local snapshot/manifest dirs.
+	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+		sharedConfigDir := filepath.Join(projectRoot, ConfigDirName)
+		if err := os.MkdirAll(filepath.Join(sharedConfigDir, SnapshotsDirName), 0755); err != nil {
+			return fmt.Errorf("failed to create shared snapshots directory: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Join(sharedConfigDir, ManifestsDirName), 0755); err != nil {
+			return fmt.Errorf("failed to create shared manifests directory: %w", err)
+		}
+		// Write .gitignore for the project-level .fst/ if not already present
+		gitignorePath := filepath.Join(sharedConfigDir, ".gitignore")
+		if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
+			gitignore := "# Fastest shared data\nsnapshots/\nmanifests/\n*.log\n"
+			_ = os.WriteFile(gitignorePath, []byte(gitignore), 0644)
+		}
+	} else {
+		// Standalone workspace: create local snapshots and manifests dirs
+		snapshotsDir := filepath.Join(configDir, SnapshotsDirName)
+		if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create snapshots directory: %w", err)
+		}
 
-	// Create manifests directory
-	manifestsDir := filepath.Join(configDir, ManifestsDirName)
-	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create manifests directory: %w", err)
+		manifestsDir := filepath.Join(configDir, ManifestsDirName)
+		if err := os.MkdirAll(manifestsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create manifests directory: %w", err)
+		}
 	}
 
 	config := &ProjectConfig{
@@ -528,4 +616,58 @@ func GetMachineID() string {
 		hostname = "unknown"
 	}
 	return hostname
+}
+
+// MigrateToSharedStore moves snapshot metadata and manifests from a workspace-local
+// .fst/ directory to the project-level shared store. Files that already exist in
+// the shared store are skipped (content-addressed manifests naturally deduplicate).
+func MigrateToSharedStore(workspaceRoot string) error {
+	projectRoot, _, err := FindParentRootFrom(workspaceRoot)
+	if err != nil {
+		return err
+	}
+
+	localSnaps := GetWorkspaceLocalSnapshotsDirAt(workspaceRoot)
+	sharedSnaps := filepath.Join(projectRoot, ConfigDirName, SnapshotsDirName)
+	localManifests := GetWorkspaceLocalManifestsDirAt(workspaceRoot)
+	sharedManifests := filepath.Join(projectRoot, ConfigDirName, ManifestsDirName)
+
+	if err := os.MkdirAll(sharedSnaps, 0755); err != nil {
+		return fmt.Errorf("failed to create shared snapshots directory: %w", err)
+	}
+	if err := os.MkdirAll(sharedManifests, 0755); err != nil {
+		return fmt.Errorf("failed to create shared manifests directory: %w", err)
+	}
+
+	migrateFiles(localSnaps, sharedSnaps)
+	migrateFiles(localManifests, sharedManifests)
+	return nil
+}
+
+// migrateFiles moves files from src to dst directory. Skips if destination already exists.
+func migrateFiles(src, dst string) {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if _, err := os.Stat(dstPath); err == nil {
+			// Already exists in shared store, remove local copy
+			_ = os.Remove(srcPath)
+			continue
+		}
+		if err := os.Rename(srcPath, dstPath); err != nil {
+			// If rename fails (cross-device), fall back to copy+remove
+			if data, readErr := os.ReadFile(srcPath); readErr == nil {
+				if writeErr := os.WriteFile(dstPath, data, 0644); writeErr == nil {
+					_ = os.Remove(srcPath)
+				}
+			}
+		}
+	}
 }

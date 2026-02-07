@@ -17,7 +17,7 @@ func SnapshotParentIDsAt(root, snapshotID string) ([]string, error) {
 		return nil, fmt.Errorf("empty snapshot ID")
 	}
 
-	metaPath := filepath.Join(root, ConfigDirName, SnapshotsDirName, snapshotID+".meta.json")
+	metaPath := filepath.Join(GetSnapshotsDirAt(root), snapshotID+".meta.json")
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		return nil, err

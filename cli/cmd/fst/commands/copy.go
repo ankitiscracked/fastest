@@ -74,7 +74,7 @@ func runCopy(name, targetDir string) error {
 
 	// Determine the base point snapshot
 	// Use the most recent snapshot if available, otherwise base_snapshot_id
-	forkSnapshotID, _ := config.GetLatestSnapshotIDAt(root)
+	forkSnapshotID, _ := config.GetLatestSnapshotIDForWorkspaceAt(root, cfg.WorkspaceID)
 	if forkSnapshotID == "" {
 		forkSnapshotID = cfg.BaseSnapshotID
 	}
@@ -230,30 +230,33 @@ func runCopy(name, targetDir string) error {
 		return fmt.Errorf("failed to initialize workspace: %w", err)
 	}
 
-	// Copy the fork-point snapshot metadata and manifest to the new workspace
+	// Copy the fork-point snapshot metadata and manifest to the new workspace,
+	// but skip if both workspaces share the same store (under the same project)
 	sourceSnapshotsDir := config.GetSnapshotsDirAt(root)
 	targetSnapshotsDir := config.GetSnapshotsDirAt(targetDir)
-	sourceManifestsDir := config.GetManifestsDirAt(root)
-	targetManifestsDir := config.GetManifestsDirAt(targetDir)
-	_ = os.MkdirAll(targetManifestsDir, 0755)
+	if sourceSnapshotsDir != targetSnapshotsDir {
+		sourceManifestsDir := config.GetManifestsDirAt(root)
+		targetManifestsDir := config.GetManifestsDirAt(targetDir)
+		_ = os.MkdirAll(targetManifestsDir, 0755)
 
-	// Copy snapshot manifest
-	if manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, forkSnapshotID); err == nil {
-		snapshotManifestSrc := filepath.Join(sourceManifestsDir, manifestHash+".json")
-		snapshotManifestDst := filepath.Join(targetManifestsDir, manifestHash+".json")
-		if err := copyFile(snapshotManifestSrc, snapshotManifestDst, 0644); err != nil {
-			fmt.Printf("Warning: Could not copy snapshot manifest: %v\n", err)
+		// Copy snapshot manifest
+		if manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, forkSnapshotID); err == nil {
+			snapshotManifestSrc := filepath.Join(sourceManifestsDir, manifestHash+".json")
+			snapshotManifestDst := filepath.Join(targetManifestsDir, manifestHash+".json")
+			if err := copyFile(snapshotManifestSrc, snapshotManifestDst, 0644); err != nil {
+				fmt.Printf("Warning: Could not copy snapshot manifest: %v\n", err)
+			}
+		} else {
+			fmt.Printf("Warning: Could not parse snapshot id %s: %v\n", forkSnapshotID, err)
 		}
-	} else {
-		fmt.Printf("Warning: Could not parse snapshot id %s: %v\n", forkSnapshotID, err)
-	}
 
-	// Copy snapshot metadata if it exists
-	snapshotMetaSrc := filepath.Join(sourceSnapshotsDir, forkSnapshotID+".meta.json")
-	snapshotMetaDst := filepath.Join(targetSnapshotsDir, forkSnapshotID+".meta.json")
-	if _, err := os.Stat(snapshotMetaSrc); err == nil {
-		if err := copyFile(snapshotMetaSrc, snapshotMetaDst, 0644); err != nil {
-			fmt.Printf("Warning: Could not copy snapshot metadata: %v\n", err)
+		// Copy snapshot metadata if it exists
+		snapshotMetaSrc := filepath.Join(sourceSnapshotsDir, forkSnapshotID+".meta.json")
+		snapshotMetaDst := filepath.Join(targetSnapshotsDir, forkSnapshotID+".meta.json")
+		if _, err := os.Stat(snapshotMetaSrc); err == nil {
+			if err := copyFile(snapshotMetaSrc, snapshotMetaDst, 0644); err != nil {
+				fmt.Printf("Warning: Could not copy snapshot metadata: %v\n", err)
+			}
 		}
 	}
 

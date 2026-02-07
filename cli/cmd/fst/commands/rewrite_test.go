@@ -65,25 +65,33 @@ func TestDropSnapshotRewiresChild(t *testing.T) {
 	}
 	restoreCwd()
 
-	if _, err := os.Stat(snapshotMetaPath(root, s2)); err == nil {
-		t.Fatalf("expected dropped snapshot metadata to be removed")
-	}
-
-	parents, err := config.SnapshotParentIDsAt(root, s3)
-	if err != nil {
-		t.Fatalf("SnapshotParentIDsAt: %v", err)
-	}
-	if len(parents) != 1 || parents[0] != s1 {
-		t.Fatalf("expected s3 parent to be %s, got %v", s1, parents)
+	// Old snapshots are preserved (immutable) — s2 still exists
+	if _, err := os.Stat(snapshotMetaPath(root, s2)); err != nil {
+		t.Fatalf("expected old snapshot %s to be preserved, got err: %v", s2, err)
 	}
 
 	cfg, err := config.LoadAt(root)
 	if err != nil {
 		t.Fatalf("LoadAt: %v", err)
 	}
-	if cfg.CurrentSnapshotID != s3 {
-		t.Fatalf("expected current snapshot to remain %s, got %s", s3, cfg.CurrentSnapshotID)
+
+	// HEAD should have moved to a NEW snapshot (not s3)
+	newHead := cfg.CurrentSnapshotID
+	if newHead == s3 {
+		t.Fatalf("expected HEAD to move to a new snapshot, but it stayed at %s", s3)
 	}
+
+	// The new HEAD's parent should be s1 (s2 was skipped)
+	parents, err := config.SnapshotParentIDsAt(root, newHead)
+	if err != nil {
+		t.Fatalf("SnapshotParentIDsAt: %v", err)
+	}
+	// newHead is a copy of s3, and its parent should be a copy of s3's predecessor (which was dropped).
+	// Since s2 was dropped, s3's copy should have parent = s1.
+	if len(parents) != 1 || parents[0] != s1 {
+		t.Fatalf("expected new HEAD parent to be %s, got %v", s1, parents)
+	}
+
 	if cfg.BaseSnapshotID != baseID {
 		t.Fatalf("expected base snapshot %s, got %s", baseID, cfg.BaseSnapshotID)
 	}
@@ -110,19 +118,32 @@ func TestSquashRangeCollapsesSnapshots(t *testing.T) {
 	}
 	restoreCwd()
 
-	if _, err := os.Stat(snapshotMetaPath(root, s1)); err == nil {
-		t.Fatalf("expected s1 metadata to be removed")
+	// Old snapshots are preserved (immutable)
+	if _, err := os.Stat(snapshotMetaPath(root, s1)); err != nil {
+		t.Fatalf("expected s1 metadata to be preserved, got err: %v", err)
 	}
 
-	parents, err := config.SnapshotParentIDsAt(root, s2)
+	cfg, err := config.LoadAt(root)
+	if err != nil {
+		t.Fatalf("LoadAt: %v", err)
+	}
+
+	// HEAD should have moved to a new snapshot (not s2)
+	newHead := cfg.CurrentSnapshotID
+	if newHead == s2 {
+		t.Fatalf("expected HEAD to move to a new snapshot, but it stayed at %s", s2)
+	}
+
+	// The new HEAD's parent should be baseID (s1 was squashed away)
+	parents, err := config.SnapshotParentIDsAt(root, newHead)
 	if err != nil {
 		t.Fatalf("SnapshotParentIDsAt: %v", err)
 	}
 	if len(parents) != 1 || parents[0] != baseID {
-		t.Fatalf("expected s2 parent to be %s, got %v", baseID, parents)
+		t.Fatalf("expected new HEAD parent to be %s, got %v", baseID, parents)
 	}
 
-	meta := readSnapshotMeta(t, root, s2)
+	meta := readSnapshotMeta(t, root, newHead)
 	if meta.Message != "squashed" {
 		t.Fatalf("expected squashed message, got %q", meta.Message)
 	}
@@ -153,20 +174,42 @@ func TestRebaseSkipsSegmentInChain(t *testing.T) {
 	}
 	restoreCwd()
 
-	parents, err := config.SnapshotParentIDsAt(root, s3)
+	cfg, err := config.LoadAt(root)
 	if err != nil {
-		t.Fatalf("SnapshotParentIDsAt: %v", err)
-	}
-	if len(parents) != 1 || parents[0] != s1 {
-		t.Fatalf("expected s3 parent to be %s, got %v", s1, parents)
+		t.Fatalf("LoadAt: %v", err)
 	}
 
-	parents, err = config.SnapshotParentIDsAt(root, s4)
-	if err != nil {
-		t.Fatalf("SnapshotParentIDsAt: %v", err)
+	// HEAD should have moved to a new snapshot (not s4)
+	newHead := cfg.CurrentSnapshotID
+	if newHead == s4 {
+		t.Fatalf("expected HEAD to move to a new snapshot, but it stayed at %s", s4)
 	}
-	if len(parents) != 1 || parents[0] != s3 {
-		t.Fatalf("expected s4 parent to be %s, got %v", s3, parents)
+
+	// The new HEAD's parent should be a new copy of s3
+	newHeadParents, err := config.SnapshotParentIDsAt(root, newHead)
+	if err != nil {
+		t.Fatalf("SnapshotParentIDsAt for new HEAD: %v", err)
+	}
+	if len(newHeadParents) != 1 {
+		t.Fatalf("expected new HEAD to have 1 parent, got %v", newHeadParents)
+	}
+
+	// The new s3 copy's parent should be s1 (the --onto target)
+	newS3 := newHeadParents[0]
+	newS3Parents, err := config.SnapshotParentIDsAt(root, newS3)
+	if err != nil {
+		t.Fatalf("SnapshotParentIDsAt for new s3: %v", err)
+	}
+	if len(newS3Parents) != 1 || newS3Parents[0] != s1 {
+		t.Fatalf("expected new s3 parent to be %s, got %v", s1, newS3Parents)
+	}
+
+	// Old s3 and s4 should still exist with original parents (immutable)
+	if _, err := os.Stat(snapshotMetaPath(root, s3)); err != nil {
+		t.Fatalf("expected old s3 to be preserved: %v", err)
+	}
+	if _, err := os.Stat(snapshotMetaPath(root, s4)); err != nil {
+		t.Fatalf("expected old s4 to be preserved: %v", err)
 	}
 }
 

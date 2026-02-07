@@ -49,7 +49,7 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 		return "", fmt.Errorf("failed to save snapshot: %w", err)
 	}
 
-	manifestsDir := filepath.Join(root, ".fst", config.ManifestsDirName)
+	manifestsDir := config.GetManifestsDirAt(root)
 	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create manifests directory: %w", err)
 	}
@@ -60,7 +60,10 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 	}
 
 	// Save metadata
-	snapshotsDir := filepath.Join(root, ".fst", config.SnapshotsDirName)
+	snapshotsDir := config.GetSnapshotsDirAt(root)
+	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create snapshots directory: %w", err)
+	}
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	metadata := fmt.Sprintf(`{
   "id": "%s",

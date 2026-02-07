@@ -167,7 +167,7 @@ func copyBaseSnapshotToWorkspace(parentCfg *config.ParentConfig, workspaceDir, b
 			if ws.ProjectID != parentCfg.ProjectID {
 				continue
 			}
-			metaPath := filepath.Join(ws.Path, ".fst", config.SnapshotsDirName, baseSnapshotID+".meta.json")
+			metaPath := filepath.Join(config.GetSnapshotsDirAt(ws.Path), baseSnapshotID+".meta.json")
 			if _, err := os.Stat(metaPath); err == nil {
 				sourcePath = ws.Path
 				break
@@ -178,10 +178,10 @@ func copyBaseSnapshotToWorkspace(parentCfg *config.ParentConfig, workspaceDir, b
 		return fmt.Errorf("base snapshot source workspace not found")
 	}
 
-	sourceSnapshots := filepath.Join(sourcePath, ".fst", config.SnapshotsDirName)
-	sourceManifests := filepath.Join(sourcePath, ".fst", config.ManifestsDirName)
-	targetSnapshots := filepath.Join(workspaceDir, ".fst", config.SnapshotsDirName)
-	targetManifests := filepath.Join(workspaceDir, ".fst", config.ManifestsDirName)
+	sourceSnapshots := config.GetSnapshotsDirAt(sourcePath)
+	sourceManifests := config.GetManifestsDirAt(sourcePath)
+	targetSnapshots := config.GetSnapshotsDirAt(workspaceDir)
+	targetManifests := config.GetManifestsDirAt(workspaceDir)
 
 	metaPath := filepath.Join(sourceSnapshots, baseSnapshotID+".meta.json")
 	metaData, err := os.ReadFile(metaPath)
