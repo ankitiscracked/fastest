@@ -146,12 +146,12 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 	}
 
 	// Generate manifests
-	ourManifest, err := manifest.Generate(root, false)
+	ourManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	if err != nil {
 		return fmt.Errorf("failed to scan our workspace: %w", err)
 	}
 
-	theirManifest, err := manifest.Generate(otherRoot, false)
+	theirManifest, err := manifest.GenerateWithCache(otherRoot, config.GetStatCachePath(otherRoot))
 	if err != nil {
 		return fmt.Errorf("failed to scan their workspace: %w", err)
 	}

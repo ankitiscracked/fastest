@@ -51,15 +51,20 @@ func HashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Generate creates a manifest for a directory
-func Generate(root string, includeModTime bool) (*Manifest, error) {
-	// Load ignore patterns
+// fileHasher computes the hash for a regular file given its absolute path,
+// relative path, and stat info. Used by generateWith to allow different
+// hashing strategies (direct hash vs stat-cache-accelerated).
+type fileHasher func(absPath, relPath string, info os.FileInfo) (string, error)
+
+// generateWith creates a manifest using the provided file hashing function.
+// This is the shared walk logic used by both Generate and GenerateWithCache.
+func generateWith(root string, hashFn fileHasher) (*Manifest, error) {
 	matcher, err := ignore.LoadFromDir(root)
 	if err != nil {
 		return nil, err
 	}
 
-	manifest := &Manifest{
+	m := &Manifest{
 		Version: "1",
 		Files:   []FileEntry{},
 	}
@@ -69,21 +74,17 @@ func Generate(root string, includeModTime bool) (*Manifest, error) {
 			return err
 		}
 
-		// Get relative path
 		relPath, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
 
-		// Skip root
 		if relPath == "." {
 			return nil
 		}
 
-		// Normalize to forward slashes
 		relPath = filepath.ToSlash(relPath)
 
-		// Check if should be ignored
 		if matcher.Match(relPath, info.IsDir()) {
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -96,50 +97,35 @@ func Generate(root string, includeModTime bool) (*Manifest, error) {
 			if err != nil {
 				return err
 			}
-			entry := FileEntry{
+			m.Files = append(m.Files, FileEntry{
 				Type:   EntryTypeSymlink,
 				Path:   relPath,
 				Target: target,
-			}
-			if includeModTime {
-				entry.ModTime = info.ModTime().Unix()
-			}
-			manifest.Files = append(manifest.Files, entry)
+			})
 			return nil
 		}
 
 		if info.IsDir() {
-			entry := FileEntry{
+			m.Files = append(m.Files, FileEntry{
 				Type: EntryTypeDir,
 				Path: relPath,
 				Mode: uint32(info.Mode().Perm()),
-			}
-			if includeModTime {
-				entry.ModTime = info.ModTime().Unix()
-			}
-			manifest.Files = append(manifest.Files, entry)
+			})
 			return nil
 		}
 
-		// Compute hash
-		hash, err := HashFile(path)
+		hash, err := hashFn(path, relPath, info)
 		if err != nil {
 			return err
 		}
 
-		entry := FileEntry{
+		m.Files = append(m.Files, FileEntry{
 			Type: EntryTypeFile,
 			Path: relPath,
 			Hash: hash,
 			Size: info.Size(),
 			Mode: uint32(info.Mode().Perm()),
-		}
-
-		if includeModTime {
-			entry.ModTime = info.ModTime().Unix()
-		}
-
-		manifest.Files = append(manifest.Files, entry)
+		})
 		return nil
 	})
 
@@ -147,15 +133,21 @@ func Generate(root string, includeModTime bool) (*Manifest, error) {
 		return nil, err
 	}
 
-	// Sort files for reproducibility
-	sort.Slice(manifest.Files, func(i, j int) bool {
-		if manifest.Files[i].Path == manifest.Files[j].Path {
-			return manifest.Files[i].Type < manifest.Files[j].Type
+	sort.Slice(m.Files, func(i, j int) bool {
+		if m.Files[i].Path == m.Files[j].Path {
+			return m.Files[i].Type < m.Files[j].Type
 		}
-		return manifest.Files[i].Path < manifest.Files[j].Path
+		return m.Files[i].Path < m.Files[j].Path
 	})
 
-	return manifest, nil
+	return m, nil
+}
+
+// Generate creates a manifest for a directory, hashing every file from scratch.
+func Generate(root string, includeModTime bool) (*Manifest, error) {
+	return generateWith(root, func(absPath, relPath string, info os.FileInfo) (string, error) {
+		return HashFile(absPath)
+	})
 }
 
 // ToJSON converts the manifest to canonical JSON

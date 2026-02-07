@@ -213,7 +213,7 @@ func getWorkspaceChanges(ws RegisteredWorkspace) (*drift.Report, error) {
 	}
 
 	// Generate current manifest
-	currentManifest, err := manifest.Generate(ws.Path, false)
+	currentManifest, err := manifest.GenerateWithCache(ws.Path, config.GetStatCachePath(ws.Path))
 	if err != nil {
 		return nil, err
 	}

@@ -212,7 +212,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 		return err
 	}
 
-	currentManifest, err := manifest.Generate(root, false)
+	currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	if err != nil {
 		return fmt.Errorf("failed to scan local files: %w", err)
 	}
@@ -341,7 +341,7 @@ func uploadLatestSnapshotToCloud(client *api.Client, root string, cfg *config.Pr
 }
 
 func isWorkingTreeDirty(root, latestSnapshotID string) (bool, error) {
-	current, err := manifest.Generate(root, false)
+	current, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	if err != nil {
 		return false, fmt.Errorf("failed to scan files: %w", err)
 	}
@@ -380,7 +380,7 @@ func isWorkingTreeDirty(root, latestSnapshotID string) (bool, error) {
 }
 
 func removeFilesNotInManifest(root string, target *manifest.Manifest) error {
-	current, err := manifest.Generate(root, false)
+	current, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	if err != nil {
 		return fmt.Errorf("failed to scan current files: %w", err)
 	}

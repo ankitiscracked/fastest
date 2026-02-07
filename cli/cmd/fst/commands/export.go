@@ -347,7 +347,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 	// Show current state
 	if !includeDrift {
 		// Check for drift
-		currentManifest, err := manifest.Generate(root, false)
+		currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 		if err == nil {
 			baseManifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.BaseSnapshotID)
 			if err == nil {

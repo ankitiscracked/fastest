@@ -141,7 +141,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		return err
 	}
 
-	currentManifest, err := manifest.Generate(root, false)
+	currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	if err != nil {
 		return fmt.Errorf("failed to scan local files: %w", err)
 	}

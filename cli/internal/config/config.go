@@ -19,6 +19,16 @@ const (
 	BlobsDirName     = "blobs"
 )
 
+// StatCacheFileName is the name of the stat cache file stored in .fst/.
+const StatCacheFileName = "stat-cache.json"
+
+// GetStatCachePath returns the path to the stat cache file for a workspace root.
+// The stat cache is always workspace-local (not shared at project level) because
+// it caches stat data specific to the workspace's working directory.
+func GetStatCachePath(root string) string {
+	return filepath.Join(root, ConfigDirName, StatCacheFileName)
+}
+
 // GetGlobalConfigDir returns the global config directory (~/.config/fst/)
 // Supports XDG_CONFIG_HOME environment variable
 func GetGlobalConfigDir() (string, error) {
@@ -533,7 +543,7 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 		// Write .gitignore for the project-level .fst/ if not already present
 		gitignorePath := filepath.Join(sharedConfigDir, ".gitignore")
 		if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
-			gitignore := "# Fastest shared data\nsnapshots/\nmanifests/\nblobs/\n*.log\n"
+			gitignore := "# Fastest shared data\nsnapshots/\nmanifests/\nblobs/\n*.log\nstat-cache.json\n"
 			_ = os.WriteFile(gitignorePath, []byte(gitignore), 0644)
 		}
 	} else {
@@ -580,6 +590,7 @@ manifests/
 blobs/
 *.log
 merge-parents.json
+stat-cache.json
 `
 	gitignorePath := filepath.Join(configDir, ".gitignore")
 	if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {

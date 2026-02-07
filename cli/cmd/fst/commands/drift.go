@@ -270,7 +270,7 @@ func resolveLocalMainWorkspace(cfg *config.ProjectConfig, mainID, mainName strin
 // loadManifestForDrift loads a workspace manifest for drift comparison
 func loadManifestForDrift(root, snapshotID string, includeDirty bool) (*manifest.Manifest, error) {
 	if includeDirty {
-		return manifest.Generate(root, false)
+		return manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	}
 	return drift.LoadManifestFromSnapshots(root, snapshotID)
 }

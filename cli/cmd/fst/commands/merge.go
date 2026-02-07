@@ -311,7 +311,7 @@ func runMerge(sourceName string, fromPath string, mode ConflictMode, dryRun bool
 	mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest)
 
 	// Abort if merge would overwrite local uncommitted changes in target (git-like behavior)
-	workingManifest, err := manifest.Generate(currentRoot, false)
+	workingManifest, err := manifest.GenerateWithCache(currentRoot, config.GetStatCachePath(currentRoot))
 	if err != nil {
 		return fmt.Errorf("failed to scan current workspace: %w", err)
 	}

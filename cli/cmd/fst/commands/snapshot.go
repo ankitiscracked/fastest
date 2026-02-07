@@ -87,6 +87,9 @@ func runSnapshot(message string, agentMessage bool) error {
 		return fmt.Errorf("failed to scan files: %w", err)
 	}
 
+	// Populate stat cache so subsequent status/drift checks are fast.
+	manifest.BuildStatCacheFromManifest(root, m, config.GetStatCachePath(root))
+
 	fmt.Printf("Found %d files (%s)\n", m.FileCount(), formatBytesLong(m.TotalSize()))
 
 	// Compute manifest hash (snapshot ID is generated separately)
@@ -333,6 +336,9 @@ func CreateAutoSnapshot(message string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to scan files: %w", err)
 	}
+
+	// Populate stat cache so subsequent status/drift checks are fast.
+	manifest.BuildStatCacheFromManifest(root, m, config.GetStatCachePath(root))
 
 	// Compute manifest hash
 	manifestHash, err := m.Hash()

@@ -125,7 +125,7 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 		toRestore = targetManifest.Files
 
 		// Find files/symlinks to delete (exist now but not in snapshot)
-		currentManifest, err := manifest.Generate(root, false)
+		currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 		if err != nil {
 			return fmt.Errorf("failed to scan current files: %w", err)
 		}

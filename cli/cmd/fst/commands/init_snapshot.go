@@ -24,6 +24,9 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 		return "", fmt.Errorf("failed to scan files: %w", err)
 	}
 
+	// Populate stat cache so subsequent status/drift checks are fast.
+	manifest.BuildStatCacheFromManifest(root, m, config.GetStatCachePath(root))
+
 	manifestHash, err := m.Hash()
 	if err != nil {
 		return "", fmt.Errorf("failed to create snapshot: %w", err)

@@ -80,7 +80,7 @@ func GetUpstreamWorkspace(root string) (path string, name string, err error) {
 // Compute calculates drift between the base manifest and current state
 func Compute(root string, baseManifest *manifest.Manifest) (*Report, error) {
 	// Generate current manifest
-	current, err := manifest.Generate(root, false)
+	current, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate current manifest: %w", err)
 	}
@@ -110,7 +110,7 @@ func ComputeFromCache(root string) (*Report, error) {
 
 	if cfg.BaseSnapshotID == "" {
 		// No base snapshot, everything is new
-		current, err := manifest.Generate(root, false)
+		current, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate manifest: %w", err)
 		}
@@ -167,7 +167,7 @@ func ComputeFromCache(root string) (*Report, error) {
 func ComputeFromLatestSnapshot(root string) (*Report, error) {
 	snapshotID, _ := config.GetLatestSnapshotIDAt(root)
 	if snapshotID == "" {
-		current, err := manifest.Generate(root, false)
+		current, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate manifest: %w", err)
 		}

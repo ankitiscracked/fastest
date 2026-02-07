@@ -130,7 +130,7 @@ func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 	}
 
 	// Generate current workspace manifest
-	currentManifest, err := manifest.Generate(root, false)
+	currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate current manifest: %w", err)
 	}
@@ -140,7 +140,7 @@ func Detect(root, otherRoot string, includeDirty bool) (*Report, error) {
 	var otherAccessor BlobAccessor
 
 	if includeDirty {
-		otherManifest, err = manifest.Generate(otherRoot, false)
+		otherManifest, err = manifest.GenerateWithCache(otherRoot, config.GetStatCachePath(otherRoot))
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate other workspace manifest: %w", err)
 		}
@@ -456,13 +456,13 @@ func DetectFromAncestor(root, otherRoot, commonAncestorID string, includeDirty b
 	var currentAccessor, otherAccessor BlobAccessor
 
 	if includeDirty {
-		currentManifest, err = manifest.Generate(root, false)
+		currentManifest, err = manifest.GenerateWithCache(root, config.GetStatCachePath(root))
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate current manifest: %w", err)
 		}
 		currentAccessor = NewFileSystemAccessor(root, currentManifest)
 
-		otherManifest, err = manifest.Generate(otherRoot, false)
+		otherManifest, err = manifest.GenerateWithCache(otherRoot, config.GetStatCachePath(otherRoot))
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate other manifest: %w", err)
 		}
