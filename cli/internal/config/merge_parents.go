@@ -65,3 +65,19 @@ func ClearPendingMergeParentsAt(root string) error {
 	}
 	return nil
 }
+
+func normalizeParentIDs(parents []string) []string {
+	seen := make(map[string]struct{}, len(parents)+1)
+	out := make([]string, 0, len(parents)+1)
+	for _, p := range parents {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}

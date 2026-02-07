@@ -1,54 +1,11 @@
 package dag
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
-
-// SnapshotMeta represents snapshot metadata for DAG traversal
-type SnapshotMeta struct {
-	ID          string   `json:"id"`
-	WorkspaceID string   `json:"workspace_id"`
-	CreatedAt   string   `json:"created_at"`
-	ParentIDs   []string `json:"parent_snapshot_ids"`
-}
-
-// LoadSnapshotMeta loads snapshot metadata from a specific snapshots directory
-func LoadSnapshotMeta(snapshotsDir, snapshotID string) (*SnapshotMeta, error) {
-	if snapshotID == "" {
-		return nil, fmt.Errorf("empty snapshot ID")
-	}
-
-	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		return nil, fmt.Errorf("snapshot metadata not found: %w", err)
-	}
-
-	var meta SnapshotMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("failed to parse snapshot metadata: %w", err)
-	}
-	return &meta, nil
-}
-
-// LoadSnapshotMetaAny tries to load snapshot metadata from targetDir first, then sourceDir
-func LoadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, snapshotID string) (*SnapshotMeta, error) {
-	meta, err := LoadSnapshotMeta(targetSnapshotsDir, snapshotID)
-	if err == nil {
-		return meta, nil
-	}
-	meta, err = LoadSnapshotMeta(sourceSnapshotsDir, snapshotID)
-	if err == nil {
-		return meta, nil
-	}
-	return nil, err
-}
 
 // GetMergeBase finds the most recent common ancestor between two snapshot heads
 // using BFS traversal of the snapshot DAG. It minimizes combined distance from
@@ -58,12 +15,20 @@ func GetMergeBase(targetRoot, sourceRoot, targetHead, sourceHead string) (string
 		return "", fmt.Errorf("missing snapshots in one or both workspaces")
 	}
 
-	targetSnapshotsDir := config.GetSnapshotsDirAt(targetRoot)
-	sourceSnapshotsDir := config.GetSnapshotsDirAt(sourceRoot)
+	targetStore := store.OpenFromWorkspace(targetRoot)
+	sourceStore := store.OpenFromWorkspace(sourceRoot)
 
 	type node struct {
 		id   string
 		dist int
+	}
+
+	loadMeta := func(id string) (*store.SnapshotMeta, error) {
+		meta, err := targetStore.LoadSnapshotMeta(id)
+		if err == nil {
+			return meta, nil
+		}
+		return sourceStore.LoadSnapshotMeta(id)
 	}
 
 	// BFS from target head to build distance map
@@ -74,12 +39,12 @@ func GetMergeBase(targetRoot, sourceRoot, targetHead, sourceHead string) (string
 		if _, ok := targetDist[item.id]; ok {
 			continue
 		}
-		meta, err := LoadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, item.id)
+		meta, err := loadMeta(item.id)
 		if err != nil {
 			return "", fmt.Errorf("missing snapshot metadata for %s", item.id)
 		}
 		targetDist[item.id] = item.dist
-		for _, parent := range meta.ParentIDs {
+		for _, parent := range meta.ParentSnapshotIDs {
 			if parent == "" {
 				continue
 			}
@@ -106,7 +71,7 @@ func GetMergeBase(targetRoot, sourceRoot, targetHead, sourceHead string) (string
 			break
 		}
 		seenSource[item.id] = struct{}{}
-		meta, err := LoadSnapshotMetaAny(targetSnapshotsDir, sourceSnapshotsDir, item.id)
+		meta, err := loadMeta(item.id)
 		if err != nil {
 			return "", fmt.Errorf("missing snapshot metadata for %s", item.id)
 		}
@@ -130,7 +95,7 @@ func GetMergeBase(targetRoot, sourceRoot, targetHead, sourceHead string) (string
 			}
 		}
 
-		for _, parent := range meta.ParentIDs {
+		for _, parent := range meta.ParentSnapshotIDs {
 			if parent == "" {
 				continue
 			}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
@@ -390,18 +391,12 @@ func getLinesFromDiff(base, modified string, r lineRange) []string {
 
 // loadManifestFromSnapshots loads a manifest from a workspace's snapshots directory
 func loadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, error) {
-	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snapshotID)
+	s := store.OpenFromWorkspace(root)
+	hash, err := s.ManifestHashFromSnapshotID(snapshotID)
 	if err != nil {
 		return nil, err
 	}
-
-	manifestsDir := config.GetManifestsDirAt(root)
-	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("manifest not found in manifests: %w", err)
-	}
-	return manifest.FromJSON(data)
+	return s.LoadManifest(hash)
 }
 
 // HasConflicts returns true if there are any conflicts

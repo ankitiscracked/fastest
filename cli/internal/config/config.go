@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/anthropics/fastest/cli/internal/ignore"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 const (
@@ -137,6 +136,10 @@ func GetWorkspaceLocalBlobsDirAt(root string) string {
 	return filepath.Join(root, ConfigDirName, BlobsDirName)
 }
 
+// SnapshotMeta is a type alias for store.SnapshotMeta.
+// All new code should use store.SnapshotMeta directly.
+type SnapshotMeta = store.SnapshotMeta
+
 // ManifestHashFromSnapshotID resolves a snapshot ID to its manifest hash using local metadata.
 func ManifestHashFromSnapshotID(snapshotID string) (string, error) {
 	root, err := FindProjectRoot()
@@ -148,93 +151,14 @@ func ManifestHashFromSnapshotID(snapshotID string) (string, error) {
 
 // ManifestHashFromSnapshotIDAt resolves a snapshot ID to its manifest hash for a specific workspace root.
 func ManifestHashFromSnapshotIDAt(root, snapshotID string) (string, error) {
-	if snapshotID == "" {
-		return "", fmt.Errorf("empty snapshot ID")
-	}
-
-	snapshotsDir := GetSnapshotsDirAt(root)
-	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	if data, err := os.ReadFile(metaPath); err == nil {
-		var meta SnapshotMeta
-		if err := json.Unmarshal(data, &meta); err == nil && meta.ManifestHash != "" {
-			if IsContentAddressedSnapshotID(snapshotID) {
-				if !VerifySnapshotID(snapshotID, meta.ManifestHash, meta.ParentSnapshotIDs, meta.AuthorName, meta.AuthorEmail, meta.CreatedAt) {
-					return "", fmt.Errorf("snapshot integrity check failed for %s: ID does not match content", snapshotID)
-				}
-			}
-			return meta.ManifestHash, nil
-		}
-	}
-
-	// Fallback for legacy snapshot IDs that embedded the manifest hash.
-	const prefix = "snap-"
-	if strings.HasPrefix(snapshotID, prefix) {
-		legacy := strings.TrimPrefix(snapshotID, prefix)
-		if len(legacy) == 64 {
-			return legacy, nil
-		}
-		if resolved, err := ResolveSnapshotIDAt(root, snapshotID); err == nil && resolved != snapshotID {
-			metaPath = filepath.Join(snapshotsDir, resolved+".meta.json")
-			if data, err := os.ReadFile(metaPath); err == nil {
-				var meta SnapshotMeta
-				if err := json.Unmarshal(data, &meta); err == nil && meta.ManifestHash != "" {
-					return meta.ManifestHash, nil
-				}
-			}
-		} else if err != nil && strings.Contains(err.Error(), "ambiguous") {
-			return "", err
-		}
-	}
-
-	return "", fmt.Errorf("snapshot metadata not found for: %s", snapshotID)
+	s := store.OpenFromWorkspace(root)
+	return s.ManifestHashFromSnapshotID(snapshotID)
 }
 
 // ResolveSnapshotIDAt resolves a snapshot prefix to a full ID for a specific workspace root.
 func ResolveSnapshotIDAt(root, snapshotID string) (string, error) {
-	if snapshotID == "" {
-		return "", fmt.Errorf("empty snapshot ID")
-	}
-
-	snapshotsDir := GetSnapshotsDirAt(root)
-	entries, err := os.ReadDir(snapshotsDir)
-	if err != nil {
-		return "", err
-	}
-
-	matches := make([]string, 0, 4)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".meta.json") {
-			continue
-		}
-		id := strings.TrimSuffix(name, ".meta.json")
-		if strings.HasPrefix(id, snapshotID) {
-			matches = append(matches, id)
-		}
-	}
-
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	if len(matches) == 0 {
-		return "", fmt.Errorf("snapshot %q not found", snapshotID)
-	}
-	sort.Strings(matches)
-	return "", fmt.Errorf("snapshot %q is ambiguous: %s", snapshotID, strings.Join(matches, ", "))
-}
-
-// SnapshotMeta represents snapshot metadata
-type SnapshotMeta struct {
-	ID                string   `json:"id"`
-	WorkspaceID       string   `json:"workspace_id"`
-	CreatedAt         string   `json:"created_at"`
-	ManifestHash      string   `json:"manifest_hash"`
-	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-	AuthorName        string   `json:"author_name"`
-	AuthorEmail       string   `json:"author_email"`
+	s := store.OpenFromWorkspace(root)
+	return s.ResolveSnapshotID(snapshotID)
 }
 
 // GetLatestSnapshotID returns the most recent snapshot ID for the current workspace
@@ -248,91 +172,16 @@ func GetLatestSnapshotID() (string, error) {
 
 // GetLatestSnapshotIDAt returns the most recent snapshot ID for a specific workspace
 func GetLatestSnapshotIDAt(root string) (string, error) {
-	snapshotsDir := GetSnapshotsDirAt(root)
-
-	entries, err := os.ReadDir(snapshotsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-
-	var latestID string
-	var latestTime string
-
-	for _, entry := range entries {
-		name := entry.Name()
-		// Look for metadata files (snap-xxx.meta.json)
-		if !entry.IsDir() && len(name) > 10 && name[len(name)-10:] == ".meta.json" {
-			metaPath := filepath.Join(snapshotsDir, name)
-			data, err := os.ReadFile(metaPath)
-			if err != nil {
-				continue
-			}
-
-			var meta SnapshotMeta
-			if err := json.Unmarshal(data, &meta); err != nil {
-				continue
-			}
-
-			// Compare timestamps (RFC3339 format sorts lexicographically)
-			if meta.CreatedAt > latestTime {
-				latestTime = meta.CreatedAt
-				latestID = meta.ID
-			}
-		}
-	}
-
-	return latestID, nil
+	s := store.OpenFromWorkspace(root)
+	return s.GetLatestSnapshotID()
 }
 
 // GetLatestSnapshotIDForWorkspaceAt returns the most recent snapshot ID for a specific
 // workspace, filtering by workspace_id. This is needed when using a shared project-level
 // snapshot store where multiple workspaces' snapshots coexist.
 func GetLatestSnapshotIDForWorkspaceAt(root string, workspaceID string) (string, error) {
-	if workspaceID == "" {
-		return GetLatestSnapshotIDAt(root)
-	}
-
-	snapshotsDir := GetSnapshotsDirAt(root)
-	entries, err := os.ReadDir(snapshotsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-
-	var latestID string
-	var latestTime string
-
-	for _, entry := range entries {
-		name := entry.Name()
-		if !entry.IsDir() && len(name) > 10 && name[len(name)-10:] == ".meta.json" {
-			metaPath := filepath.Join(snapshotsDir, name)
-			data, err := os.ReadFile(metaPath)
-			if err != nil {
-				continue
-			}
-
-			var meta SnapshotMeta
-			if err := json.Unmarshal(data, &meta); err != nil {
-				continue
-			}
-
-			if meta.WorkspaceID != workspaceID {
-				continue
-			}
-
-			if meta.CreatedAt > latestTime {
-				latestTime = meta.CreatedAt
-				latestID = meta.ID
-			}
-		}
-	}
-
-	return latestID, nil
+	s := store.OpenFromWorkspace(root)
+	return s.GetLatestSnapshotIDForWorkspace(workspaceID)
 }
 
 // ProjectConfig represents the local project configuration stored in .fst/config.json

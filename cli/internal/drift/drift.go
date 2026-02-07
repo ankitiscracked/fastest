@@ -3,11 +3,10 @@ package drift
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 // Report represents the drift from a base snapshot
@@ -20,33 +19,13 @@ type Report struct {
 	Summary        string   `json:"summary,omitempty"`
 }
 
-// SnapshotMeta represents snapshot metadata
-type SnapshotMeta struct {
-	ID                string   `json:"id"`
-	WorkspaceID       string   `json:"workspace_id"`
-	WorkspaceName     string   `json:"workspace_name"`
-	ManifestHash      string   `json:"manifest_hash"`
-	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-	Message           string   `json:"message"`
-	CreatedAt         string   `json:"created_at"`
-	Files             int      `json:"files"`
-	Size              int64    `json:"size"`
-}
+// SnapshotMeta is an alias for store.SnapshotMeta.
+type SnapshotMeta = store.SnapshotMeta
 
-// LoadSnapshotMeta loads snapshot metadata from a workspace's snapshots directory
+// LoadSnapshotMeta loads snapshot metadata from a workspace's snapshots directory.
 func LoadSnapshotMeta(root, snapshotID string) (*SnapshotMeta, error) {
-	snapshotsDir := config.GetSnapshotsDirAt(root)
-	metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		return nil, fmt.Errorf("snapshot metadata not found: %w", err)
-	}
-
-	var meta SnapshotMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("failed to parse snapshot metadata: %w", err)
-	}
-	return &meta, nil
+	s := store.OpenFromWorkspace(root)
+	return s.LoadSnapshotMeta(snapshotID)
 }
 
 // GetUpstreamWorkspace finds the workspace that created the base snapshot
@@ -132,26 +111,16 @@ func ComputeFromCache(root string) (*Report, error) {
 		}, nil
 	}
 
-	// Load base manifest from local manifests directory
-	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.BaseSnapshotID)
+	// Load base manifest from project store
+	s := store.OpenFromWorkspace(root)
+	manifestHash, err := s.ManifestHashFromSnapshotID(cfg.BaseSnapshotID)
 	if err != nil {
 		return nil, err
 	}
 
-	manifestsDir, err := config.GetManifestsDir()
+	baseManifest, err := s.LoadManifest(manifestHash)
 	if err != nil {
-		return nil, err
-	}
-
-	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("base manifest not found in manifests: %w", err)
-	}
-
-	baseManifest, err := manifest.FromJSON(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse base manifest: %w", err)
+		return nil, fmt.Errorf("base manifest not found: %w", err)
 	}
 
 	report, err := Compute(root, baseManifest)
@@ -202,20 +171,14 @@ func ComputeFromLatestSnapshot(root string) (*Report, error) {
 	return report, nil
 }
 
-// LoadManifestFromSnapshots loads a manifest from a workspace's manifests directory
+// LoadManifestFromSnapshots loads a manifest from a workspace's manifests directory.
 func LoadManifestFromSnapshots(root, snapshotID string) (*manifest.Manifest, error) {
-	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snapshotID)
+	s := store.OpenFromWorkspace(root)
+	hash, err := s.ManifestHashFromSnapshotID(snapshotID)
 	if err != nil {
 		return nil, err
 	}
-
-	manifestsDir := config.GetManifestsDirAt(root)
-	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("manifest not found in manifests: %w", err)
-	}
-	return manifest.FromJSON(data)
+	return s.LoadManifest(hash)
 }
 
 // CompareManifests compares two manifests and returns a drift report.
