@@ -130,43 +130,26 @@ Commands call `workspace.Open()`. The workspace internally opens the project sto
 
 Incremental approach:
 
-1. Create `store/` — wrap the existing project-level snapshot/manifest/blob I/O that's currently scattered across `config.GetSnapshotsDirAt` + raw `os.ReadFile` in commands
-2. Create `workspace/` with `Open`/`Close` — loads config, opens parent store
+1. ~~Create `store/` — wrap the existing project-level snapshot/manifest/blob I/O~~ ✓
+2. Create `workspace/` with `Open`/`Close` — loads config, opens parent store ← **next**
 3. Move `Snapshot` workflow into `workspace` first (most self-contained, called from many places)
 4. Move `Merge` next (eliminates `merge-parents.json` state)
 5. Move `Rollback`, then `Export`/`Import` as needed
 6. Commands shrink as logic moves into `workspace/`
 
-## Immediate Cleanups
+## Completed Cleanups
 
-These are independent of the library layer and can be done now.
+### 1. Move workspace registry types to `index/` ✓
 
-### 1. Move workspace registry types to `index/`
+Moved `RegisteredWorkspace`, `WorkspaceRegistry`, and CRUD operations from `commands/workspace.go` to `cli/internal/index/`. Renamed to `index.WorkspaceEntry`. All 13 command files updated.
 
-**Priority: high (concrete layering violation)**
+### 2. Create `store/` package ✓
 
-`workspace.go` defines `RegisteredWorkspace`, `WorkspaceRegistry`, and their CRUD operations (`RegisterWorkspace`, `FindWorkspaceByName`, `LoadRegistry`, `SaveRegistry`, etc.). These are called from `clone.go`, `copy.go`, `init`, and other commands — they're data access logic living in the presentation layer.
+Created `cli/internal/store/` with canonical `SnapshotMeta` type, typed read/write methods for snapshots, manifests, and blobs, snapshot ID computation, and prefix resolution. Eliminated 3 duplicate `SnapshotMeta` types (config, dag, drift). Config, dag, drift, and conflicts now delegate to store. 34 tests.
 
-Move to `cli/internal/index/` alongside the existing `index.go` which already manages the underlying `index.json` storage.
+### Remaining Cleanups
 
-**Files affected:**
-- `cli/cmd/fst/commands/workspace.go` — extract types and functions
-- `cli/internal/index/index.go` — receive the extracted code
-- All commands that call `RegisterWorkspace`, `LoadRegistry`, etc.
-
-### 2. Split `config/` when it grows further
-
-**Priority: low (coherent today, watch for growth)**
-
-`config/` currently handles project root discovery, config I/O, directory paths, snapshot metadata loading, snapshot ID computation, author resolution, store migration, and merge parent tracking. ~700 lines, all touching `.fst/`.
-
-**Natural split if needed:** `config/` (project config, paths, author) + the new `store/` package absorbs snapshot metadata loading, ID computation/verification, and manifest/blob path resolution.
-
-### 3. Reduce lateral dependencies in the command layer
-
-**Priority: low (cosmetic, resolves itself with the library layer)**
-
-`ui.go` calls into other command-layer functions like `getWorkspaceChanges`. Commands share helpers via `id_resolve.go`, `api_helpers.go`, `util.go`, `init_snapshot.go`. These create lateral coupling within the command layer. Most of this resolves naturally when workflows move to `workspace/`.
+**Reduce lateral dependencies in the command layer** — low priority, resolves naturally as workflows move to `workspace/`.
 
 ## Locking Design
 
