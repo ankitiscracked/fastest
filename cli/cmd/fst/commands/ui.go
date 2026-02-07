@@ -245,7 +245,7 @@ func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 				if strings.HasSuffix(entry.Name(), ".meta.json") {
 					metaPath := filepath.Join(snapshotsDir, entry.Name())
 					if data, err := os.ReadFile(metaPath); err == nil {
-						var meta SnapshotMeta
+						var meta logSnapshotMeta
 						if json.Unmarshal(data, &meta) == nil {
 							if t, err := time.Parse(time.RFC3339, meta.CreatedAt); err == nil {
 								if t.After(latestTime) {

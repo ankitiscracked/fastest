@@ -417,7 +417,7 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 			agentName = info.AuthorName
 		}
 
-		snapshotID, err := createImportedSnapshot(targetRoot, tempWorkDir, cfg, parentSnapshots, info.Subject, info.AuthorDate, agentName)
+		snapshotID, err := createImportedSnapshot(targetRoot, tempWorkDir, cfg, parentSnapshots, info.Subject, info.AuthorDate, info.AuthorName, info.AuthorEmail, agentName)
 		if err != nil {
 			return err
 		}
@@ -527,7 +527,7 @@ func gitCheckoutTree(g gitEnv, commit string) error {
 	return g.run("checkout", "-f", commit, "--", ".")
 }
 
-func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectConfig, parents []string, message, createdAt, agentName string) (string, error) {
+func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectConfig, parents []string, message, createdAt, authorName, authorEmail, agentName string) (string, error) {
 	if message == "" {
 		message = "Imported commit"
 	}
@@ -542,7 +542,10 @@ func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectCo
 		return "", fmt.Errorf("failed to hash manifest: %w", err)
 	}
 
-	snapshotID := generateSnapshotID()
+	if createdAt == "" {
+		createdAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	snapshotID := config.ComputeSnapshotID(manifestHash, parents, authorName, authorEmail, createdAt)
 
 	manifestJSON, err := m.ToJSON()
 	if err != nil {
@@ -583,21 +586,21 @@ func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectCo
 	}
 
 	parentIDsJSON, _ := json.Marshal(parents)
-	if createdAt == "" {
-		createdAt = time.Now().UTC().Format(time.RFC3339)
-	}
 	metadata := fmt.Sprintf(`{
   "id": "%s",
   "workspace_id": "%s",
   "workspace_name": "%s",
   "manifest_hash": "%s",
   "parent_snapshot_ids": %s,
+  "author_name": "%s",
+  "author_email": "%s",
   "message": "%s",
   "agent": "%s",
   "created_at": "%s",
   "files": %d,
   "size": %d
 }`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
+		escapeJSON(authorName), escapeJSON(authorEmail),
 		escapeJSON(message), escapeJSON(agentName), createdAt, m.FileCount(), m.TotalSize())
 
 	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")

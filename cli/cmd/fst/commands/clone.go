@@ -300,6 +300,8 @@ func writeSnapshotFiles(root string, snapshot *api.Snapshot, manifestJSON []byte
 		"workspace_name":      workspaceName,
 		"manifest_hash":       snapshot.ManifestHash,
 		"parent_snapshot_ids": snapshot.ParentSnapshotIDs,
+		"author_name":         snapshot.AuthorName,
+		"author_email":        snapshot.AuthorEmail,
 		"message":             "",
 		"agent":               "",
 		"created_at":          snapshot.CreatedAt,

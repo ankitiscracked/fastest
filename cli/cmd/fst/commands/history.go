@@ -501,14 +501,21 @@ func rewriteChainFrom(root string, chain []string, newFirstParent string, messag
 			return nil, fmt.Errorf("failed to read snapshot %s: %w", origID, err)
 		}
 
-		newID := generateSnapshotID()
-		meta["id"] = newID
+		// Extract fields needed for content-addressed ID computation
+		manifestHash, _ := meta["manifest_hash"].(string)
+		authorName, _ := meta["author_name"].(string)
+		authorEmail, _ := meta["author_email"].(string)
+
+		var newParents []string
 		if prevNewID != "" {
-			meta["parent_snapshot_ids"] = []string{prevNewID}
-		} else {
-			meta["parent_snapshot_ids"] = []string{}
+			newParents = []string{prevNewID}
 		}
-		meta["created_at"] = time.Now().UTC().Format(time.RFC3339)
+		createdAt := time.Now().UTC().Format(time.RFC3339)
+
+		newID := config.ComputeSnapshotID(manifestHash, newParents, authorName, authorEmail, createdAt)
+		meta["id"] = newID
+		meta["parent_snapshot_ids"] = newParents
+		meta["created_at"] = createdAt
 
 		if messageOverrides != nil {
 			if msg, ok := messageOverrides[origID]; ok {

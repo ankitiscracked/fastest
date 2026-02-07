@@ -450,6 +450,8 @@ type Snapshot struct {
 	WorkspaceID       *string  `json:"workspace_id"`
 	ManifestHash      string   `json:"manifest_hash"`
 	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
+	AuthorName        string   `json:"author_name"`
+	AuthorEmail       string   `json:"author_email"`
 	Source            string   `json:"source"`
 	Summary           *string  `json:"summary"`
 	CreatedAt         string   `json:"created_at"`

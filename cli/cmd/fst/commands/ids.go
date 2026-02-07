@@ -1,21 +1,10 @@
 package commands
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 )
-
-func generateSnapshotID() string {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return fmt.Sprintf("snap-%d", time.Now().UnixNano())
-	}
-	return "snap-" + hex.EncodeToString(bytes)
-}
 
 func shortenIDs(ids []string, minLen int) map[string]string {
 	result := make(map[string]string, len(ids))

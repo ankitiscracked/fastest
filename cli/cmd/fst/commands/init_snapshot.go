@@ -13,6 +13,12 @@ import (
 func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced bool) (string, error) {
 	fmt.Println("Creating initial snapshot...")
 
+	// Resolve author identity
+	author, err := resolveAuthor()
+	if err != nil {
+		return "", err
+	}
+
 	m, err := manifest.Generate(root, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to scan files: %w", err)
@@ -23,7 +29,8 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 		return "", fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	snapshotID := generateSnapshotID()
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	snapshotID := config.ComputeSnapshotID(manifestHash, nil, author.Name, author.Email, createdAt)
 
 	// Cache blobs in project store
 	blobDir := config.GetBlobsDirAt(root)
@@ -71,11 +78,15 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
   "workspace_name": "%s",
   "manifest_hash": "%s",
   "parent_snapshot_ids": [],
+  "author_name": "%s",
+  "author_email": "%s",
   "message": "Initial snapshot",
   "created_at": "%s",
   "files": %d,
   "size": %d
-}`, snapshotID, workspaceID, workspaceName, manifestHash, time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+}`, snapshotID, workspaceID, escapeJSON(workspaceName), manifestHash,
+		escapeJSON(author.Name), escapeJSON(author.Email),
+		createdAt, m.FileCount(), m.TotalSize())
 
 	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 		return "", fmt.Errorf("failed to save metadata: %w", err)

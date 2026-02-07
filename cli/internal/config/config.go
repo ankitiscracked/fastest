@@ -147,6 +147,11 @@ func ManifestHashFromSnapshotIDAt(root, snapshotID string) (string, error) {
 	if data, err := os.ReadFile(metaPath); err == nil {
 		var meta SnapshotMeta
 		if err := json.Unmarshal(data, &meta); err == nil && meta.ManifestHash != "" {
+			if IsContentAddressedSnapshotID(snapshotID) {
+				if !VerifySnapshotID(snapshotID, meta.ManifestHash, meta.ParentSnapshotIDs, meta.AuthorName, meta.AuthorEmail, meta.CreatedAt) {
+					return "", fmt.Errorf("snapshot integrity check failed for %s: ID does not match content", snapshotID)
+				}
+			}
 			return meta.ManifestHash, nil
 		}
 	}
@@ -213,10 +218,13 @@ func ResolveSnapshotIDAt(root, snapshotID string) (string, error) {
 
 // SnapshotMeta represents snapshot metadata
 type SnapshotMeta struct {
-	ID           string `json:"id"`
-	WorkspaceID  string `json:"workspace_id"`
-	CreatedAt    string `json:"created_at"`
-	ManifestHash string `json:"manifest_hash"`
+	ID                string   `json:"id"`
+	WorkspaceID       string   `json:"workspace_id"`
+	CreatedAt         string   `json:"created_at"`
+	ManifestHash      string   `json:"manifest_hash"`
+	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
+	AuthorName        string   `json:"author_name"`
+	AuthorEmail       string   `json:"author_email"`
 }
 
 // GetLatestSnapshotID returns the most recent snapshot ID for the current workspace

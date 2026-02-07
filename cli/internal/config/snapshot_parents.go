@@ -7,10 +7,6 @@ import (
 	"path/filepath"
 )
 
-type snapshotParentMeta struct {
-	ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-}
-
 // SnapshotParentIDsAt returns all parent snapshot IDs for a snapshot (multi-parent aware).
 func SnapshotParentIDsAt(root, snapshotID string) ([]string, error) {
 	if snapshotID == "" {
@@ -23,9 +19,15 @@ func SnapshotParentIDsAt(root, snapshotID string) ([]string, error) {
 		return nil, err
 	}
 
-	var meta snapshotParentMeta
+	var meta SnapshotMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
+	}
+
+	if IsContentAddressedSnapshotID(snapshotID) && meta.ManifestHash != "" {
+		if !VerifySnapshotID(snapshotID, meta.ManifestHash, meta.ParentSnapshotIDs, meta.AuthorName, meta.AuthorEmail, meta.CreatedAt) {
+			return nil, fmt.Errorf("snapshot integrity check failed for %s: ID does not match content", snapshotID)
+		}
 	}
 
 	return normalizeParentIDs(meta.ParentSnapshotIDs), nil

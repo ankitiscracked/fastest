@@ -73,6 +73,12 @@ func runSnapshot(message string, agentMessage bool) error {
 		message = entered
 	}
 
+	// Resolve author identity
+	author, err := resolveAuthor()
+	if err != nil {
+		return err
+	}
+
 	fmt.Println("Scanning files...")
 
 	// Generate manifest (without mod times for reproducibility)
@@ -88,9 +94,6 @@ func runSnapshot(message string, agentMessage bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
-
-	// Create a new snapshot ID (history entry)
-	snapshotID := generateSnapshotID()
 
 	// Check if this exact snapshot already exists in local snapshots dir
 	snapshotsDir, err := config.GetSnapshotsDir()
@@ -175,8 +178,11 @@ func runSnapshot(message string, agentMessage bool) error {
 	}
 
 	// Save snapshot metadata
-	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	parents := resolveSnapshotParents(root, cfg)
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	snapshotID := config.ComputeSnapshotID(manifestHash, parents, author.Name, author.Email, createdAt)
+
+	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	parentIDsJSON, _ := json.Marshal(parents)
 	metadata := fmt.Sprintf(`{
   "id": "%s",
@@ -184,13 +190,16 @@ func runSnapshot(message string, agentMessage bool) error {
   "workspace_name": "%s",
   "manifest_hash": "%s",
   "parent_snapshot_ids": %s,
+  "author_name": "%s",
+  "author_email": "%s",
   "message": "%s",
   "agent": "%s",
   "created_at": "%s",
   "files": %d,
   "size": %d
 }`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
-		escapeJSON(message), escapeJSON(agentName), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+		escapeJSON(author.Name), escapeJSON(author.Email),
+		escapeJSON(message), escapeJSON(agentName), createdAt, m.FileCount(), m.TotalSize())
 
 	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 		return fmt.Errorf("failed to save metadata: %w", err)
@@ -338,7 +347,11 @@ func CreateAutoSnapshot(message string) (string, error) {
 		}
 	}
 
-	snapshotID := generateSnapshotID()
+	// Resolve author (non-interactive, use empty if not configured)
+	author, _ := config.LoadAuthor()
+	if author == nil {
+		author = &config.Author{}
+	}
 
 	// Check if snapshot already exists
 	snapshotsDir, err := config.GetSnapshotsDir()
@@ -390,12 +403,15 @@ func CreateAutoSnapshot(message string) (string, error) {
 	}
 
 	// Save metadata
-	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	parentSnapshotID := cfg.CurrentSnapshotID
 	parentIDs := []string{}
 	if parentSnapshotID != "" {
 		parentIDs = append(parentIDs, parentSnapshotID)
 	}
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	snapshotID := config.ComputeSnapshotID(manifestHash, parentIDs, author.Name, author.Email, createdAt)
+
+	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
 	parentIDsJSON, _ := json.Marshal(parentIDs)
 	metadata := fmt.Sprintf(`{
   "id": "%s",
@@ -403,13 +419,16 @@ func CreateAutoSnapshot(message string) (string, error) {
   "workspace_name": "%s",
   "manifest_hash": "%s",
   "parent_snapshot_ids": %s,
+  "author_name": "%s",
+  "author_email": "%s",
   "message": "%s",
   "agent": "",
   "created_at": "%s",
   "files": %d,
   "size": %d
 }`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
-		escapeJSON(message), time.Now().UTC().Format(time.RFC3339), m.FileCount(), m.TotalSize())
+		escapeJSON(author.Name), escapeJSON(author.Email),
+		escapeJSON(message), createdAt, m.FileCount(), m.TotalSize())
 
 	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
 		return "", fmt.Errorf("failed to save metadata: %w", err)
