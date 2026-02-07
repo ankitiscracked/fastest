@@ -196,8 +196,8 @@ func materializeSnapshot(client *api.Client, root string, m *manifest.Manifest) 
 		hashes = append(hashes, f.Hash)
 	}
 
-	blobDir, err := config.GetGlobalBlobDir()
-	if err != nil {
+	blobDir := config.GetBlobsDirAt(root)
+	if err := os.MkdirAll(blobDir, 0755); err != nil {
 		return err
 	}
 

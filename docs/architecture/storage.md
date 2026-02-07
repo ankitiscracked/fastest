@@ -27,16 +27,18 @@ When `fst workspace init` runs, it creates the `.fst/` directory inside the work
 <workspace-root>/
   .fst/
     config.json            # ProjectConfig (project_id, workspace_id, etc.)
-    .gitignore             # Excludes snapshots/ and manifests/ from Git
+    .gitignore             # Excludes snapshots/, manifests/, blobs/ from Git
     snapshots/
       <snap-id>.meta.json  # Snapshot metadata (id, manifest_hash, parents, message)
     manifests/
       <hash>.json          # Full manifest JSON, keyed by SHA-256 of content
+    blobs/
+      <hash>               # Raw file content, keyed by SHA-256
     merge-parents.json     # Temporary: pending merge parent IDs (during merge)
   .fstignore               # Ignore patterns for file scanning
 ```
 
-The `.fst/.gitignore` is auto-created to exclude `snapshots/`, `manifests/`, `*.log`, and `merge-parents.json` from Git tracking.
+The `.fst/.gitignore` is auto-created to exclude `snapshots/`, `manifests/`, `blobs/`, `*.log`, and `merge-parents.json` from Git tracking.
 
 Config constants are defined in `cli/internal/config/config.go`:
 
@@ -44,24 +46,23 @@ Config constants are defined in `cli/internal/config/config.go`:
 - `ConfigFileName = "config.json"`
 - `SnapshotsDirName = "snapshots"`
 - `ManifestsDirName = "manifests"`
+- `BlobsDirName = "blobs"`
 
-## Global blob cache
+## Blob storage
 
-File contents are cached globally so rollback and workspace operations can restore files without re-downloading from cloud.
-
-Location: `~/.cache/fst/blobs/` (respects `XDG_CACHE_HOME`).
+File contents are stored at the project level so rollback and workspace operations can restore files without re-downloading from cloud. When a workspace is under a project (has `fst.json`), blobs are stored in the project-level `.fst/blobs/`. For standalone workspaces, blobs are stored in the workspace-local `.fst/blobs/`.
 
 Each blob is stored as a flat file named by its SHA-256 hash:
 
 ```
-~/.cache/fst/blobs/
+<project-root>/.fst/blobs/
   a3f2b1c4d5e6...   # raw file content
   b7e8f9a0c1d2...
 ```
 
-Blobs are written during `fst snapshot` (caches all current file contents) and during `fst clone` / `fst pull` (caches downloaded blobs). The `fst rollback` command reads from this cache to restore files.
+Blobs are written during `fst snapshot` (caches all current file contents) and during `fst clone` / `fst pull` (caches downloaded blobs). The `fst rollback` command reads from this store to restore files.
 
-Implemented in `config.GetGlobalBlobDir()` which returns `$XDG_CACHE_HOME/fst/blobs/` (default `~/.cache/fst/blobs/`).
+Implemented in `config.GetBlobsDir()` and `config.GetBlobsDirAt()` which follow the same project-level resolution as snapshots and manifests. Orphaned blobs are cleaned up by `fst gc`.
 
 ## Global workspace index
 

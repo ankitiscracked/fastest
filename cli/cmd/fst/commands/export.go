@@ -647,7 +647,7 @@ func agentEmail(agent string) string {
 
 // restoreFilesFromManifest restores all files from a manifest using cached blobs
 func restoreFilesFromManifest(root, configDir string, m *manifest.Manifest) error {
-	blobDir, err := config.GetGlobalBlobDir()
+	blobDir, err := config.GetBlobsDir()
 	if err != nil {
 		return err
 	}

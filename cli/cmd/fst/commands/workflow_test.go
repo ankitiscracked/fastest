@@ -45,7 +45,7 @@ func TestSnapshotCreatesLocalArtifacts(t *testing.T) {
 		t.Fatalf("expected snapshot metadata to be created")
 	}
 
-	blobDir := filepath.Join(cacheDir, "fst", "blobs")
+	blobDir := filepath.Join(root, ".fst", "blobs")
 	entries, err = os.ReadDir(blobDir)
 	if err != nil || len(entries) == 0 {
 		t.Fatalf("expected blob cache to be populated")

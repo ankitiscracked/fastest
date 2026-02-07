@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
@@ -58,6 +59,7 @@ func runGC(dryRun bool) error {
 
 	snapshotsDir := config.GetSnapshotsDirAt(projectRoot)
 	manifestsDir := config.GetManifestsDirAt(projectRoot)
+	blobsDir := config.GetBlobsDirAt(projectRoot)
 
 	// Collect all workspace HEAD and base snapshot IDs as GC roots
 	roots, err := collectGCRoots(projectRoot)
@@ -110,21 +112,56 @@ func runGC(dryRun bool) error {
 		}
 	}
 
-	if len(unreachableIDs) == 0 {
-		fmt.Println("No unreachable snapshots found - nothing to collect.")
+	// Collect all blob hashes referenced by reachable manifests
+	referencedBlobs := make(map[string]struct{})
+	for hash := range reachableManifests {
+		manifestPath := filepath.Join(manifestsDir, hash+".json")
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			continue
+		}
+		m, err := manifest.FromJSON(data)
+		if err != nil {
+			continue
+		}
+		for _, f := range m.FileEntries() {
+			referencedBlobs[f.Hash] = struct{}{}
+		}
+	}
+
+	// Find orphaned blobs
+	var blobsToDelete []string
+	if entries, err := os.ReadDir(blobsDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if _, ok := referencedBlobs[entry.Name()]; !ok {
+				blobsToDelete = append(blobsToDelete, entry.Name())
+			}
+		}
+	}
+
+	if len(unreachableIDs) == 0 && len(blobsToDelete) == 0 {
+		fmt.Println("No unreachable snapshots or orphaned blobs found - nothing to collect.")
 		return nil
 	}
 
 	if dryRun {
-		fmt.Printf("Would delete %d unreachable snapshot(s):\n", len(unreachableIDs))
-		for _, id := range unreachableIDs {
-			fmt.Printf("  %s\n", id)
+		if len(unreachableIDs) > 0 {
+			fmt.Printf("Would delete %d unreachable snapshot(s):\n", len(unreachableIDs))
+			for _, id := range unreachableIDs {
+				fmt.Printf("  %s\n", id)
+			}
 		}
 		if len(manifestsToDelete) > 0 {
 			fmt.Printf("Would delete %d orphaned manifest(s):\n", len(manifestsToDelete))
 			for _, hash := range manifestsToDelete {
 				fmt.Printf("  %s\n", hash)
 			}
+		}
+		if len(blobsToDelete) > 0 {
+			fmt.Printf("Would delete %d orphaned blob(s).\n", len(blobsToDelete))
 		}
 		return nil
 	}
@@ -151,9 +188,23 @@ func runGC(dryRun bool) error {
 		}
 	}
 
+	// Delete orphaned blobs
+	deletedBlobs := 0
+	for _, hash := range blobsToDelete {
+		blobPath := filepath.Join(blobsDir, hash)
+		if err := os.Remove(blobPath); err != nil && !os.IsNotExist(err) {
+			fmt.Printf("Warning: Could not delete blob %s: %v\n", hash, err)
+		} else {
+			deletedBlobs++
+		}
+	}
+
 	fmt.Printf("Deleted %d unreachable snapshot(s)", deletedSnaps)
 	if deletedManifests > 0 {
-		fmt.Printf(" and %d orphaned manifest(s)", deletedManifests)
+		fmt.Printf(", %d orphaned manifest(s)", deletedManifests)
+	}
+	if deletedBlobs > 0 {
+		fmt.Printf(", %d orphaned blob(s)", deletedBlobs)
 	}
 	fmt.Println(".")
 

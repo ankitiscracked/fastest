@@ -168,10 +168,10 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 	})
 	sort.Strings(toDelete)
 
-	// Check blob availability in global cache (files only)
-	blobDir, err := config.GetGlobalBlobDir()
+	// Check blob availability (files only)
+	blobDir, err := config.GetBlobsDir()
 	if err != nil {
-		return fmt.Errorf("failed to get global blob directory: %w", err)
+		return fmt.Errorf("failed to get blob directory: %w", err)
 	}
 	missingBlobs := []string{}
 	for _, f := range toRestore {

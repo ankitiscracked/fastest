@@ -128,10 +128,10 @@ func runSnapshot(message string, agentMessage bool) error {
 		agentName = preferredAgent.Name
 	}
 
-	// Cache blobs (file contents) in global cache for rollback support
-	blobDir, err := config.GetGlobalBlobDir()
+	// Cache blobs (file contents) in project store for rollback support
+	blobDir, err := config.GetBlobsDir()
 	if err != nil {
-		return fmt.Errorf("failed to get global blob directory: %w", err)
+		return fmt.Errorf("failed to get blob directory: %w", err)
 	}
 
 	blobsCached := 0
@@ -357,9 +357,9 @@ func CreateAutoSnapshot(message string) (string, error) {
 	}
 
 	// Cache blobs
-	blobDir, err := config.GetGlobalBlobDir()
+	blobDir, err := config.GetBlobsDir()
 	if err != nil {
-		return "", fmt.Errorf("failed to get global blob directory: %w", err)
+		return "", fmt.Errorf("failed to get blob directory: %w", err)
 	}
 
 	for _, f := range m.FileEntries() {

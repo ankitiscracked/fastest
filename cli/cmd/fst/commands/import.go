@@ -560,9 +560,9 @@ func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectCo
 		}
 	}
 
-	blobDir, err := config.GetGlobalBlobDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get blob directory: %w", err)
+	blobDir := config.GetBlobsDirAt(targetRoot)
+	if err := os.MkdirAll(blobDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create blob directory: %w", err)
 	}
 	for _, f := range m.FileEntries() {
 		blobPath := filepath.Join(blobDir, f.Hash)

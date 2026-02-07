@@ -11,46 +11,13 @@ import (
 	"github.com/anthropics/fastest/cli/internal/ignore"
 )
 
-// Global cache directory name
-const globalCacheDirName = "fst"
-
 const (
 	ConfigDirName    = ".fst"
 	ConfigFileName   = "config.json"
 	SnapshotsDirName = "snapshots"
 	ManifestsDirName = "manifests"
+	BlobsDirName     = "blobs"
 )
-
-// GetGlobalCacheDir returns the global cache directory (~/.cache/fst/)
-// Supports XDG_CACHE_HOME environment variable
-func GetGlobalCacheDir() (string, error) {
-	cacheHome := os.Getenv("XDG_CACHE_HOME")
-	if cacheHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("could not determine home directory: %w", err)
-		}
-		cacheHome = filepath.Join(home, ".cache")
-	}
-	cacheDir := filepath.Join(cacheHome, globalCacheDirName)
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return "", fmt.Errorf("could not create cache directory: %w", err)
-	}
-	return cacheDir, nil
-}
-
-// GetGlobalBlobDir returns the global blob storage directory (~/.cache/fst/blobs/)
-func GetGlobalBlobDir() (string, error) {
-	cacheDir, err := GetGlobalCacheDir()
-	if err != nil {
-		return "", err
-	}
-	blobDir := filepath.Join(cacheDir, "blobs")
-	if err := os.MkdirAll(blobDir, 0755); err != nil {
-		return "", fmt.Errorf("could not create blob directory: %w", err)
-	}
-	return blobDir, nil
-}
 
 // GetGlobalConfigDir returns the global config directory (~/.config/fst/)
 // Supports XDG_CONFIG_HOME environment variable
@@ -63,7 +30,7 @@ func GetGlobalConfigDir() (string, error) {
 		}
 		configHome = filepath.Join(home, ".config")
 	}
-	configDir := filepath.Join(configHome, globalCacheDirName)
+	configDir := filepath.Join(configHome, "fst")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return "", fmt.Errorf("could not create config directory: %w", err)
 	}
@@ -118,6 +85,30 @@ func GetManifestsDirAt(root string) string {
 	return filepath.Join(root, ConfigDirName, ManifestsDirName)
 }
 
+// GetBlobsDir returns the blobs directory for the current workspace.
+// If the workspace is under a project (fst.json), returns the shared project-level directory.
+func GetBlobsDir() (string, error) {
+	root, err := FindProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	blobsDir := GetBlobsDirAt(root)
+	if err := os.MkdirAll(blobsDir, 0755); err != nil {
+		return "", fmt.Errorf("could not create blobs directory: %w", err)
+	}
+	return blobsDir, nil
+}
+
+// GetBlobsDirAt returns the blobs directory for a specific workspace root.
+// If the workspace is under a project (fst.json), returns the shared project-level directory.
+// For standalone workspaces, returns the workspace-local directory.
+func GetBlobsDirAt(root string) string {
+	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+		return filepath.Join(projectRoot, ConfigDirName, BlobsDirName)
+	}
+	return filepath.Join(root, ConfigDirName, BlobsDirName)
+}
+
 // GetWorkspaceLocalSnapshotsDirAt returns the workspace-local snapshots directory,
 // bypassing the project-level shared store. Used for migration.
 func GetWorkspaceLocalSnapshotsDirAt(root string) string {
@@ -128,6 +119,12 @@ func GetWorkspaceLocalSnapshotsDirAt(root string) string {
 // bypassing the project-level shared store. Used for migration.
 func GetWorkspaceLocalManifestsDirAt(root string) string {
 	return filepath.Join(root, ConfigDirName, ManifestsDirName)
+}
+
+// GetWorkspaceLocalBlobsDirAt returns the workspace-local blobs directory,
+// bypassing the project-level shared store. Used for migration.
+func GetWorkspaceLocalBlobsDirAt(root string) string {
+	return filepath.Join(root, ConfigDirName, BlobsDirName)
 }
 
 // ManifestHashFromSnapshotID resolves a snapshot ID to its manifest hash using local metadata.
@@ -513,7 +510,7 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 	}
 
 	// If under a project, ensure the shared store exists at the project level
-	// and skip creating workspace-local snapshot/manifest dirs.
+	// and skip creating workspace-local snapshot/manifest/blob dirs.
 	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
 		sharedConfigDir := filepath.Join(projectRoot, ConfigDirName)
 		if err := os.MkdirAll(filepath.Join(sharedConfigDir, SnapshotsDirName), 0755); err != nil {
@@ -522,14 +519,17 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 		if err := os.MkdirAll(filepath.Join(sharedConfigDir, ManifestsDirName), 0755); err != nil {
 			return fmt.Errorf("failed to create shared manifests directory: %w", err)
 		}
+		if err := os.MkdirAll(filepath.Join(sharedConfigDir, BlobsDirName), 0755); err != nil {
+			return fmt.Errorf("failed to create shared blobs directory: %w", err)
+		}
 		// Write .gitignore for the project-level .fst/ if not already present
 		gitignorePath := filepath.Join(sharedConfigDir, ".gitignore")
 		if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
-			gitignore := "# Fastest shared data\nsnapshots/\nmanifests/\n*.log\n"
+			gitignore := "# Fastest shared data\nsnapshots/\nmanifests/\nblobs/\n*.log\n"
 			_ = os.WriteFile(gitignorePath, []byte(gitignore), 0644)
 		}
 	} else {
-		// Standalone workspace: create local snapshots and manifests dirs
+		// Standalone workspace: create local snapshots, manifests, and blobs dirs
 		snapshotsDir := filepath.Join(configDir, SnapshotsDirName)
 		if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
 			return fmt.Errorf("failed to create snapshots directory: %w", err)
@@ -538,6 +538,11 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 		manifestsDir := filepath.Join(configDir, ManifestsDirName)
 		if err := os.MkdirAll(manifestsDir, 0755); err != nil {
 			return fmt.Errorf("failed to create manifests directory: %w", err)
+		}
+
+		blobsDir := filepath.Join(configDir, BlobsDirName)
+		if err := os.MkdirAll(blobsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create blobs directory: %w", err)
 		}
 	}
 
@@ -564,6 +569,7 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 	gitignore := `# Fastest local data
 snapshots/
 manifests/
+blobs/
 *.log
 merge-parents.json
 `
@@ -631,6 +637,8 @@ func MigrateToSharedStore(workspaceRoot string) error {
 	sharedSnaps := filepath.Join(projectRoot, ConfigDirName, SnapshotsDirName)
 	localManifests := GetWorkspaceLocalManifestsDirAt(workspaceRoot)
 	sharedManifests := filepath.Join(projectRoot, ConfigDirName, ManifestsDirName)
+	localBlobs := GetWorkspaceLocalBlobsDirAt(workspaceRoot)
+	sharedBlobs := filepath.Join(projectRoot, ConfigDirName, BlobsDirName)
 
 	if err := os.MkdirAll(sharedSnaps, 0755); err != nil {
 		return fmt.Errorf("failed to create shared snapshots directory: %w", err)
@@ -638,9 +646,13 @@ func MigrateToSharedStore(workspaceRoot string) error {
 	if err := os.MkdirAll(sharedManifests, 0755); err != nil {
 		return fmt.Errorf("failed to create shared manifests directory: %w", err)
 	}
+	if err := os.MkdirAll(sharedBlobs, 0755); err != nil {
+		return fmt.Errorf("failed to create shared blobs directory: %w", err)
+	}
 
 	migrateFiles(localSnaps, sharedSnaps)
 	migrateFiles(localManifests, sharedManifests)
+	migrateFiles(localBlobs, sharedBlobs)
 	return nil
 }
 

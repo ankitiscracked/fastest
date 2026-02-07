@@ -761,8 +761,8 @@ func readSnapshotContent(root, relPath, expectedHash string, mode uint32) ([]byt
 		return nil, 0, os.ErrNotExist
 	}
 
-	// Prefer global blob cache.
-	if blobDir, err := config.GetGlobalBlobDir(); err == nil {
+	// Prefer project blob store.
+	if blobDir, err := config.GetBlobsDir(); err == nil {
 		blobPath := filepath.Join(blobDir, expectedHash)
 		if data, err := os.ReadFile(blobPath); err == nil {
 			return data, fileModeOrDefault(mode, 0644), nil
@@ -836,10 +836,10 @@ func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction
 		return fmt.Errorf("failed to read source snapshot: %w", err)
 	}
 
-	// Try to get base content from global blob cache
+	// Try to get base content from project blob store
 	var baseContent []byte
 	if action.baseHash != "" {
-		blobDir, err := config.GetGlobalBlobDir()
+		blobDir, err := config.GetBlobsDir()
 		if err == nil {
 			blobPath := filepath.Join(blobDir, action.baseHash)
 			baseContent, _ = os.ReadFile(blobPath) // Ignore error, may not exist

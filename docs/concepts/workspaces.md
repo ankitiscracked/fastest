@@ -86,12 +86,12 @@ Implementation: `cli/cmd/fst/commands/workspace.go` (`runSetMain`), `cli/interna
 
 Implementation: `cli/cmd/fst/commands/workspace.go` (`runWorkspaceStatus`, `runWorkspaces`).
 
-## Global Cache
+## Storage
 
-- Blob cache: `~/.cache/fst/blobs/` (respects `XDG_CACHE_HOME`)
+- Blobs: `.fst/blobs/` (project-scoped, shared across workspaces under the same project)
 - Config/index: `~/.config/fst/` (respects `XDG_CONFIG_HOME`)
 
-Implementation: `cli/internal/config/config.go` (`GetGlobalBlobDir`, `GetGlobalCacheDir`, `GetGlobalConfigDir`).
+Implementation: `cli/internal/config/config.go` (`GetBlobsDir`, `GetBlobsDirAt`, `GetGlobalConfigDir`).
 
 ## Related Docs
 

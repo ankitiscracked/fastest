@@ -25,10 +25,10 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 
 	snapshotID := generateSnapshotID()
 
-	// Cache blobs in global cache
-	blobDir, err := config.GetGlobalBlobDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get global blob directory: %w", err)
+	// Cache blobs in project store
+	blobDir := config.GetBlobsDirAt(root)
+	if err := os.MkdirAll(blobDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create blob directory: %w", err)
 	}
 	for _, f := range m.FileEntries() {
 		blobPath := filepath.Join(blobDir, f.Hash)

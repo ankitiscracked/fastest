@@ -49,9 +49,9 @@ type FileBlobAccessor struct {
 	cacheDir string
 }
 
-// NewFileBlobAccessor creates a blob accessor for the global cache
+// NewFileBlobAccessor creates a blob accessor for the project blob store
 func NewFileBlobAccessor() (*FileBlobAccessor, error) {
-	blobDir, err := config.GetGlobalBlobDir()
+	blobDir, err := config.GetBlobsDir()
 	if err != nil {
 		return nil, err
 	}
