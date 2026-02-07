@@ -458,6 +458,7 @@ Displays workspace name, ID, project, base snapshot, and mode.`,
 	cmd.AddCommand(newWorkspaceCreateCmd())
 	cmd.AddCommand(newCopyCmd())
 	cmd.AddCommand(newSetMainCmd())
+	cmd.AddCommand(newCloneCmd())
 
 	return cmd
 }

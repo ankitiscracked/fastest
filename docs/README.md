@@ -17,7 +17,7 @@ fst workspace init my-project
 fst snapshot -m "Initial version"
 
 # Create a parallel workspace (from an existing project)
-fst clone my-project --to my-project-experiment
+fst workspace clone my-project --to my-project-experiment
 
 # Check what changed since last snapshot
 fst status
@@ -59,7 +59,7 @@ fst git import <repo-path>
 | `fst merge` | Three-way merge from another workspace |
 | `fst diff` | Line-level content differences between workspaces |
 | `fst rollback` | Restore files from a previous snapshot |
-| `fst clone` | Clone a project or snapshot to a new workspace |
+| `fst workspace clone` | Clone a project or snapshot to a new workspace |
 | `fst sync` | Sync local and remote workspace state |
 | `fst pull` | Pull latest snapshot from cloud |
 | `fst login` / `fst logout` | Authenticate with Fastest cloud |

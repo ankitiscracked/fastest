@@ -15,7 +15,7 @@ func TestVersionCommandRuns(t *testing.T) {
 
 func TestCloneRequiresArg(t *testing.T) {
 	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"clone"})
+	cmd.SetArgs([]string{"workspace", "clone"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatalf("expected clone without args to fail")
 	}

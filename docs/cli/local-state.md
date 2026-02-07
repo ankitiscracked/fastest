@@ -103,7 +103,7 @@ Respects `XDG_CACHE_HOME`. Contains content-addressable blob storage.
     <sha256-hash>   # File contents keyed by SHA-256 hash
 ```
 
-Blobs are populated during `fst snapshot` and read during `fst rollback` and `fst clone`. Each blob is the raw file content stored under its SHA-256 digest.
+Blobs are populated during `fst snapshot` and read during `fst rollback` and `fst workspace clone`. Each blob is the raw file content stored under its SHA-256 digest.
 
 ## `.fstignore`
 

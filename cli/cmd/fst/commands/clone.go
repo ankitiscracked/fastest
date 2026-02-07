@@ -16,10 +16,6 @@ import (
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
-func init() {
-	register(func(root *cobra.Command) { root.AddCommand(newCloneCmd()) })
-}
-
 func newCloneCmd() *cobra.Command {
 	var targetDir string
 

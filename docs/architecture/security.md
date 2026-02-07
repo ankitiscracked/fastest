@@ -41,4 +41,4 @@
 
 ## No remote code execution from CLI
 
-The CLI does not download or execute code from the API. The `fst clone` and `fst pull` commands download file blobs (raw content) and write them to the filesystem, but never interpret them as executable instructions. The `.fstignore` file is read from the local workspace, not from the cloud.
+The CLI does not download or execute code from the API. The `fst workspace clone` and `fst pull` commands download file blobs (raw content) and write them to the filesystem, but never interpret them as executable instructions. The `.fstignore` file is read from the local workspace, not from the cloud.

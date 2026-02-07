@@ -62,7 +62,7 @@ Each blob is stored as a flat file named by its SHA-256 hash:
   b7e8f9a0c1d2...
 ```
 
-Blobs are written during `fst snapshot` (caches all current file contents) and during `fst clone` / `fst pull` (caches downloaded blobs). The `fst rollback` command reads from this store to restore files.
+Blobs are written during `fst snapshot` (caches all current file contents) and during `fst workspace clone` / `fst pull` (caches downloaded blobs). The `fst rollback` command reads from this store to restore files.
 
 Implemented in `config.GetBlobsDir()` and `config.GetBlobsDirAt()` which follow the same project-level resolution as snapshots and manifests. Orphaned blobs are cleaned up by `fst gc`.
 

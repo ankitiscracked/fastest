@@ -32,12 +32,12 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst workspace create` | | Create a new workspace (cloud + local) | `workspace.go` |
 | `fst workspace copy` | | Copy current workspace to a new directory | `copy.go` |
 | `fst workspace set-main` | | Set this workspace as the project's main workspace | `workspace.go` |
-| `fst clone <project\|snapshot>` | | Clone a project/snapshot from cloud | `clone.go` |
+| `fst workspace clone <project\|snapshot>` | | Clone a project/snapshot from cloud | `clone.go` |
 
 **`workspaces` flags:** `--all, -a` (show all, not just current project)
 **`workspace init` flags:** `--workspace, -w`, `--no-snapshot`, `--force`
 **`workspace copy` flags:** `--name, -n` (required), `--to, -t`
-**`clone` flags:** `--to, -t`
+**`workspace clone` flags:** `--to, -t`
 
 ## Snapshots
 
@@ -123,11 +123,14 @@ Git export stores commit-to-snapshot mapping in `.fst/export/git-map.json`. GitH
 |---------|-------------|--------|
 | `fst config` | Interactive author identity setup (project-level) | `cmd_config.go` |
 | `fst config --global` | Interactive author identity setup (global) | `cmd_config.go` |
-| `fst config name "John Doe"` | Set author name (project-level) | `cmd_config.go` |
-| `fst config email "john@example.com"` | Set author email (project-level) | `cmd_config.go` |
-| `fst config --show` | Show resolved author identity | `cmd_config.go` |
+| `fst config set name "John Doe"` | Set author name (project-level) | `cmd_config.go` |
+| `fst config set email "john@example.com"` | Set author email (project-level) | `cmd_config.go` |
+| `fst config set --global name "John Doe"` | Set author name (global) | `cmd_config.go` |
+| `fst config get` | Show resolved author identity | `cmd_config.go` |
+| `fst config get name` | Show a specific field | `cmd_config.go` |
 
-**`config` flags:** `--global` (use global instead of project-level), `--show` (display resolved author)
+**`config` flags:** `--global` (use global instead of project-level)
+**`config set` flags:** `--global` (set globally instead of project-level)
 
 Author identity is embedded in snapshot metadata and used to compute content-addressed snapshot IDs. Project-level config (`.fst/author.json`) overrides global config (`~/.config/fst/author.json`). If no author is configured when creating a snapshot interactively, a prompt is shown.
 

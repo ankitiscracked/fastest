@@ -17,42 +17,108 @@ func init() {
 
 func newConfigCmd() *cobra.Command {
 	var global bool
-	var show bool
 
 	cmd := &cobra.Command{
-		Use:   "config [key] [value]",
+		Use:   "config",
 		Short: "Configure author identity",
 		Long: `Configure your author identity (name and email) for snapshots.
 
 With no arguments, opens an interactive form.
-With key and value, sets a specific field.
+Use 'set' to set a specific field, 'get' to show fields.
 
 Examples:
   fst config                              # interactive form (project-level)
   fst config --global                     # interactive form (global)
-  fst config name "John Doe"             # set project-level name
-  fst config email "john@example.com"    # set project-level email
-  fst config --global name "John Doe"    # set global name
-  fst config --show                       # show resolved author`,
-		Args: cobra.MaximumNArgs(2),
+  fst config set name "John Doe"         # set project-level name
+  fst config set email "john@example.com" # set project-level email
+  fst config set --global name "John Doe" # set global name
+  fst config get                          # show resolved author
+  fst config get name                     # show specific field`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if show {
-				return runConfigShow()
-			}
-			if len(args) == 0 {
-				return runConfigInteractive(global)
-			}
-			if len(args) == 2 {
-				return runConfigSet(args[0], args[1], global)
-			}
-			return fmt.Errorf("usage: fst config [key] [value] or fst config --show")
+			return runConfigInteractive(global)
 		},
 	}
 
 	cmd.Flags().BoolVar(&global, "global", false, "Set globally (~/.config/fst/)")
-	cmd.Flags().BoolVar(&show, "show", false, "Show resolved author identity")
+	cmd.AddCommand(newConfigSetCmd())
+	cmd.AddCommand(newConfigGetCmd())
 
 	return cmd
+}
+
+func newConfigSetCmd() *cobra.Command {
+	var global bool
+
+	cmd := &cobra.Command{
+		Use:   "set <key> <value>",
+		Short: "Set a config field",
+		Long: `Set a specific author identity field.
+
+Valid keys: name, email
+
+Examples:
+  fst config set name "John Doe"
+  fst config set email "john@example.com"
+  fst config set --global name "John Doe"`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runConfigSet(args[0], args[1], global)
+		},
+	}
+
+	cmd.Flags().BoolVar(&global, "global", false, "Set globally (~/.config/fst/)")
+
+	return cmd
+}
+
+func newConfigGetCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get [key]",
+		Short: "Show config fields",
+		Long: `Show resolved author identity fields.
+
+Without a key, shows all fields. With a key, shows that specific field.
+
+Valid keys: name, email
+
+Examples:
+  fst config get          # show all
+  fst config get name     # show name only`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return runConfigShow()
+			}
+			return runConfigGetField(args[0])
+		},
+	}
+
+	return cmd
+}
+
+func runConfigGetField(key string) error {
+	author, err := config.LoadAuthor()
+	if err != nil {
+		return err
+	}
+	switch key {
+	case "name":
+		if author.Name == "" {
+			fmt.Println("(not set)")
+		} else {
+			fmt.Println(author.Name)
+		}
+	case "email":
+		if author.Email == "" {
+			fmt.Println("(not set)")
+		} else {
+			fmt.Println(author.Email)
+		}
+	default:
+		return fmt.Errorf("unknown config key: %s (valid keys: name, email)", key)
+	}
+	return nil
 }
 
 func runConfigShow() error {
