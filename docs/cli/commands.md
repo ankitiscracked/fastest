@@ -73,7 +73,6 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst diff [workspace] [file...]` | Line-by-line content diff between workspaces | `diff.go` |
 | `fst pull [workspace]` | Pull changes from another workspace | `pull.go` |
 | `fst sync` | Sync with the upstream workspace | `sync.go` |
-| `fst overlaps` | Detect files modified by multiple workspaces | `overlaps.go` |
 | `fst status` | Show workspace status with drift summary | `status.go` |
 | `fst info` | Show workspace or project info | `info.go` |
 
@@ -82,7 +81,6 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 **`diff` flags:** `--context, -C` (default 3), `--no-color`, `--names-only`
 **`pull` flags:** `--snapshot`, `--hard`, `--manual`, `--theirs`, `--ours`, `--dry-run`, `--agent-summary`
 **`sync` flags:** `--manual`, `--theirs`, `--ours`, `--files`, `--dry-run`, `--agent-summary`, `--no-snapshot`
-**`overlaps` flags:** `--json`, `--all, -a`
 **`status` flags:** `--json`
 **`info` flags:** `--json`, `--list`
 

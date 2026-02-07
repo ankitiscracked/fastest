@@ -16,7 +16,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/index"
+	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
 func init() {
@@ -1025,4 +1027,46 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// getWorkspaceChanges computes drift from the base snapshot for a workspace.
+func getWorkspaceChanges(ws RegisteredWorkspace) (*drift.Report, error) {
+	wsCfg, err := config.LoadAt(ws.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	if wsCfg.BaseSnapshotID == "" {
+		return &drift.Report{}, nil
+	}
+
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(ws.Path, wsCfg.BaseSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	manifestsDir := config.GetManifestsDirAt(ws.Path)
+	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	baseManifest, err := manifest.FromJSON(manifestData)
+	if err != nil {
+		return nil, err
+	}
+
+	currentManifest, err := manifest.GenerateWithCache(ws.Path, config.GetStatCachePath(ws.Path))
+	if err != nil {
+		return nil, err
+	}
+
+	added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
+	return &drift.Report{
+		BaseSnapshotID: wsCfg.BaseSnapshotID,
+		FilesAdded:     added,
+		FilesModified:  modified,
+		FilesDeleted:   deleted,
+	}, nil
 }
