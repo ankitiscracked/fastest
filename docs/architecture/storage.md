@@ -35,11 +35,12 @@ When `fst workspace init` runs, it creates the `.fst/` directory inside the work
       <hash>.json          # Full manifest JSON, keyed by SHA-256 of content
     blobs/
       <hash>               # Raw file content, keyed by SHA-256
+    stat-cache.json        # Stat cache for fast manifest generation (mtime/size/mode/inode)
     merge-parents.json     # Temporary: pending merge parent IDs (during merge)
   .fstignore               # Ignore patterns for file scanning
 ```
 
-The `.fst/.gitignore` is auto-created to exclude `snapshots/`, `manifests/`, `blobs/`, `*.log`, and `merge-parents.json` from Git tracking.
+The `.fst/.gitignore` is auto-created to exclude `snapshots/`, `manifests/`, `blobs/`, `*.log`, `merge-parents.json`, and `stat-cache.json` from Git tracking.
 
 Config constants are defined in `cli/internal/config/config.go`:
 
@@ -113,6 +114,18 @@ The API routes in `api/src/routes/blobs.ts` handle:
 6. **Storage stats** (`GET /v1/blobs/stats`) -- counts and sizes for blobs and manifests
 
 The upload flow (implemented in `snapshot.go` `uploadSnapshotToCloud`) batches blob existence checks and presigned URL requests in groups of 100 to avoid oversized API calls.
+
+## Stat cache
+
+Manifest generation requires walking the directory tree and SHA-256 hashing every file, which is expensive for large workspaces. The stat cache (`.fst/stat-cache.json`) accelerates read-path operations (`fst status`, `fst drift`, `fst diff`, etc.) by skipping re-hashing for files whose stat metadata hasn't changed.
+
+Each cache entry records `(mtime_nano, size, mode, inode, hash)` for a file. On lookup, if all four stat fields match the current file, the cached hash is returned. The algorithm mirrors Git's index stat cache, including racily-clean detection: if a file's mtime is >= the cache's `written_at` timestamp, the file is re-hashed to avoid missing modifications that occurred in the same timestamp quantum as the cache write.
+
+The cache is populated after snapshot creation (`fst snapshot`) so that subsequent status checks are near-instant. It is workspace-local (not shared at project level) and excluded from Git via `.gitignore`. Missing or corrupt cache files are silently ignored — the system falls back to full hashing.
+
+Snapshot creation always does full hashing regardless of the cache, ensuring correctness on the write path.
+
+Implementation: `cli/internal/manifest/statcache.go` (`GenerateWithCache`, `BuildStatCacheFromManifest`, `LoadStatCache`).
 
 ## Ignore patterns
 

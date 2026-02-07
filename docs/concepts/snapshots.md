@@ -83,14 +83,15 @@ Snapshot metadata is loaded from either workspace's `.fst/snapshots/` directory 
 `fst snapshot` (implemented in `cli/cmd/fst/commands/snapshot.go`):
 
 1. Resolves the author identity (project-level > global > interactive prompt)
-2. Generates a manifest of the current filesystem (respecting `.fstignore`)
-3. Computes the manifest's SHA-256 content hash
-4. Computes the content-addressed snapshot ID from identity fields
-5. Caches all file blobs in the project-level blob store (`.fst/blobs/`)
-6. Saves the manifest JSON to `.fst/manifests/{hash}.json`
-7. Writes snapshot metadata to `.fst/snapshots/{id}.meta.json`
-8. Updates `current_snapshot_id` in config
-9. Clears any pending merge parents
+2. Generates a manifest of the current filesystem (respecting `.fstignore`), hashing every file with SHA-256
+3. Populates the stat cache (`.fst/stat-cache.json`) so subsequent status/drift checks can skip rehashing unchanged files
+4. Computes the manifest's SHA-256 content hash
+5. Computes the content-addressed snapshot ID from identity fields
+6. Caches all file blobs in the project-level blob store (`.fst/blobs/`)
+7. Saves the manifest JSON to `.fst/manifests/{hash}.json`
+8. Writes snapshot metadata to `.fst/snapshots/{id}.meta.json`
+9. Updates `current_snapshot_id` in config
+10. Clears any pending merge parents
 
 Options:
 - `--message` / `-m`: Required description for the snapshot

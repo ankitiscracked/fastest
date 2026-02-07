@@ -14,6 +14,7 @@ Created by `fst workspace init` or `fst project init` in the workspace root.
     <id>.meta.json  # SnapshotMeta: ID, ManifestHash, Parents, Author, CreatedAt, Message
   manifests/        # Manifest files (file tree hashes)
     <hash>.json     # Manifest: map of relative paths to content hashes
+  stat-cache.json   # Stat cache for accelerating manifest generation
   export/           # Git export state (created by `fst git export`)
     git-map.json    # Snapshot ID <-> git commit SHA mapping
   .gitignore        # Auto-generated, ignores .fst internals
