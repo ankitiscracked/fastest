@@ -15,6 +15,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func init() {
@@ -128,7 +129,7 @@ func runDrift(target string, jsonOutput, generateSummary, noDirty bool) error {
 	}
 
 	// Find common ancestor via DAG traversal
-	mergeBaseID, err := dag.GetMergeBase(root, otherRoot, ourHead, theirHead)
+	mergeBaseID, err := dag.GetMergeBase(store.OpenFromWorkspace(root), ourHead, theirHead)
 	if err != nil {
 		return fmt.Errorf("could not find common ancestor: %w\nBoth workspaces need shared snapshot history.", err)
 	}

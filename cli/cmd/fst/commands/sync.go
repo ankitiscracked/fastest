@@ -176,7 +176,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 	}
 
 	if dryRun {
-		printMergePlan(mergeActions)
+		printCloudMergePlan(mergeActions)
 		if dryRunSummary && len(mergeActions.conflicts) > 0 {
 			preferredAgent, err := agent.GetPreferredAgent()
 			if err == nil {

@@ -234,7 +234,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 	}
 
 	if dryRun {
-		printMergePlan(mergeActions)
+		printCloudMergePlan(mergeActions)
 		if dryRunSummary && len(mergeActions.conflicts) > 0 {
 			preferredAgent, err := agent.GetPreferredAgent()
 			if err == nil {
