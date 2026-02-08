@@ -124,6 +124,9 @@ func (ws *Workspace) Snapshot(opts SnapshotOpts) (*SnapshotResult, error) {
 		return nil, fmt.Errorf("failed to update workspace config: %w", err)
 	}
 
+	// Update project-level workspace registry (non-fatal)
+	_ = ws.store.UpdateWorkspaceHead(ws.cfg.WorkspaceID, snapshotID)
+
 	return &SnapshotResult{
 		SnapshotID:   snapshotID,
 		ManifestHash: manifestHash,

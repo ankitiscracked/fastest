@@ -39,6 +39,16 @@ func OpenAt(root string) (*Workspace, error) {
 
 	s := store.OpenFromWorkspace(root)
 
+	// Register in project-level workspace registry (lazy migration).
+	// Non-fatal — the registry is advisory; config.json remains canonical.
+	_ = s.RegisterWorkspace(store.WorkspaceInfo{
+		WorkspaceID:       cfg.WorkspaceID,
+		WorkspaceName:     cfg.WorkspaceName,
+		Path:              root,
+		CurrentSnapshotID: cfg.CurrentSnapshotID,
+		BaseSnapshotID:    cfg.BaseSnapshotID,
+	})
+
 	return &Workspace{
 		root:  root,
 		cfg:   cfg,
