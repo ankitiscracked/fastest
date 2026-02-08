@@ -5,21 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-const (
-	registryFileName       = "workspaces.json"
-	currentRegistryVersion = 1
-)
-
-// WorkspaceRegistry holds the project-level workspace registry.
-// Stored in .fst/workspaces.json alongside snapshots, manifests, and blobs.
-type WorkspaceRegistry struct {
-	Version    int             `json:"version"`
-	Workspaces []WorkspaceInfo `json:"workspaces"`
-}
+const workspacesDirName = "workspaces"
 
 // WorkspaceInfo describes a workspace registered in the project.
+// Each workspace is stored as a separate file under .fst/workspaces/<id>.json,
+// so concurrent updates from different workspaces never conflict.
 type WorkspaceInfo struct {
 	WorkspaceID       string `json:"workspace_id"`
 	WorkspaceName     string `json:"workspace_name"`
@@ -29,105 +22,103 @@ type WorkspaceInfo struct {
 	CreatedAt         string `json:"created_at,omitempty"`
 }
 
-func (s *Store) registryPath() string {
-	return filepath.Join(s.root, configDirName, registryFileName)
+func (s *Store) workspacesDir() string {
+	return filepath.Join(s.root, configDirName, workspacesDirName)
 }
 
-// LoadWorkspaceRegistry reads the project-level workspace registry.
-// Returns an empty registry if the file doesn't exist.
-func (s *Store) LoadWorkspaceRegistry() (*WorkspaceRegistry, error) {
-	data, err := os.ReadFile(s.registryPath())
+func (s *Store) workspacePath(id string) string {
+	return filepath.Join(s.workspacesDir(), id+".json")
+}
+
+// loadWorkspaceInfo reads a single workspace file.
+func (s *Store) loadWorkspaceInfo(id string) (*WorkspaceInfo, error) {
+	data, err := os.ReadFile(s.workspacePath(id))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &WorkspaceRegistry{Version: currentRegistryVersion}, nil
-		}
 		return nil, err
 	}
-	var reg WorkspaceRegistry
-	if err := json.Unmarshal(data, &reg); err != nil {
+	var info WorkspaceInfo
+	if err := json.Unmarshal(data, &info); err != nil {
 		return nil, err
 	}
-	if reg.Version == 0 {
-		reg.Version = currentRegistryVersion
-	}
-	return &reg, nil
+	return &info, nil
 }
 
-// SaveWorkspaceRegistry writes the project-level workspace registry.
-func (s *Store) SaveWorkspaceRegistry(reg *WorkspaceRegistry) error {
-	if reg.Version == 0 {
-		reg.Version = currentRegistryVersion
-	}
-	dir := filepath.Join(s.root, configDirName)
+// saveWorkspaceInfo writes a single workspace file.
+func (s *Store) saveWorkspaceInfo(info *WorkspaceInfo) error {
+	dir := s.workspacesDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(reg, "", "  ")
+	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.registryPath(), data, 0644)
+	return os.WriteFile(s.workspacePath(info.WorkspaceID), data, 0644)
 }
 
 // RegisterWorkspace upserts a workspace entry by workspace ID.
 // Existing fields are preserved if the new value is empty.
 func (s *Store) RegisterWorkspace(info WorkspaceInfo) error {
-	reg, err := s.LoadWorkspaceRegistry()
+	existing, err := s.loadWorkspaceInfo(info.WorkspaceID)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return s.saveWorkspaceInfo(&info)
+		}
 		return err
 	}
-	updated := false
-	for i := range reg.Workspaces {
-		if reg.Workspaces[i].WorkspaceID == info.WorkspaceID {
-			if info.WorkspaceName != "" {
-				reg.Workspaces[i].WorkspaceName = info.WorkspaceName
-			}
-			if info.Path != "" {
-				reg.Workspaces[i].Path = info.Path
-			}
-			if info.CurrentSnapshotID != "" {
-				reg.Workspaces[i].CurrentSnapshotID = info.CurrentSnapshotID
-			}
-			if info.BaseSnapshotID != "" {
-				reg.Workspaces[i].BaseSnapshotID = info.BaseSnapshotID
-			}
-			if info.CreatedAt != "" {
-				reg.Workspaces[i].CreatedAt = info.CreatedAt
-			}
-			updated = true
-			break
-		}
+
+	// Merge: only overwrite non-empty fields
+	if info.WorkspaceName != "" {
+		existing.WorkspaceName = info.WorkspaceName
 	}
-	if !updated {
-		reg.Workspaces = append(reg.Workspaces, info)
+	if info.Path != "" {
+		existing.Path = info.Path
 	}
-	return s.SaveWorkspaceRegistry(reg)
+	if info.CurrentSnapshotID != "" {
+		existing.CurrentSnapshotID = info.CurrentSnapshotID
+	}
+	if info.BaseSnapshotID != "" {
+		existing.BaseSnapshotID = info.BaseSnapshotID
+	}
+	if info.CreatedAt != "" {
+		existing.CreatedAt = info.CreatedAt
+	}
+	return s.saveWorkspaceInfo(existing)
 }
 
 // UpdateWorkspaceHead sets the CurrentSnapshotID for a workspace.
 func (s *Store) UpdateWorkspaceHead(workspaceID, snapshotID string) error {
-	reg, err := s.LoadWorkspaceRegistry()
+	existing, err := s.loadWorkspaceInfo(workspaceID)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("workspace %s not found in registry", workspaceID)
+		}
 		return err
 	}
-	for i := range reg.Workspaces {
-		if reg.Workspaces[i].WorkspaceID == workspaceID {
-			reg.Workspaces[i].CurrentSnapshotID = snapshotID
-			return s.SaveWorkspaceRegistry(reg)
-		}
-	}
-	return fmt.Errorf("workspace %s not found in registry", workspaceID)
+	existing.CurrentSnapshotID = snapshotID
+	return s.saveWorkspaceInfo(existing)
 }
 
 // FindWorkspaceByName returns the workspace with the given name, or error if not found.
 func (s *Store) FindWorkspaceByName(name string) (*WorkspaceInfo, error) {
-	reg, err := s.LoadWorkspaceRegistry()
+	entries, err := os.ReadDir(s.workspacesDir())
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("workspace '%s' not found", name)
+		}
 		return nil, err
 	}
-	for i := range reg.Workspaces {
-		if reg.Workspaces[i].WorkspaceName == name {
-			return &reg.Workspaces[i], nil
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		info, err := s.loadWorkspaceInfo(id)
+		if err != nil {
+			continue
+		}
+		if info.WorkspaceName == name {
+			return info, nil
 		}
 	}
 	return nil, fmt.Errorf("workspace '%s' not found", name)
@@ -135,23 +126,36 @@ func (s *Store) FindWorkspaceByName(name string) (*WorkspaceInfo, error) {
 
 // FindWorkspaceByID returns the workspace with the given ID, or error if not found.
 func (s *Store) FindWorkspaceByID(id string) (*WorkspaceInfo, error) {
-	reg, err := s.LoadWorkspaceRegistry()
+	info, err := s.loadWorkspaceInfo(id)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("workspace with ID '%s' not found", id)
+		}
 		return nil, err
 	}
-	for i := range reg.Workspaces {
-		if reg.Workspaces[i].WorkspaceID == id {
-			return &reg.Workspaces[i], nil
-		}
-	}
-	return nil, fmt.Errorf("workspace with ID '%s' not found", id)
+	return info, nil
 }
 
 // ListWorkspaces returns all registered workspaces.
 func (s *Store) ListWorkspaces() ([]WorkspaceInfo, error) {
-	reg, err := s.LoadWorkspaceRegistry()
+	entries, err := os.ReadDir(s.workspacesDir())
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	return reg.Workspaces, nil
+	var result []WorkspaceInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		info, err := s.loadWorkspaceInfo(id)
+		if err != nil {
+			continue
+		}
+		result = append(result, *info)
+	}
+	return result, nil
 }

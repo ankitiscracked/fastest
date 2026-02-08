@@ -15,17 +15,14 @@ func setupTestStore(t *testing.T) *Store {
 	return OpenAt(root)
 }
 
-func TestLoadWorkspaceRegistryEmpty(t *testing.T) {
+func TestListWorkspacesEmpty(t *testing.T) {
 	s := setupTestStore(t)
-	reg, err := s.LoadWorkspaceRegistry()
+	list, err := s.ListWorkspaces()
 	if err != nil {
-		t.Fatalf("LoadWorkspaceRegistry: %v", err)
+		t.Fatalf("ListWorkspaces: %v", err)
 	}
-	if len(reg.Workspaces) != 0 {
-		t.Fatalf("expected empty registry, got %d entries", len(reg.Workspaces))
-	}
-	if reg.Version != 1 {
-		t.Fatalf("expected version 1, got %d", reg.Version)
+	if len(list) != 0 {
+		t.Fatalf("expected empty list, got %d entries", len(list))
 	}
 }
 
