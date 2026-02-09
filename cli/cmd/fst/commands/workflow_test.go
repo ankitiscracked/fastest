@@ -203,6 +203,275 @@ func TestSnapshotRejectsMessageAndAgentMessage(t *testing.T) {
 	}
 }
 
+func TestDriftExitCode1WhenDriftDetected(t *testing.T) {
+	// setupForkedWorkspaces guarantees a shared ancestor
+	_, targetRoot, sourceRoot := setupForkedWorkspaces(t,
+		map[string]string{"a.txt": "one"},
+		map[string]string{"b.txt": "two"},
+	)
+	_ = sourceRoot
+
+	restoreCwd := chdir(t, targetRoot)
+	defer restoreCwd()
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"drift", "ws-source", "--no-dirty"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected non-nil error (SilentExit) when drift detected")
+	}
+	if code := ExitCode(err); code != 1 {
+		t.Fatalf("expected exit code 1, got %d (err: %v)", code, err)
+	}
+}
+
+func TestDriftExitCode0WhenNoDrift(t *testing.T) {
+	_, targetRoot, sourceRoot := setupForkedWorkspaces(t,
+		map[string]string{},
+		map[string]string{},
+	)
+	_ = sourceRoot
+
+	restoreCwd := chdir(t, targetRoot)
+	defer restoreCwd()
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"drift", "ws-source", "--no-dirty"})
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("expected nil error when no drift, got: %v", err)
+	}
+}
+
+func TestDiffExitCode1WhenDifferencesFound(t *testing.T) {
+	_, targetRoot, sourceRoot := setupForkedWorkspaces(t,
+		map[string]string{"a.txt": "one"},
+		map[string]string{"b.txt": "two"},
+	)
+
+	restoreCwd := chdir(t, targetRoot)
+	defer restoreCwd()
+
+	// Use path-based target to avoid parent-root resolution issues
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"diff", sourceRoot, "--names-only"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected non-nil error (SilentExit) when diffs found")
+	}
+	if code := ExitCode(err); code != 1 {
+		t.Fatalf("expected exit code 1, got %d (err: %v)", code, err)
+	}
+}
+
+func TestStatusShowsWorkspaceSnapshot(t *testing.T) {
+	// Create a project with two workspaces that have different snapshots
+	_, targetRoot, sourceRoot := setupForkedWorkspaces(t,
+		map[string]string{"target-file.txt": "target"},
+		map[string]string{"source-file.txt": "source"},
+	)
+
+	// Get the target workspace config to know its snapshot ID
+	targetCfg, err := config.LoadAt(targetRoot)
+	if err != nil {
+		t.Fatalf("LoadAt target: %v", err)
+	}
+
+	restoreCwd := chdir(t, targetRoot)
+	defer restoreCwd()
+
+	var output string
+	err = captureStdout(func() error {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"status", "--json"})
+		return cmd.Execute()
+	}, &output)
+	if err != nil {
+		t.Fatalf("status --json failed: %v", err)
+	}
+
+	var result struct {
+		LatestSnapshotID string `json:"latest_snapshot_id"`
+		WorkspaceName    string `json:"workspace_name"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
+		t.Fatalf("failed to parse status JSON: %v\noutput: %s", err, output)
+	}
+
+	// Status should show the workspace's own snapshot, not some other workspace's
+	if result.LatestSnapshotID != targetCfg.CurrentSnapshotID {
+		t.Fatalf("status showed snapshot %s, expected workspace snapshot %s",
+			result.LatestSnapshotID, targetCfg.CurrentSnapshotID)
+	}
+	if result.WorkspaceName != "ws-target" {
+		t.Fatalf("expected workspace name ws-target, got %s", result.WorkspaceName)
+	}
+	_ = sourceRoot
+}
+
+func TestRollbackCreatesPreSnapshot(t *testing.T) {
+	root := setupWorkspace(t, "ws-rollback", map[string]string{
+		"file.txt": "v1",
+	})
+
+	restoreCwd := chdir(t, root)
+	defer restoreCwd()
+
+	cacheDir := filepath.Join(root, "cache")
+	setenv(t, "XDG_CACHE_HOME", cacheDir)
+
+	SetDeps(Deps{
+		AuthGetToken: func() (string, error) { return "", nil },
+	})
+	defer ResetDeps()
+
+	// Create initial snapshot
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "v1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("snapshot v1 failed: %v", err)
+	}
+
+	cfg1, err := config.LoadAt(root)
+	if err != nil {
+		t.Fatalf("LoadAt: %v", err)
+	}
+	snapV1 := cfg1.CurrentSnapshotID
+
+	// Modify file
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("v2"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Rollback to v1 (with --force since file is dirty)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"rollback", "--to", snapV1, "--force"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+
+	// The pre-rollback auto-snapshot should have been created,
+	// so current snapshot should NOT be snapV1 (it should be the
+	// auto-snapshot or the post-rollback state)
+	cfg2, err := config.LoadAt(root)
+	if err != nil {
+		t.Fatalf("LoadAt after rollback: %v", err)
+	}
+
+	// Count snapshots — should have more than 1 (v1 + auto-snapshot)
+	snapshotsDir := filepath.Join(root, ".fst", "snapshots")
+	entries, err := os.ReadDir(snapshotsDir)
+	if err != nil {
+		t.Fatalf("ReadDir snapshots: %v", err)
+	}
+	if len(entries) < 2 {
+		t.Fatalf("expected at least 2 snapshots (v1 + pre-rollback auto), got %d", len(entries))
+	}
+	_ = cfg2
+}
+
+// setupForkedWorkspaces creates two workspaces that share a common base
+// snapshot (guaranteed same ID). Workspace B forks from workspace A's base
+// snapshot, ensuring the merge-base BFS can find a common ancestor regardless
+// of timing.
+func setupForkedWorkspaces(t *testing.T, targetFiles, sourceFiles map[string]string) (string, string, string) {
+	t.Helper()
+
+	projectRoot := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(projectRoot, "fst.json"), []byte(`{"name":"test-project"}`), 0644); err != nil {
+		t.Fatalf("write fst.json: %v", err)
+	}
+	for _, d := range []string{".fst/snapshots", ".fst/manifests", ".fst/blobs", ".fst/workspaces"} {
+		if err := os.MkdirAll(filepath.Join(projectRoot, d), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	targetRoot := filepath.Join(projectRoot, "ws-target")
+	sourceRoot := filepath.Join(projectRoot, "ws-source")
+
+	// Create target workspace with base file
+	for _, ws := range []struct {
+		root, id, name string
+	}{
+		{targetRoot, "ws-target-id", "ws-target"},
+		{sourceRoot, "ws-source-id", "ws-source"},
+	} {
+		if err := os.MkdirAll(filepath.Join(ws.root, ".fst"), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		cfg := &config.ProjectConfig{
+			ProjectID:     "proj-1",
+			WorkspaceID:   ws.id,
+			WorkspaceName: ws.name,
+			Mode:          "local",
+		}
+		if err := config.SaveAt(ws.root, cfg); err != nil {
+			t.Fatalf("SaveAt: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(ws.root, "base.txt"), []byte("base"), 0644); err != nil {
+			t.Fatalf("write base.txt: %v", err)
+		}
+	}
+
+	// Create ONE base snapshot from target workspace
+	restoreCwd := chdir(t, targetRoot)
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "--message", "base snapshot"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("base snapshot failed: %v", err)
+	}
+	restoreCwd()
+
+	// Read the base snapshot ID from target's config
+	targetCfg, err := config.LoadAt(targetRoot)
+	if err != nil {
+		t.Fatalf("LoadAt target: %v", err)
+	}
+	baseSnapshotID := targetCfg.CurrentSnapshotID
+
+	// Set source workspace to the SAME base snapshot ID so they share an ancestor
+	sourceCfg, err := config.LoadAt(sourceRoot)
+	if err != nil {
+		t.Fatalf("LoadAt source: %v", err)
+	}
+	sourceCfg.CurrentSnapshotID = baseSnapshotID
+	if err := config.SaveAt(sourceRoot, sourceCfg); err != nil {
+		t.Fatalf("SaveAt source: %v", err)
+	}
+
+	// Add divergent changes and snapshot
+	for path, content := range targetFiles {
+		full := filepath.Join(targetRoot, path)
+		os.MkdirAll(filepath.Dir(full), 0755)
+		os.WriteFile(full, []byte(content), 0644)
+	}
+	for path, content := range sourceFiles {
+		full := filepath.Join(sourceRoot, path)
+		os.MkdirAll(filepath.Dir(full), 0755)
+		os.WriteFile(full, []byte(content), 0644)
+	}
+
+	restoreCwd = chdir(t, targetRoot)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "--message", "target changes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("target snapshot: %v", err)
+	}
+	restoreCwd()
+
+	restoreCwd = chdir(t, sourceRoot)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "--message", "source changes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("source snapshot: %v", err)
+	}
+	restoreCwd()
+
+	return projectRoot, targetRoot, sourceRoot
+}
+
 func setupWorkspace(t *testing.T, name string, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()

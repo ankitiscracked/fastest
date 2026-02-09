@@ -112,6 +112,69 @@ func TestGenerateIgnoresAndModes(t *testing.T) {
 	}
 }
 
+func TestFromJSONRejectsEmptyPath(t *testing.T) {
+	data := []byte(`{"version":"1","files":[{"type":"file","path":"","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1,"mode":420}]}`)
+	_, err := FromJSON(data)
+	if err == nil {
+		t.Fatalf("expected error for empty path")
+	}
+}
+
+func TestFromJSONRejectsPathTraversal(t *testing.T) {
+	data := []byte(`{"version":"1","files":[{"type":"file","path":"../etc/passwd","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1,"mode":420}]}`)
+	_, err := FromJSON(data)
+	if err == nil {
+		t.Fatalf("expected error for path containing '..'")
+	}
+}
+
+func TestFromJSONRejectsFileWithoutHash(t *testing.T) {
+	data := []byte(`{"version":"1","files":[{"type":"file","path":"a.txt","size":1,"mode":420}]}`)
+	_, err := FromJSON(data)
+	if err == nil {
+		t.Fatalf("expected error for file without hash")
+	}
+}
+
+func TestFromJSONRejectsFileWithBadHash(t *testing.T) {
+	data := []byte(`{"version":"1","files":[{"type":"file","path":"a.txt","hash":"tooshort","size":1,"mode":420}]}`)
+	_, err := FromJSON(data)
+	if err == nil {
+		t.Fatalf("expected error for file with invalid hash length")
+	}
+}
+
+func TestFromJSONRejectsSymlinkWithoutTarget(t *testing.T) {
+	data := []byte(`{"version":"1","files":[{"type":"symlink","path":"link"}]}`)
+	_, err := FromJSON(data)
+	if err == nil {
+		t.Fatalf("expected error for symlink without target")
+	}
+}
+
+func TestFromJSONRejectsUnknownType(t *testing.T) {
+	data := []byte(`{"version":"1","files":[{"type":"unknown","path":"a.txt"}]}`)
+	_, err := FromJSON(data)
+	if err == nil {
+		t.Fatalf("expected error for unknown entry type")
+	}
+}
+
+func TestFromJSONAcceptsValidManifest(t *testing.T) {
+	data := []byte(`{"version":"1","files":[
+		{"type":"file","path":"a.txt","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":5,"mode":420},
+		{"type":"dir","path":"subdir","mode":493},
+		{"type":"symlink","path":"link","target":"a.txt"}
+	]}`)
+	m, err := FromJSON(data)
+	if err != nil {
+		t.Fatalf("FromJSON: %v", err)
+	}
+	if len(m.Files) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(m.Files))
+	}
+}
+
 func TestDiff(t *testing.T) {
 	base := &Manifest{
 		Version: "1",
