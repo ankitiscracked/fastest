@@ -2,15 +2,10 @@ package commands
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
 func init() {
@@ -43,8 +38,7 @@ Examples:
 			if toSnapshot != "" && toBase {
 				return fmt.Errorf("cannot use both --to and --to-base")
 			}
-			all := len(args) == 0
-			return runRollback(args, toSnapshot, toBase, all, dryRun, force)
+			return runRollback(args, toSnapshot, toBase, dryRun, force)
 		},
 	}
 
@@ -56,187 +50,41 @@ Examples:
 	return cmd
 }
 
-func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRun bool, force bool) error {
-	cfg, err := config.Load()
+func runRollback(files []string, toSnapshot string, toBase bool, dryRun bool, force bool) error {
+	ws, err := workspace.Open()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
+	defer ws.Close()
 
-	root, err := config.FindProjectRoot()
-	if err != nil {
-		return fmt.Errorf("failed to find project root: %w", err)
-	}
-
-	manifestsDir, err := config.GetManifestsDir()
-	if err != nil {
-		return fmt.Errorf("failed to get manifests directory: %w", err)
-	}
-
-	// Determine target snapshot (default to most recent snapshot)
-	targetSnapshotID := toSnapshot
-	if targetSnapshotID == "" {
-		if toBase {
-			// Explicit --to-base: use base point
-			targetSnapshotID = cfg.BaseSnapshotID
-			if targetSnapshotID == "" {
-				return fmt.Errorf("no base snapshot set")
-			}
-		} else {
-			// Default: find most recent snapshot from snapshots directory
-			latestID, err := config.GetLatestSnapshotID()
-			if err != nil {
-				return fmt.Errorf("failed to find snapshots: %w", err)
-			}
-			targetSnapshotID = latestID
-		}
-	}
-	if targetSnapshotID == "" {
-		return fmt.Errorf("no snapshots found - create one with 'fst snapshot'")
-	}
-
-	// Load target manifest from local manifests directory
-	manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, targetSnapshotID)
-	if err != nil {
-		return err
-	}
-	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-	manifestData, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return fmt.Errorf("snapshot not found: %s", targetSnapshotID)
-	}
-
-	targetManifest, err := manifest.FromJSON(manifestData)
-	if err != nil {
-		return fmt.Errorf("failed to load snapshot: %w", err)
-	}
-
-	// Build lookup map of target entries
-	targetEntries := make(map[string]manifest.FileEntry)
-	for _, f := range targetManifest.Files {
-		targetEntries[f.Path] = f
-	}
-
-	// Determine which entries to restore
-	var toRestore []manifest.FileEntry
-	var toDelete []string
-
-	if all {
-		// Restore all entries from snapshot
-		toRestore = targetManifest.Files
-
-		// Find files/symlinks to delete (exist now but not in snapshot)
-		currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
-		if err != nil {
-			return fmt.Errorf("failed to scan current files: %w", err)
-		}
-
-		for _, f := range append(currentManifest.FileEntries(), currentManifest.SymlinkEntries()...) {
-			if _, exists := targetEntries[f.Path]; !exists {
-				toDelete = append(toDelete, f.Path)
-			}
-		}
-	} else {
-		// Restore specific files/directories
-		for _, pattern := range files {
-			// Normalize path
-			pattern = filepath.ToSlash(pattern)
-			pattern = strings.TrimSuffix(pattern, "/")
-
-			matched := false
-			for _, f := range targetManifest.Files {
-				// Match exact entry or directory prefix
-				if f.Path == pattern || strings.HasPrefix(f.Path, pattern+"/") {
-					toRestore = append(toRestore, f)
-					matched = true
-				}
-			}
-
-			if !matched {
-				fmt.Printf("Warning: %s not found in snapshot\n", pattern)
-			}
-		}
-	}
-
-	if len(toRestore) == 0 && len(toDelete) == 0 {
-		fmt.Println("Nothing to rollback.")
-		return nil
-	}
-
-	// Sort for consistent output
-	sort.Slice(toRestore, func(i, j int) bool {
-		return toRestore[i].Path < toRestore[j].Path
+	result, err := ws.Rollback(workspace.RollbackOpts{
+		SnapshotID: toSnapshot,
+		ToBase:     toBase,
+		Files:      files,
+		DryRun:     dryRun,
+		Force:      force,
 	})
-	sort.Strings(toDelete)
 
-	// Check blob availability (files only)
-	blobDir, err := config.GetBlobsDir()
-	if err != nil {
-		return fmt.Errorf("failed to get blob directory: %w", err)
-	}
-	missingBlobs := []string{}
-	for _, f := range toRestore {
-		if f.Type != manifest.EntryTypeFile {
-			continue
-		}
-		blobPath := filepath.Join(blobDir, f.Hash)
-		if _, err := os.Stat(blobPath); os.IsNotExist(err) {
-			missingBlobs = append(missingBlobs, f.Path)
-		}
-	}
-
-	if len(missingBlobs) > 0 {
-		fmt.Printf("Error: Missing cached blobs for %d files:\n", len(missingBlobs))
-		for _, f := range missingBlobs {
+	if result != nil && len(result.MissingBlobs) > 0 {
+		fmt.Printf("Error: Missing cached blobs for %d files:\n", len(result.MissingBlobs))
+		for _, f := range result.MissingBlobs {
 			fmt.Printf("  %s\n", f)
 		}
 		fmt.Println()
 		fmt.Println("These files cannot be restored. The snapshot may have been")
 		fmt.Println("created before blob caching was enabled.")
-		return fmt.Errorf("missing blobs")
+		return err
 	}
 
-	// Show plan
-	fmt.Printf("Rollback to: %s\n", targetSnapshotID)
-	fmt.Println()
-
-	if len(toRestore) > 0 {
-		fmt.Printf("Entries to restore (%d):\n", len(toRestore))
-		for _, f := range toRestore {
-			// Check if entry differs from current
-			currentPath := filepath.Join(root, f.Path)
-			status := ""
-			if _, err := os.Lstat(currentPath); os.IsNotExist(err) {
-				status = " (missing)"
-			} else {
-				switch f.Type {
-				case manifest.EntryTypeFile:
-					currentHash, _ := manifest.HashFile(currentPath)
-					if currentHash != f.Hash {
-						status = " (modified)"
-					} else {
-						status = " (unchanged)"
-					}
-				case manifest.EntryTypeSymlink:
-					if target, err := os.Readlink(currentPath); err != nil || target != f.Target {
-						status = " (modified)"
-					} else {
-						status = " (unchanged)"
-					}
-				default:
-					status = ""
-				}
-			}
-			fmt.Printf("  \033[32m↩ %s\033[0m%s\n", f.Path, status)
-		}
-		fmt.Println()
+	if result != nil && len(result.Actions) == 0 {
+		fmt.Println("Nothing to rollback.")
+		return nil
 	}
 
-	if len(toDelete) > 0 {
-		fmt.Printf("Files to delete (%d):\n", len(toDelete))
-		for _, f := range toDelete {
-			fmt.Printf("  \033[31m✗ %s\033[0m\n", f)
-		}
+	if result != nil {
+		fmt.Printf("Rollback to: %s\n", result.TargetSnapshotID)
 		fmt.Println()
+		printRollbackActions(result)
 	}
 
 	if dryRun {
@@ -244,107 +92,51 @@ func runRollback(files []string, toSnapshot string, toBase bool, all bool, dryRu
 		return nil
 	}
 
-	// Check for uncommitted changes if not forced
-	if !force {
-		hasChanges := false
-		for _, f := range toRestore {
-			currentPath := filepath.Join(root, f.Path)
-			if _, err := os.Lstat(currentPath); err == nil {
-				switch f.Type {
-				case manifest.EntryTypeFile:
-					currentHash, _ := manifest.HashFile(currentPath)
-					if currentHash != f.Hash {
-						hasChanges = true
-					}
-				case manifest.EntryTypeSymlink:
-					if target, err := os.Readlink(currentPath); err != nil || target != f.Target {
-						hasChanges = true
-					}
-				}
-				if hasChanges {
-					break
-				}
-			}
-		}
-		if hasChanges {
+	if err != nil {
+		if result != nil && result.HasLocalChanges {
 			fmt.Println("Warning: Some files have local changes that will be lost.")
 			fmt.Println("Use --force to proceed, or create a snapshot first.")
-			return fmt.Errorf("local changes would be lost")
 		}
+		return err
 	}
 
-	// Perform rollback
-	restored := 0
-	deleted := 0
-
-	for _, f := range toRestore {
-		targetPath := filepath.Join(root, f.Path)
-		switch f.Type {
-		case manifest.EntryTypeDir:
-			if err := os.MkdirAll(targetPath, 0755); err != nil {
-				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-				continue
-			}
-			if f.Mode != 0 {
-				if err := os.Chmod(targetPath, os.FileMode(f.Mode)); err != nil {
-					fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-					continue
-				}
-			}
-			restored++
-		case manifest.EntryTypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-				continue
-			}
-			_ = os.RemoveAll(targetPath)
-			if err := os.Symlink(f.Target, targetPath); err != nil {
-				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-				continue
-			}
-			restored++
-		case manifest.EntryTypeFile:
-			blobPath := filepath.Join(blobDir, f.Hash)
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-				continue
-			}
-			content, err := os.ReadFile(blobPath)
-			if err != nil {
-				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-				continue
-			}
-			if err := os.WriteFile(targetPath, content, os.FileMode(f.Mode)); err != nil {
-				fmt.Printf("  ✗ %s: %v\n", f.Path, err)
-				continue
-			}
-			restored++
-		}
-	}
-
-	for _, f := range toDelete {
-		targetPath := filepath.Join(root, f)
-		if err := os.Remove(targetPath); err != nil {
-			fmt.Printf("  ✗ %s: %v\n", f, err)
-			continue
-		}
-		deleted++
-
-		// Try to remove empty parent directories
-		dir := filepath.Dir(targetPath)
-		for dir != root {
-			if err := os.Remove(dir); err != nil {
-				break // Directory not empty or other error
-			}
-			dir = filepath.Dir(dir)
-		}
-	}
-
-	fmt.Printf("✓ Restored %d files", restored)
-	if deleted > 0 {
-		fmt.Printf(", deleted %d files", deleted)
+	fmt.Printf("✓ Restored %d files", result.Restored)
+	if result.Deleted > 0 {
+		fmt.Printf(", deleted %d files", result.Deleted)
 	}
 	fmt.Println()
 
 	return nil
+}
+
+func printRollbackActions(result *workspace.RollbackResult) {
+	var restoreActions, deleteActions []workspace.RollbackAction
+	for _, a := range result.Actions {
+		switch a.Action {
+		case "restore":
+			restoreActions = append(restoreActions, a)
+		case "delete":
+			deleteActions = append(deleteActions, a)
+		}
+	}
+
+	if len(restoreActions) > 0 {
+		fmt.Printf("Entries to restore (%d):\n", len(restoreActions))
+		for _, a := range restoreActions {
+			status := ""
+			if a.Status != "" {
+				status = " (" + a.Status + ")"
+			}
+			fmt.Printf("  \033[32m↩ %s\033[0m%s\n", a.Path, status)
+		}
+		fmt.Println()
+	}
+
+	if len(deleteActions) > 0 {
+		fmt.Printf("Files to delete (%d):\n", len(deleteActions))
+		for _, a := range deleteActions {
+			fmt.Printf("  \033[31m✗ %s\033[0m\n", a.Path)
+		}
+		fmt.Println()
+	}
 }

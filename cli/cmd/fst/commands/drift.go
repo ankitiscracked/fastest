@@ -3,19 +3,13 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/agent"
-	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
-	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/index"
-	"github.com/anthropics/fastest/cli/internal/manifest"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
 func init() {
@@ -88,122 +82,50 @@ Examples:
 }
 
 func runDrift(target string, jsonOutput, generateSummary, noDirty bool) error {
-	cfg, err := config.Load()
+	ws, err := workspace.Open()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
+	defer ws.Close()
 
-	root, err := config.FindProjectRoot()
-	if err != nil {
-		return fmt.Errorf("failed to find project root: %w", err)
-	}
-
-	// Resolve target workspace
-	otherRoot, otherName, err := resolveTargetWorkspace(target, cfg)
+	dr, err := ws.Drift(workspace.DriftOpts{
+		TargetName: target,
+		NoDirty:    noDirty,
+	})
 	if err != nil {
 		return err
 	}
 
-	// Verify target workspace still exists on disk
-	if _, err := os.Stat(filepath.Join(otherRoot, ".fst")); os.IsNotExist(err) {
-		return fmt.Errorf("workspace no longer exists at: %s", otherRoot)
-	}
-
-	// Get snapshot heads for both workspaces
-	ourHead := cfg.CurrentSnapshotID
-	if ourHead == "" {
-		ourHead, _ = config.GetLatestSnapshotIDAt(root)
-	}
-
-	theirCfg, err := config.LoadAt(otherRoot)
-	if err != nil {
-		return fmt.Errorf("failed to load target workspace config: %w", err)
-	}
-	theirHead := theirCfg.CurrentSnapshotID
-	if theirHead == "" {
-		theirHead, _ = config.GetLatestSnapshotIDAt(otherRoot)
-	}
-
-	if ourHead == "" || theirHead == "" {
-		return fmt.Errorf("both workspaces must have at least one snapshot for drift analysis")
-	}
-
-	// Find common ancestor via DAG traversal
-	mergeBaseID, err := dag.GetMergeBase(store.OpenFromWorkspace(root), ourHead, theirHead)
-	if err != nil {
-		return fmt.Errorf("could not find common ancestor: %w\nBoth workspaces need shared snapshot history.", err)
-	}
-
-	// Load ancestor manifest (try both workspace dirs)
-	ancestorManifest, err := drift.LoadManifestFromSnapshots(root, mergeBaseID)
-	if err != nil {
-		ancestorManifest, err = drift.LoadManifestFromSnapshots(otherRoot, mergeBaseID)
-		if err != nil {
-			return fmt.Errorf("failed to load common ancestor manifest: %w", err)
-		}
-	}
-
-	// Compute drift on each side
-	includeDirty := !noDirty
-	ourManifest, err := loadManifestForDrift(root, ourHead, includeDirty)
-	if err != nil {
-		return fmt.Errorf("failed to load current workspace state: %w", err)
-	}
-	theirManifest, err := loadManifestForDrift(otherRoot, theirHead, includeDirty)
-	if err != nil {
-		return fmt.Errorf("failed to load target workspace state: %w", err)
-	}
-
-	ourChanges := drift.CompareManifests(ancestorManifest, ourManifest)
-	theirChanges := drift.CompareManifests(ancestorManifest, theirManifest)
-
-	// Detect snapshot-based conflicts (always)
-	snapshotConflictReport, err := conflicts.DetectFromAncestor(root, otherRoot, mergeBaseID, false)
-	if err != nil {
-		return fmt.Errorf("failed to detect snapshot conflicts: %w", err)
-	}
-	snapshotSummary := aggregateConflicts(snapshotConflictReport)
-
-	// Detect dirty conflicts (if enabled)
+	// Build view model
+	snapshotSummary := aggregateConflicts(dr.SnapshotConflicts)
 	var dirtySummary *conflictSummary
-	if includeDirty {
-		dirtyConflictReport, err := conflicts.DetectFromAncestor(root, otherRoot, mergeBaseID, true)
-		if err != nil {
-			return fmt.Errorf("failed to detect dirty conflicts: %w", err)
-		}
-		// Compute dirty-only conflicts (additional conflicts not in snapshot)
-		dirtySummary = subtractConflicts(dirtyConflictReport, snapshotConflictReport)
+	if dr.DirtyConflicts != nil {
+		dirtySummary = subtractConflicts(dr.DirtyConflicts, dr.SnapshotConflicts)
 	}
 
-	// Compute overlapping files (modified in both but may not conflict)
-	overlapping := findOverlappingPaths(ourChanges, theirChanges)
-
-	// Generate agent summary if requested
 	var summaryText string
 	if generateSummary {
-		summaryText = generateDriftSummary(cfg.WorkspaceName, otherName, ourChanges, theirChanges, snapshotSummary, dirtySummary)
+		summaryText = generateDriftSummary(dr.OurName, dr.TheirName, dr.OurChanges, dr.TheirChanges, snapshotSummary, dirtySummary)
 	}
 
-	// Build result
 	mode := "dirty"
 	if noDirty {
 		mode = "snapshot"
 	}
 
 	result := driftResult{
-		OurWorkspace:      cfg.WorkspaceName,
-		TheirWorkspace:    otherName,
-		CommonAncestorID:  mergeBaseID,
+		OurWorkspace:      dr.OurName,
+		TheirWorkspace:    dr.TheirName,
+		CommonAncestorID:  dr.CommonAncestorID,
 		Mode:              mode,
-		OurChanges:        ourChanges,
-		TheirChanges:      theirChanges,
+		OurChanges:        dr.OurChanges,
+		TheirChanges:      dr.TheirChanges,
 		SnapshotConflicts: snapshotSummary,
 		DirtyConflicts:    dirtySummary,
-		OverlappingFiles:  overlapping,
+		OverlappingFiles:  dr.OverlappingPaths,
 		Summary:           summaryText,
 	}
 
-	// JSON output
 	if jsonOutput {
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
@@ -213,72 +135,15 @@ func runDrift(target string, jsonOutput, generateSummary, noDirty bool) error {
 		return nil
 	}
 
-	// Human-readable output
-	printDriftReport(result, includeDirty)
-
+	printDriftReport(result, !noDirty)
 	return nil
 }
 
-// resolveTargetWorkspace resolves the target workspace by name or defaults to main
-func resolveTargetWorkspace(target string, cfg *config.ProjectConfig) (root, name string, err error) {
-	if target != "" {
-		// Look up by name only
-		ws, err := index.FindWorkspaceByName(cfg.ProjectID, target)
-		if err != nil {
-			return "", "", fmt.Errorf("workspace '%s' not found in project\nRun 'fst workspaces' to see available workspaces.", target)
-		}
-		return ws.Path, ws.WorkspaceName, nil
-	}
-
-	// No target — compare against main workspace (local only)
-	localMainID, err := index.GetProjectMainWorkspaceID(cfg.ProjectID)
-	if err != nil {
-		return "", "", err
-	}
-	if localMainID == "" {
-		return "", "", fmt.Errorf("no main workspace configured for this project\nSet one with: fst workspace set-main <workspace>")
-	}
-
-	return resolveLocalMainWorkspace(cfg, localMainID, "")
-}
-
-func resolveLocalMainWorkspace(cfg *config.ProjectConfig, mainID, mainName string) (root, name string, err error) {
-	if mainID == "" {
-		return "", "", fmt.Errorf("no main workspace configured for this project\nSet one with: fst workspace set-main <workspace>")
-	}
-	if mainID == cfg.WorkspaceID {
-		return "", "", fmt.Errorf("this is the main workspace - specify a workspace to compare against:\n  fst drift <workspace-name>")
-	}
-
-	idx, err := index.Load()
-	if err != nil {
-		return "", "", fmt.Errorf("failed to load workspace registry: %w", err)
-	}
-
-	for _, ws := range idx.Workspaces {
-		if ws.WorkspaceID == mainID {
-			return ws.Path, ws.WorkspaceName, nil
-		}
-	}
-
-	displayName := mainName
-	if displayName == "" {
-		displayName = mainID
-	}
-	return "", "", fmt.Errorf("main workspace '%s' not found locally\nIt may be on a different machine. Use 'fst workspace copy' to clone it.", displayName)
-}
-
-// loadManifestForDrift loads a workspace manifest for drift comparison
-func loadManifestForDrift(root, snapshotID string, includeDirty bool) (*manifest.Manifest, error) {
-	if includeDirty {
-		return manifest.GenerateWithCache(root, config.GetStatCachePath(root))
-	}
-	return drift.LoadManifestFromSnapshots(root, snapshotID)
-}
-
-// aggregateConflicts builds a conflictSummary from a conflicts.Report
 func aggregateConflicts(report *conflicts.Report) *conflictSummary {
 	summary := &conflictSummary{}
+	if report == nil {
+		return summary
+	}
 	for _, c := range report.Conflicts {
 		count := len(c.Hunks)
 		summary.Files = append(summary.Files, fileConflictSummary{
@@ -291,15 +156,18 @@ func aggregateConflicts(report *conflicts.Report) *conflictSummary {
 	return summary
 }
 
-// subtractConflicts returns conflicts in "full" that are NOT in "baseline"
-// (i.e., additional conflicts introduced by dirty changes)
 func subtractConflicts(full, baseline *conflicts.Report) *conflictSummary {
-	baselineSet := make(map[string]int) // path → hunk count
-	for _, c := range baseline.Conflicts {
-		baselineSet[c.Path] = len(c.Hunks)
+	baselineSet := make(map[string]int)
+	if baseline != nil {
+		for _, c := range baseline.Conflicts {
+			baselineSet[c.Path] = len(c.Hunks)
+		}
 	}
 
 	summary := &conflictSummary{}
+	if full == nil {
+		return summary
+	}
 	for _, c := range full.Conflicts {
 		fullCount := len(c.Hunks)
 		baseCount := baselineSet[c.Path]
@@ -311,7 +179,6 @@ func subtractConflicts(full, baseline *conflicts.Report) *conflictSummary {
 			})
 			summary.TotalRegions += additional
 		} else if baseCount == 0 && fullCount > 0 {
-			// Entirely new conflict file from dirty changes
 			summary.Files = append(summary.Files, fileConflictSummary{
 				Path:          c.Path,
 				ConflictCount: fullCount,
@@ -323,31 +190,6 @@ func subtractConflicts(full, baseline *conflicts.Report) *conflictSummary {
 	return summary
 }
 
-// findOverlappingPaths returns files modified/added in both reports
-func findOverlappingPaths(ours, theirs *drift.Report) []string {
-	ourSet := make(map[string]bool)
-	for _, f := range ours.FilesAdded {
-		ourSet[f] = true
-	}
-	for _, f := range ours.FilesModified {
-		ourSet[f] = true
-	}
-
-	var overlapping []string
-	for _, f := range theirs.FilesAdded {
-		if ourSet[f] {
-			overlapping = append(overlapping, f)
-		}
-	}
-	for _, f := range theirs.FilesModified {
-		if ourSet[f] {
-			overlapping = append(overlapping, f)
-		}
-	}
-	return overlapping
-}
-
-// generateDriftSummary invokes the agent to produce a drift risk assessment
 func generateDriftSummary(ourName, theirName string, ourChanges, theirChanges *drift.Report, snapshotConflicts, dirtyConflicts *conflictSummary) string {
 	preferredAgent, err := agent.GetPreferredAgent()
 	if err != nil {
@@ -390,7 +232,6 @@ func generateDriftSummary(ourName, theirName string, ourChanges, theirChanges *d
 	return summaryText
 }
 
-// printDriftReport displays the human-readable drift report
 func printDriftReport(result driftResult, includeDirty bool) {
 	fmt.Printf("Drift: %s <-> %s\n", result.OurWorkspace, result.TheirWorkspace)
 	fmt.Printf("Common ancestor: %s\n", result.CommonAncestorID)
@@ -421,21 +262,18 @@ func printDriftReport(result driftResult, includeDirty bool) {
 		fmt.Println()
 	}
 
-	// Snapshot conflicts
 	if result.SnapshotConflicts != nil && result.SnapshotConflicts.TotalFiles > 0 {
 		fmt.Println("Snapshot conflicts:")
 		printConflictSummary(result.SnapshotConflicts)
 		fmt.Println()
 	}
 
-	// Dirty conflicts (additional)
 	if result.DirtyConflicts != nil && result.DirtyConflicts.TotalFiles > 0 {
 		fmt.Println("Dirty conflicts (additional):")
 		printConflictSummary(result.DirtyConflicts)
 		fmt.Println()
 	}
 
-	// No conflicts at all
 	if (result.SnapshotConflicts == nil || result.SnapshotConflicts.TotalFiles == 0) &&
 		(result.DirtyConflicts == nil || result.DirtyConflicts.TotalFiles == 0) {
 		if len(result.OverlappingFiles) > 0 {
@@ -449,7 +287,6 @@ func printDriftReport(result driftResult, includeDirty bool) {
 	}
 }
 
-// printChanges prints the changes in a report
 func printChanges(report *drift.Report) {
 	if len(report.FilesAdded) > 0 {
 		fmt.Printf("  Added (%d):\n", len(report.FilesAdded))
@@ -473,7 +310,6 @@ func printChanges(report *drift.Report) {
 	}
 }
 
-// printConflictSummary prints aggregated conflict info
 func printConflictSummary(cs *conflictSummary) {
 	for _, f := range cs.Files {
 		label := "conflicts"
