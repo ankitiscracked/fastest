@@ -57,7 +57,7 @@ func (s *Store) WriteSnapshotMeta(meta *SnapshotMeta) error {
 	}
 
 	metaPath := filepath.Join(s.snapshotsDir, meta.ID+".meta.json")
-	return os.WriteFile(metaPath, data, 0644)
+	return AtomicWriteFile(metaPath, data, 0644)
 }
 
 // SnapshotExists checks if a snapshot with the given ID exists.

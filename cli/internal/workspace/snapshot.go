@@ -67,10 +67,10 @@ func (ws *Workspace) Snapshot(opts SnapshotOpts) (*SnapshotResult, error) {
 		}
 		content, err := os.ReadFile(filepath.Join(ws.root, f.Path))
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("failed to read file for blob cache %s: %w", f.Path, err)
 		}
 		if err := ws.store.WriteBlob(f.Hash, content); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to cache blob for %s: %w", f.Path, err)
 		}
 		blobsCached++
 	}

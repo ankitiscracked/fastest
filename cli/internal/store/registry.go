@@ -53,7 +53,7 @@ func (s *Store) saveWorkspaceInfo(info *WorkspaceInfo) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.workspacePath(info.WorkspaceID), data, 0644)
+	return AtomicWriteFile(s.workspacePath(info.WorkspaceID), data, 0644)
 }
 
 // RegisterWorkspace upserts a workspace entry by workspace ID.

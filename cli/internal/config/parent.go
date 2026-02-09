@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 const ParentConfigFileName = "fst.json"
@@ -57,7 +59,7 @@ func SaveParentConfigAt(root string, cfg *ParentConfig) error {
 	}
 
 	path := filepath.Join(root, ParentConfigFileName)
-	return os.WriteFile(path, data, 0644)
+	return store.AtomicWriteFile(path, data, 0644)
 }
 
 // FindParentRootFrom walks up the tree to find a parent container with fst.json.

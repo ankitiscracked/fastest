@@ -323,7 +323,7 @@ func Save(config *ProjectConfig) error {
 	}
 
 	configPath := filepath.Join(configDir, ConfigFileName)
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := store.AtomicWriteFile(configPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
@@ -346,7 +346,7 @@ func SaveAt(root string, config *ProjectConfig) error {
 	}
 
 	configPath := filepath.Join(configDir, ConfigFileName)
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := store.AtomicWriteFile(configPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
@@ -428,7 +428,7 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 	}
 
 	configPath := filepath.Join(configDir, ConfigFileName)
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := store.AtomicWriteFile(configPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 

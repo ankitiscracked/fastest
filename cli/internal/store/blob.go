@@ -29,7 +29,7 @@ func (s *Store) WriteBlob(hash string, content []byte) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil // already exists
 	}
-	return os.WriteFile(path, content, 0644)
+	return AtomicWriteFile(path, content, 0644)
 }
 
 // BlobExists checks if a blob with the given hash exists.

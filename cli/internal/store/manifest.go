@@ -49,7 +49,7 @@ func (s *Store) WriteManifest(m *manifest.Manifest) (string, error) {
 		return "", fmt.Errorf("failed to serialize manifest: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := AtomicWriteFile(path, data, 0644); err != nil {
 		return "", fmt.Errorf("failed to write manifest: %w", err)
 	}
 	return hash, nil
