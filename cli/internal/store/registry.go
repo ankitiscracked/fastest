@@ -57,7 +57,8 @@ func (s *Store) saveWorkspaceInfo(info *WorkspaceInfo) error {
 }
 
 // RegisterWorkspace upserts a workspace entry by workspace ID.
-// Existing fields are preserved if the new value is empty.
+// All provided fields are written; empty fields clear existing values.
+// CreatedAt is preserved from the existing entry if not explicitly set.
 func (s *Store) RegisterWorkspace(info WorkspaceInfo) error {
 	existing, err := s.loadWorkspaceInfo(info.WorkspaceID)
 	if err != nil {
@@ -67,23 +68,11 @@ func (s *Store) RegisterWorkspace(info WorkspaceInfo) error {
 		return err
 	}
 
-	// Merge: only overwrite non-empty fields
-	if info.WorkspaceName != "" {
-		existing.WorkspaceName = info.WorkspaceName
+	// Preserve CreatedAt if not explicitly provided (it's immutable)
+	if info.CreatedAt == "" {
+		info.CreatedAt = existing.CreatedAt
 	}
-	if info.Path != "" {
-		existing.Path = info.Path
-	}
-	if info.CurrentSnapshotID != "" {
-		existing.CurrentSnapshotID = info.CurrentSnapshotID
-	}
-	if info.BaseSnapshotID != "" {
-		existing.BaseSnapshotID = info.BaseSnapshotID
-	}
-	if info.CreatedAt != "" {
-		existing.CreatedAt = info.CreatedAt
-	}
-	return s.saveWorkspaceInfo(existing)
+	return s.saveWorkspaceInfo(&info)
 }
 
 // UpdateWorkspaceHead sets the CurrentSnapshotID for a workspace.

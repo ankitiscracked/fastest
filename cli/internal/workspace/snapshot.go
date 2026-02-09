@@ -112,17 +112,17 @@ func (ws *Workspace) Snapshot(opts SnapshotOpts) (*SnapshotResult, error) {
 		return nil, fmt.Errorf("failed to write snapshot metadata: %w", err)
 	}
 
-	// Update workspace config
+	// Update workspace config — this is the commit point. If we crash
+	// after writing the snapshot but before saving config, the snapshot
+	// is orphaned but harmless (GC will clean it up). Once config is
+	// saved, the workspace points to the new snapshot.
 	ws.cfg.CurrentSnapshotID = snapshotID
-
-	// Clear pending merge parents
-	if err := config.ClearPendingMergeParentsAt(ws.root); err != nil {
-		// Non-fatal — log but continue
-	}
-
 	if err := ws.SaveConfig(); err != nil {
 		return nil, fmt.Errorf("failed to update workspace config: %w", err)
 	}
+
+	// Clear pending merge parents (post-commit cleanup, non-fatal)
+	_ = config.ClearPendingMergeParentsAt(ws.root)
 
 	// Update project-level workspace registry (non-fatal)
 	_ = ws.store.UpdateWorkspaceHead(ws.cfg.WorkspaceID, snapshotID)

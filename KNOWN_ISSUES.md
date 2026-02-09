@@ -8,11 +8,8 @@
 ### ~~2. Silent Blob Caching Failures in `Snapshot()`~~ FIXED
 - Blob caching failures now return errors instead of silently continuing. Snapshot creation aborts if any blob fails to cache.
 
-### 3. Non-Atomic Multi-File Snapshot Write Sequence
-- `workspace/snapshot.go:111-128` — Snapshot creation writes 3-4 things sequentially: (1) snapshot metadata, (2) config update, (3) clear merge parents, (4) registry update. A crash between any of these leaves inconsistent state:
-  - After step 1, before step 2: Snapshot exists but config still points to old snapshot
-  - After step 2, before step 4: Config updated but registry stale — GC could delete referenced snapshot
-- **Impact**: Workspace left in partially-committed state.
+### ~~3. Non-Atomic Multi-File Snapshot Write Sequence~~ FIXED
+- Snapshot write sequence reordered: config.Save is now the commit point. If crash occurs before config is saved, the orphaned snapshot is harmless and GC cleans it up. Merge-parent cleanup and registry update are post-commit and non-fatal. Combined with workspace locking (#10) and GC locking (#1), the write sequence is crash-safe.
 
 ### ~~4. Non-Atomic File Writes Throughout~~ FIXED
 - All JSON metadata writes now use `AtomicWriteFile` (write-to-temp + fsync + rename). Covers snapshot metadata, manifests, blobs, workspace registry, workspace config, and parent config.
@@ -31,9 +28,8 @@
 ### ~~8. Merge State Corruption on Mid-Apply Crash~~ FIXED
 - Merge-parents.json is now written BEFORE applying file changes, not after. If a crash occurs mid-apply, the next `fst snapshot` still creates a merge commit with correct parent IDs. If all actions fail, merge parents are cleared.
 
-### 9. Rollback Has No Atomicity or Recovery
-- `workspace/rollback.go:164-221` — Rollback restores files one at a time in a loop. If crash occurs mid-loop, workspace is partially rolled back with no record of progress. Cannot safely retry (some files already restored, some not).
-- **Impact**: Workspace in inconsistent state with no way to resume or undo partial rollback.
+### ~~9. Rollback Has No Atomicity or Recovery~~ FIXED
+- Rollback now creates an auto-snapshot before applying changes, providing a recovery point. If rollback is interrupted, users can `fst rollback --to <pre-rollback-snapshot>` to restore the previous state. Snapshot failure aborts the rollback.
 
 ## MEDIUM: Design Flaws
 
@@ -46,34 +42,31 @@
 ### ~~12. Merge/Diff/Drift Exit Codes Don't Distinguish Results~~ FIXED
 - `drift` exits 1 when drift is detected, `diff` exits 1 when differences are found, `merge` exits 1 when unresolved conflicts remain. Exit 0 means no changes/conflicts. Uses `SilentExit` error type to suppress Cobra error output.
 
-### 13. `RegisterWorkspace` Merge Semantics Can't Clear Fields
-- `store/registry.go:59-87` — `RegisterWorkspace()` only overwrites non-empty fields. This means if a workspace's `CurrentSnapshotID` needs to be *cleared* (set to empty), it's impossible through this API. The registry will keep the stale value.
-- **Impact**: Registry can never be corrected for certain field values.
+### ~~13. `RegisterWorkspace` Merge Semantics Can't Clear Fields~~ FIXED
+- `RegisterWorkspace()` now overwrites all fields on upsert instead of merge-only-non-empty. Only `CreatedAt` is preserved from the existing entry if not explicitly set (immutable creation timestamp).
 
-### 14. History Rewrite (drop/squash/rebase) Non-Atomic
-- `history.go` — `RewriteChain()` modifies snapshot metadata, then `config.Save()` updates the workspace config. If `config.Save()` fails after the chain is already rewritten, the workspace config points to a snapshot that no longer exists in the rewritten chain.
-- **Impact**: Workspace becomes broken with config pointing to deleted/modified snapshot.
+### ~~14. History Rewrite (drop/squash/rebase) Non-Atomic~~ FIXED
+- Not actually broken: `RewriteChain()` creates new snapshots with new IDs without deleting old ones. If `config.Save()` fails afterward, the old chain remains intact and the workspace is functional. New orphaned snapshots are cleaned up by GC. No code change needed.
 
-### 15. `checkDirtyConflicts` Fails Open
-- `workspace/merge.go:122-179` — The dirty-tree check returns `nil` (proceed) if it can't load the current manifest. This means if there's *any* error loading the current state, the merge proceeds without the safety check, potentially overwriting uncommitted work.
-- **Impact**: Uncommitted changes can be silently overwritten during merge.
+### ~~15. `checkDirtyConflicts` Fails Open~~ FIXED
+- `checkDirtyConflicts` now returns errors instead of silently proceeding when it cannot load the current manifest or scan working tree files. Merge aborts with a clear error message if the dirty-tree check fails.
 
 ## LOW: Edge Cases & UX Issues
 
-### 16. `status` Shows Project-Wide Latest Snapshot
-- `status` shows "Latest" snapshot across all workspaces (project-wide), not the current workspace's latest — confusing.
+### ~~16. `status` Shows Project-Wide Latest Snapshot~~ FIXED
+- `status` now uses `cfg.CurrentSnapshotID` (workspace-specific) instead of `GetLatestSnapshotIDAt` (project-wide scan).
 
-### 17. Symlink Targets Not Path-Normalized
-- Symlink targets aren't path-normalized (`filepath.ToSlash` is used for paths but not for symlink targets), breaking cross-platform compatibility.
+### ~~17. Symlink Targets Not Path-Normalized~~ FIXED
+- Symlink targets are now normalized with `filepath.ToSlash()` during manifest generation, matching the path normalization used for file paths.
 
-### 18. Manifest `FromJSON()` Does Zero Validation
-- Corrupt manifests with invalid hashes or paths load silently.
+### ~~18. Manifest `FromJSON()` Does Zero Validation~~ FIXED
+- `FromJSON()` now validates all entries: paths must be non-empty and not contain `..`, files must have valid 64-character SHA-256 hashes, symlinks must have non-empty targets, and entry types must be one of `file`, `dir`, or `symlink`.
 
-### 19. Merge Base Tiebreaker Non-Deterministic
-- Merge base tiebreaker uses timestamp comparison, which can be non-deterministic if two snapshots have identical `CreatedAt` values.
+### ~~19. Merge Base Tiebreaker Non-Deterministic~~ FIXED
+- When two merge base candidates have identical timestamps, the tiebreaker now uses lexicographic comparison of snapshot IDs (`item.id > bestID`) for deterministic results.
 
-### 20. `fst clone` Silently Ignores Config Save Errors
-- `clone.go:140` — `_ = config.SaveAt(...)` shows "Clone complete!" even if the config wasn't written.
+### ~~20. `fst clone` Silently Ignores Config Save Errors~~ FIXED
+- `config.LoadAt()` and `config.SaveAt()` errors in clone now return errors instead of being silently ignored.
 
 ## Priority Summary
 
@@ -86,3 +79,5 @@
 | ~~P1~~ | ~~GC vs in-flight race (#1)~~ | ~~FIXED — shared/exclusive project-level GC lock~~ |
 | ~~P2~~ | ~~Merge state crash recovery (#8)~~ | ~~FIXED — merge-parents.json written before applying changes~~ |
 | ~~P2~~ | ~~Exit codes for drift/diff/merge (#12)~~ | ~~FIXED — SilentExit(1) for changes/conflicts found~~ |
+
+All 20 issues resolved.

@@ -130,16 +130,16 @@ func (ws *Workspace) checkDirtyConflicts(plan *store.MergePlan) error {
 
 	currentHash, err := ws.store.ManifestHashFromSnapshotID(ws.cfg.CurrentSnapshotID)
 	if err != nil {
-		return nil // can't check, proceed
+		return fmt.Errorf("cannot verify working tree state (failed to read current snapshot): %w", err)
 	}
 	currentManifest, err := ws.store.LoadManifest(currentHash)
 	if err != nil {
-		return nil
+		return fmt.Errorf("cannot verify working tree state (failed to load manifest): %w", err)
 	}
 
 	workingManifest, err := manifest.GenerateWithCache(ws.root, ws.StatCachePath())
 	if err != nil {
-		return nil
+		return fmt.Errorf("cannot verify working tree state (failed to scan files): %w", err)
 	}
 
 	added, modified, deleted := manifest.Diff(currentManifest, workingManifest)

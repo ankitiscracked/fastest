@@ -133,11 +133,14 @@ func runClone(target string, targetDir string) error {
 		return err
 	}
 
-	cfg, _ := config.LoadAt(absTargetDir)
-	if cfg != nil {
-		cfg.Mode = "cloud"
-		cfg.CurrentSnapshotID = snapshot.ID
-		_ = config.SaveAt(absTargetDir, cfg)
+	cfg, err := config.LoadAt(absTargetDir)
+	if err != nil {
+		return fmt.Errorf("failed to load config after clone: %w", err)
+	}
+	cfg.Mode = "cloud"
+	cfg.CurrentSnapshotID = snapshot.ID
+	if err := config.SaveAt(absTargetDir, cfg); err != nil {
+		return fmt.Errorf("failed to save config after clone: %w", err)
 	}
 
 	// Register in project-level registry if inside a project

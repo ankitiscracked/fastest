@@ -53,7 +53,8 @@ func runStatus(jsonOutput bool) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	latestSnapshotID, _ := config.GetLatestSnapshotIDAt(root)
+	// Use workspace's current snapshot, not project-wide latest
+	latestSnapshotID := cfg.CurrentSnapshotID
 	latestSnapshotTime := ""
 	if latestSnapshotID != "" {
 		snapshotsDir, _ := config.GetSnapshotsDir()
@@ -63,7 +64,7 @@ func runStatus(jsonOutput bool) error {
 		}
 	}
 
-	// Get changes since latest snapshot
+	// Get changes since current snapshot
 	var driftReport *drift.Report
 	driftReport, err = drift.ComputeFromLatestSnapshot(root)
 	if err != nil {

@@ -57,6 +57,19 @@ func runRollback(files []string, toSnapshot string, toBase bool, dryRun bool, fo
 	}
 	defer ws.Close()
 
+	// Pre-rollback auto-snapshot — ensures a recovery point if rollback
+	// is interrupted mid-apply.
+	if !dryRun {
+		snapshotID, snapErr := ws.AutoSnapshot("Before rollback")
+		if snapErr != nil {
+			return fmt.Errorf("failed to create pre-rollback snapshot (create one manually first): %w", snapErr)
+		}
+		if snapshotID != "" {
+			fmt.Printf("Created snapshot %s (use 'fst rollback --to %s' to undo)\n", snapshotID, snapshotID)
+			fmt.Println()
+		}
+	}
+
 	result, err := ws.Rollback(workspace.RollbackOpts{
 		SnapshotID: toSnapshot,
 		ToBase:     toBase,

@@ -4,10 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/anthropics/fastest/cli/internal/ignore"
 )
@@ -100,7 +102,7 @@ func generateWith(root string, hashFn fileHasher) (*Manifest, error) {
 			m.Files = append(m.Files, FileEntry{
 				Type:   EntryTypeSymlink,
 				Path:   relPath,
-				Target: target,
+				Target: filepath.ToSlash(target),
 			})
 			return nil
 		}
@@ -166,13 +168,46 @@ func (m *Manifest) Hash() (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
-// FromJSON parses a manifest from JSON
+// FromJSON parses a manifest from JSON and validates entries.
 func FromJSON(data []byte) (*Manifest, error) {
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
+	if err := m.validate(); err != nil {
+		return nil, fmt.Errorf("invalid manifest: %w", err)
+	}
 	return &m, nil
+}
+
+// validate checks manifest entries for structural correctness.
+func (m *Manifest) validate() error {
+	for i, f := range m.Files {
+		if f.Path == "" {
+			return fmt.Errorf("entry %d: empty path", i)
+		}
+		if strings.Contains(f.Path, "..") {
+			return fmt.Errorf("entry %d: path contains '..': %s", i, f.Path)
+		}
+		switch f.Type {
+		case EntryTypeFile:
+			if f.Hash == "" {
+				return fmt.Errorf("entry %d: file %s has no hash", i, f.Path)
+			}
+			if len(f.Hash) != 64 {
+				return fmt.Errorf("entry %d: file %s has invalid hash length %d", i, f.Path, len(f.Hash))
+			}
+		case EntryTypeDir:
+			// dirs have no required fields beyond path
+		case EntryTypeSymlink:
+			if f.Target == "" {
+				return fmt.Errorf("entry %d: symlink %s has no target", i, f.Path)
+			}
+		default:
+			return fmt.Errorf("entry %d: unknown type %q for %s", i, f.Type, f.Path)
+		}
+	}
+	return nil
 }
 
 // Diff compares two manifests and returns the differences

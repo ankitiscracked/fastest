@@ -104,9 +104,11 @@ func TestRegisterUpsert(t *testing.T) {
 		t.Fatalf("RegisterWorkspace: %v", err)
 	}
 
-	// Upsert with updated fields
+	// Upsert with all fields (new semantics: full overwrite)
 	if err := s.RegisterWorkspace(WorkspaceInfo{
 		WorkspaceID:       "ws-1",
+		WorkspaceName:     "main",
+		Path:              "/tmp/main",
 		CurrentSnapshotID: "snap-2",
 	}); err != nil {
 		t.Fatalf("RegisterWorkspace upsert: %v", err)
@@ -116,16 +118,30 @@ func TestRegisterUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindWorkspaceByID: %v", err)
 	}
-	// Updated field
 	if found.CurrentSnapshotID != "snap-2" {
 		t.Fatalf("expected snap-2, got %s", found.CurrentSnapshotID)
 	}
-	// Preserved field
 	if found.WorkspaceName != "main" {
-		t.Fatalf("expected main preserved, got %s", found.WorkspaceName)
+		t.Fatalf("expected main, got %s", found.WorkspaceName)
 	}
 	if found.Path != "/tmp/main" {
-		t.Fatalf("expected /tmp/main preserved, got %s", found.Path)
+		t.Fatalf("expected /tmp/main, got %s", found.Path)
+	}
+
+	// Upsert can clear fields
+	if err := s.RegisterWorkspace(WorkspaceInfo{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "main",
+		Path:          "/tmp/main",
+	}); err != nil {
+		t.Fatalf("RegisterWorkspace clear: %v", err)
+	}
+	found, err = s.FindWorkspaceByID("ws-1")
+	if err != nil {
+		t.Fatalf("FindWorkspaceByID: %v", err)
+	}
+	if found.CurrentSnapshotID != "" {
+		t.Fatalf("expected empty CurrentSnapshotID, got %s", found.CurrentSnapshotID)
 	}
 }
 

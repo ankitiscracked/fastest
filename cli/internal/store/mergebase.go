@@ -74,7 +74,7 @@ func (s *Store) GetMergeBase(targetHead, sourceHead string) (string, error) {
 				}
 			} else if score == bestScore {
 				if ts, err := time.Parse(time.RFC3339, meta.CreatedAt); err == nil {
-					if bestTime.IsZero() || ts.After(bestTime) {
+					if bestTime.IsZero() || ts.After(bestTime) || (ts.Equal(bestTime) && item.id > bestID) {
 						bestID = item.id
 						bestTime = ts
 					}
