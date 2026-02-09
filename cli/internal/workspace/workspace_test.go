@@ -81,11 +81,15 @@ func TestSaveConfigAndSetCurrentSnapshotID(t *testing.T) {
 		t.Fatalf("SetCurrentSnapshotID: %v", err)
 	}
 
+	// Close before reopening — only one workspace handle should be open at a time
+	ws.Close()
+
 	// Reload and verify
 	reloaded, err := OpenAt(root)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
+	defer reloaded.Close()
 	if reloaded.CurrentSnapshotID() != "snap-new" {
 		t.Fatalf("expected snap-new, got %s", reloaded.CurrentSnapshotID())
 	}

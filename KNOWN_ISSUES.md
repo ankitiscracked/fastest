@@ -2,9 +2,8 @@
 
 ## CRITICAL: Data Loss Risks
 
-### 1. GC Can Delete Data Needed by In-Flight Operations
-- `store/gc.go:29` — GC reads workspace registry roots once, then deletes unreachable snapshots/manifests/blobs. If another workspace creates a snapshot *between* root collection and deletion, GC can delete manifests that the new snapshot references.
-- **Impact**: Silent data loss — a workspace's snapshot becomes broken with missing manifest/blobs.
+### ~~1. GC Can Delete Data Needed by In-Flight Operations~~ FIXED
+- GC now acquires an exclusive project-level lock before running. Workspace operations hold a shared project-level lock, so GC blocks until all in-flight operations complete.
 
 ### ~~2. Silent Blob Caching Failures in `Snapshot()`~~ FIXED
 - Blob caching failures now return errors instead of silently continuing. Snapshot creation aborts if any blob fails to cache.
@@ -26,9 +25,8 @@
 ### ~~6. `workspace create` Registers in Global Index But Not Project Registry~~ FIXED
 - Now registers in project-level registry. Global index removed entirely.
 
-### 7. Pre-Operation Safety Snapshots Are Non-Fatal
-- `merge.go:200-207`, `pull.go:192-197`, `sync.go:169-176` — All three commands create a "pre-merge/pre-pull/pre-sync" auto-snapshot as a safety net, but if it **fails**, they print a warning and continue anyway. The destructive merge/pull/sync then proceeds without any rollback point.
-- **Impact**: If disk is full (or any other error), user has no undo after a bad merge.
+### ~~7. Pre-Operation Safety Snapshots Are Non-Fatal~~ FIXED
+- Pre-operation snapshot failures now abort the destructive operation. Users can opt out with `--no-pre-snapshot` (merge), `--hard` (pull), or `--no-snapshot` (sync).
 
 ### 8. Merge State Corruption on Mid-Apply Crash
 - `workspace/merge.go:59-107` — Merge applies file changes to the working tree one-by-one, then writes `merge-parents.json` only after ALL changes succeed. A crash mid-apply means: (a) some files are already modified, (b) merge-parents.json is never written, (c) the next `fst snapshot` creates a single-parent snapshot instead of a merge commit, losing merge history context.
@@ -40,9 +38,8 @@
 
 ## MEDIUM: Design Flaws
 
-### 10. No Workspace-Level Locking
-- `workspace/workspace.go:61-63` — `Close()` is a no-op with a comment "will acquire/release locks in the future." Concurrent `fst snapshot`, `fst merge`, and `fst rollback` on the same workspace can interleave and produce corrupted state.
-- **Impact**: Two terminals working on the same workspace simultaneously can corrupt it.
+### ~~10. No Workspace-Level Locking~~ FIXED
+- `workspace.Open()` now acquires an exclusive flock on `.fst/lock`. Concurrent operations on the same workspace block until the first completes. `Close()` releases the lock.
 
 ### ~~11. `workspaces` Command Uses Global Index, Not Project Registry~~ FIXED
 - Now uses project-level registry consistently. Global index removed.
@@ -86,8 +83,8 @@
 |----------|-------|-----|
 | ~~P0~~ | ~~Non-atomic file writes (#3, #4)~~ | ~~FIXED — AtomicWriteFile (temp + fsync + rename)~~ |
 | ~~P0~~ | ~~Silent blob caching failures (#2)~~ | ~~FIXED — errors now abort snapshot creation~~ |
-| P1 | No workspace-level locking (#10) | Add file-based lock in `.fst/lock` |
-| P1 | Pre-operation snapshots should be fatal (#7) | Abort merge/pull/sync if safety snapshot fails |
-| P1 | GC vs in-flight race (#1) | Add lock or epoch counter to prevent GC during active operations |
+| ~~P1~~ | ~~No workspace-level locking (#10)~~ | ~~FIXED — flock-based exclusive workspace lock~~ |
+| ~~P1~~ | ~~Pre-operation snapshots should be fatal (#7)~~ | ~~FIXED — snapshot failure now aborts operation~~ |
+| ~~P1~~ | ~~GC vs in-flight race (#1)~~ | ~~FIXED — shared/exclusive project-level GC lock~~ |
 | P2 | Merge state crash recovery (#8) | Write merge-parents.json *before* applying changes, not after |
 | P2 | Exit codes for drift/diff/merge (#12) | Return non-zero for "found changes/conflicts" |

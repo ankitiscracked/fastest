@@ -169,8 +169,9 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 	if !dryRun && !noSnapshot {
 		snapshotID, err := CreateAutoSnapshot("Before sync")
 		if err != nil {
-			fmt.Printf("Warning: Could not create pre-sync snapshot: %v\n", err)
-		} else if snapshotID != "" {
+			return fmt.Errorf("failed to create pre-sync snapshot (use --no-snapshot to skip): %w", err)
+		}
+		if snapshotID != "" {
 			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo sync)\n", snapshotID)
 		}
 	}

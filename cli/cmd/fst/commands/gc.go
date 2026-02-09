@@ -9,6 +9,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
 func init() {
@@ -52,6 +53,13 @@ func runGC(dryRun bool) error {
 		}
 		return err
 	}
+
+	// Acquire exclusive project lock — blocks until all workspace operations finish.
+	gcLock, err := workspace.AcquireGCLock(projectRoot)
+	if err != nil {
+		return err
+	}
+	defer gcLock.Release()
 
 	s := store.OpenAt(projectRoot)
 	result, err := s.GC(store.GCOpts{DryRun: dryRun})

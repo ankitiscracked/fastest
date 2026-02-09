@@ -196,12 +196,13 @@ func runMerge(sourceName string, mode ConflictMode, dryRun bool, dryRunSummary b
 		return nil
 	}
 
-	// Pre-merge auto-snapshot
+	// Pre-merge auto-snapshot — abort if it fails so the user has a rollback point
 	if !noPreSnapshot {
 		snapshotID, err := ws.AutoSnapshot(fmt.Sprintf("Before merge from %s", sourceInfo.WorkspaceName))
 		if err != nil {
-			fmt.Printf("Warning: Could not create pre-merge snapshot: %v\n", err)
-		} else if snapshotID != "" {
+			return fmt.Errorf("failed to create pre-merge snapshot (use --no-pre-snapshot to skip): %w", err)
+		}
+		if snapshotID != "" {
 			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo merge)\n", snapshotID)
 			fmt.Println()
 		}

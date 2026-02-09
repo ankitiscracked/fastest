@@ -190,9 +190,11 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 
 	// Merge remote snapshot into local workspace (sync-like behavior)
 	if dirty {
-		if snapshotID, err := CreateAutoSnapshot("Before pull"); err != nil {
-			fmt.Printf("Warning: Could not create pre-pull snapshot: %v\n", err)
-		} else if snapshotID != "" {
+		snapshotID, err := CreateAutoSnapshot("Before pull")
+		if err != nil {
+			return fmt.Errorf("failed to create pre-pull snapshot (use --hard to skip): %w", err)
+		}
+		if snapshotID != "" {
 			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo pull)\n", snapshotID)
 		}
 	}

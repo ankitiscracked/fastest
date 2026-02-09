@@ -16,9 +16,11 @@ import (
 // Workspace represents an open workspace with its configuration and
 // project store. Use Open or OpenAt to create one.
 type Workspace struct {
-	root  string                // workspace root directory
-	cfg   *config.ProjectConfig // workspace config (.fst/config.json)
-	store *store.Store          // project-level shared store
+	root        string                // workspace root directory
+	cfg         *config.ProjectConfig // workspace config (.fst/config.json)
+	store       *store.Store          // project-level shared store
+	wsLock      *LockFile             // exclusive workspace lock
+	projectLock *LockFile             // shared project lock (prevents GC)
 }
 
 // Open loads the workspace rooted at the current working directory.
@@ -32,8 +34,30 @@ func Open() (*Workspace, error) {
 
 // OpenAt loads the workspace rooted at the given path.
 func OpenAt(root string) (*Workspace, error) {
+	// Acquire shared project lock first (prevents GC from running)
+	var projectLock *LockFile
+	if projectRoot, _, err := config.FindParentRootFrom(root); err == nil {
+		projectLock, err = AcquireProjectSharedLock(projectRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Acquire exclusive workspace lock (prevents concurrent operations)
+	wsLock, err := AcquireWorkspaceLock(root)
+	if err != nil {
+		if projectLock != nil {
+			projectLock.Release()
+		}
+		return nil, err
+	}
+
 	cfg, err := config.LoadAt(root)
 	if err != nil {
+		wsLock.Release()
+		if projectLock != nil {
+			projectLock.Release()
+		}
 		return nil, fmt.Errorf("failed to load workspace config: %w", err)
 	}
 
@@ -50,15 +74,24 @@ func OpenAt(root string) (*Workspace, error) {
 	})
 
 	return &Workspace{
-		root:  root,
-		cfg:   cfg,
-		store: s,
+		root:        root,
+		cfg:         cfg,
+		store:       s,
+		wsLock:      wsLock,
+		projectLock: projectLock,
 	}, nil
 }
 
-// Close releases any resources held by the workspace.
-// Currently a no-op; will acquire/release locks in the future.
+// Close releases locks and any resources held by the workspace.
 func (ws *Workspace) Close() error {
+	if ws.wsLock != nil {
+		ws.wsLock.Release()
+		ws.wsLock = nil
+	}
+	if ws.projectLock != nil {
+		ws.projectLock.Release()
+		ws.projectLock = nil
+	}
 	return nil
 }
 
