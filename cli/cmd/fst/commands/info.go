@@ -11,7 +11,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/index"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func init() {
@@ -163,15 +163,12 @@ func printProjectInfo(parentRoot string, parentCfg *config.ParentConfig, jsonOut
 		return fmt.Errorf("failed to load project config")
 	}
 
-	var workspaces []index.WorkspaceEntry
+	var workspaces []store.WorkspaceInfo
 	mainID, mainName := lookupMainWorkspace(parentCfg.ProjectID)
 	if listWorkspaces {
-		if idx, err := index.Load(); err == nil {
-			for _, ws := range idx.Workspaces {
-				if ws.ProjectID == parentCfg.ProjectID {
-					workspaces = append(workspaces, ws)
-				}
-			}
+		s := store.OpenAt(parentRoot)
+		if wsList, err := s.ListWorkspaces(); err == nil {
+			workspaces = wsList
 		}
 	}
 
@@ -231,21 +228,29 @@ func lookupMainWorkspace(projectID string) (string, string) {
 	if projectID == "" {
 		return "", ""
 	}
-	mainID, err := index.GetProjectMainWorkspaceID(projectID)
+	cwd, err := os.Getwd()
 	if err != nil {
 		return "", ""
 	}
-	if mainID == "" {
+	// Find project root to get ParentConfig
+	var parentRoot string
+	var parentCfg *config.ParentConfig
+	if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
+		parentRoot, parentCfg, _ = config.FindParentRootFrom(wsRoot)
+	} else {
+		parentRoot, parentCfg, _ = config.FindParentRootFrom(cwd)
+	}
+	if parentCfg == nil || parentCfg.MainWorkspaceID == "" {
 		return "", ""
 	}
-	idx, err := index.Load()
-	if err != nil {
+	mainID := parentCfg.MainWorkspaceID
+	if parentRoot == "" {
 		return mainID, ""
 	}
-	for _, ws := range idx.Workspaces {
-		if ws.WorkspaceID == mainID {
-			return mainID, ws.WorkspaceName
-		}
+	s := store.OpenAt(parentRoot)
+	wsInfo, lookupErr := s.FindWorkspaceByID(mainID)
+	if lookupErr != nil {
+		return mainID, ""
 	}
-	return mainID, ""
+	return mainID, wsInfo.WorkspaceName
 }

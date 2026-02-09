@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func newImportGitCmd() *cobra.Command {
@@ -437,15 +437,18 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 		return fmt.Errorf("failed to save workspace config: %w", err)
 	}
 
-	if err := index.RegisterWorkspace(index.WorkspaceEntry{
-		WorkspaceID:    cfg.WorkspaceID,
-		ProjectID:      cfg.ProjectID,
-		WorkspaceName:  cfg.WorkspaceName,
-		Path:           targetRoot,
-		BaseSnapshotID: cfg.BaseSnapshotID,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		fmt.Printf("Warning: Could not register workspace: %v\n", err)
+	// Register in project-level registry
+	if parentRoot, _, findErr := config.FindParentRootFrom(targetRoot); findErr == nil {
+		projectStore := store.OpenAt(parentRoot)
+		if regErr := projectStore.RegisterWorkspace(store.WorkspaceInfo{
+			WorkspaceID:   cfg.WorkspaceID,
+			WorkspaceName: cfg.WorkspaceName,
+			Path:          targetRoot,
+			BaseSnapshotID: cfg.BaseSnapshotID,
+			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		}); regErr != nil {
+			fmt.Printf("Warning: Could not register workspace: %v\n", regErr)
+		}
 	}
 
 	fmt.Printf("✓ Imported branch '%s' into workspace '%s'\n", target.Branch, cfg.WorkspaceName)

@@ -13,7 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/index"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func init() {
@@ -43,32 +43,55 @@ Use --all to show workspaces from all projects.`,
 }
 
 func runWorkspaces(showAll bool) error {
+	// Find project context
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	var parentRoot string
+	var parentCfg *config.ParentConfig
 	var currentProjectID string
 
-	if !showAll {
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("not in a workspace directory - use --all to see all workspaces")
+	// Try workspace first, then project root
+	if wsRoot, err := config.FindProjectRoot(); err == nil {
+		pr, pc, findErr := config.FindParentRootFrom(wsRoot)
+		if findErr == nil {
+			parentRoot = pr
+			parentCfg = pc
+			currentProjectID = pc.ProjectID
+		} else {
+			cfg, loadErr := config.LoadAt(wsRoot)
+			if loadErr == nil {
+				currentProjectID = cfg.ProjectID
+			}
 		}
-		currentProjectID = cfg.ProjectID
-	}
-
-	idx, err := index.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load workspace registry: %w", err)
-	}
-
-	mainByProject := map[string]string{}
-	for _, project := range idx.Projects {
-		if project.MainWorkspaceID != "" {
-			mainByProject[project.ProjectID] = project.MainWorkspaceID
+	} else {
+		pr, pc, findErr := config.FindParentRootFrom(cwd)
+		if findErr == nil {
+			parentRoot = pr
+			parentCfg = pc
+			currentProjectID = pc.ProjectID
 		}
 	}
 
-	localWorkspaces := map[string]index.WorkspaceEntry{}
-	for _, ws := range idx.Workspaces {
-		if showAll || ws.ProjectID == currentProjectID {
-			localWorkspaces[ws.WorkspaceID] = ws
+	if !showAll && currentProjectID == "" {
+		return fmt.Errorf("not in a workspace or project directory - use --all to see all workspaces")
+	}
+
+	// Load workspaces from project-level registry
+	localWorkspaces := map[string]store.WorkspaceInfo{}
+	mainWorkspaceID := ""
+	if parentRoot != "" {
+		s := store.OpenAt(parentRoot)
+		wsList, err := s.ListWorkspaces()
+		if err == nil {
+			for _, ws := range wsList {
+				localWorkspaces[ws.WorkspaceID] = ws
+			}
+		}
+		if parentCfg != nil {
+			mainWorkspaceID = parentCfg.MainWorkspaceID
 		}
 	}
 
@@ -95,7 +118,7 @@ func runWorkspaces(showAll bool) error {
 					}
 				}
 			}
-		} else {
+		} else if currentProjectID != "" {
 			_, workspaces, err := client.GetProject(currentProjectID)
 			if err != nil {
 				fmt.Printf("Warning: failed to fetch project: %v\n", err)
@@ -113,10 +136,10 @@ func runWorkspaces(showAll bool) error {
 			ID:             ws.WorkspaceID,
 			Name:           ws.WorkspaceName,
 			Path:           ws.Path,
-			ProjectID:      ws.ProjectID,
+			ProjectID:      currentProjectID,
 			BaseSnapshotID: ws.BaseSnapshotID,
 			Local:          true,
-			IsMain:         mainByProject[ws.ProjectID] == ws.WorkspaceID,
+			IsMain:         mainWorkspaceID == ws.WorkspaceID,
 		}
 	}
 	for _, ws := range cloudWorkspaces {
@@ -132,7 +155,7 @@ func runWorkspaces(showAll bool) error {
 		if entry.Name == "" {
 			entry.Name = ws.Name
 		}
-		if mainByProject[ws.ProjectID] == ws.ID {
+		if mainWorkspaceID == ws.ID {
 			entry.IsMain = true
 		}
 		entry.Cloud = true
@@ -286,7 +309,6 @@ Displays workspace name, ID, project, base snapshot, and mode.`,
 
 	cmd.AddCommand(newWorkspaceInitCmd())
 	cmd.AddCommand(newWorkspaceCreateCmd())
-	cmd.AddCommand(newCopyCmd())
 	cmd.AddCommand(newSetMainCmd())
 	cmd.AddCommand(newCloneCmd())
 
@@ -315,21 +337,30 @@ func newWorkspaceInitCmd() *cobra.Command {
 }
 
 func newWorkspaceCreateCmd() *cobra.Command {
+	var fromWorkspace string
+
 	cmd := &cobra.Command{
-		Use:   "create [workspace-name]",
-		Short: "Create a new workspace",
-		Long: `Create a new workspace with its own .fst metadata.
+		Use:   "create <workspace-name>",
+		Short: "Create a new workspace forked from an existing one",
+		Long: `Create a new workspace by copying files from a source workspace.
 
-When run inside a project folder (fst.json), the workspace is created under
-that folder and linked to the project's ID.
+This is similar to 'git checkout -b': it creates a new workspace forked from
+the source workspace's current snapshot, with all files copied over.
 
-By default, the workspace name matches the directory name. If no workspace
-name is provided under a project folder, one is generated from the project name.`,
-		Args: cobra.MaximumNArgs(2),
+When run inside a workspace, the current workspace is used as the source.
+When run from the project folder, the main workspace is used as the source.
+Use --from to specify a different source workspace.
+
+Examples:
+  fst workspace create feature-1             # Fork from current/main workspace
+  fst workspace create bugfix --from dev     # Fork from 'dev' workspace`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(args)
+			return runCreate(args, fromWorkspace)
 		},
 	}
+
+	cmd.Flags().StringVar(&fromWorkspace, "from", "", "Source workspace to fork from (default: current or main)")
 
 	return cmd
 }
@@ -368,9 +399,19 @@ func runSetMain(workspaceName string) error {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
-	token, err := deps.AuthGetToken()
+	wsRoot, err := config.FindProjectRoot()
 	if err != nil {
-		fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
+		return fmt.Errorf("not in a workspace directory")
+	}
+
+	parentRoot, parentCfg, err := config.FindParentRootFrom(wsRoot)
+	if err != nil {
+		return fmt.Errorf("no project folder found - run 'fst project init' first")
+	}
+
+	token, tokenErr := deps.AuthGetToken()
+	if tokenErr != nil {
+		fmt.Printf("Warning: %v\n", deps.AuthFormatError(tokenErr))
 		token = ""
 	}
 
@@ -382,19 +423,13 @@ func runSetMain(workspaceName string) error {
 		targetWorkspaceID = cfg.WorkspaceID
 		targetWorkspaceName = cfg.WorkspaceName
 	} else {
-		idx, err := index.Load()
+		s := store.OpenAt(parentRoot)
+		wsInfo, err := s.FindWorkspaceByName(workspaceName)
 		if err != nil {
-			return fmt.Errorf("failed to load workspace registry: %w", err)
-		}
-		ws, found, err := resolveWorkspaceFromRegistry(workspaceName, idx.Workspaces, cfg.ProjectID)
-		if err != nil {
-			return err
-		}
-		if !found {
 			return fmt.Errorf("workspace '%s' not found locally\nRun 'fst workspaces' to see available workspaces.", workspaceName)
 		}
-		targetWorkspaceID = ws.WorkspaceID
-		targetWorkspaceName = ws.WorkspaceName
+		targetWorkspaceID = wsInfo.WorkspaceID
+		targetWorkspaceName = wsInfo.WorkspaceName
 	}
 
 	if token != "" {
@@ -405,7 +440,9 @@ func runSetMain(workspaceName string) error {
 		}
 	}
 
-	if err := index.SetProjectMainWorkspace(cfg.ProjectID, targetWorkspaceID); err != nil {
+	// Store main workspace in parent config
+	parentCfg.MainWorkspaceID = targetWorkspaceID
+	if err := config.SaveParentConfigAt(parentRoot, parentCfg); err != nil {
 		return fmt.Errorf("failed to store main workspace locally: %w", err)
 	}
 
@@ -425,9 +462,6 @@ func runWorkspaceStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
-
-	_ = index.TouchWorkspace(cfg.WorkspaceID)
-	_ = index.TouchProject(cfg.ProjectID)
 
 	root, _ := config.FindProjectRoot()
 

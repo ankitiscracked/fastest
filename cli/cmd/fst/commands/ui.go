@@ -17,8 +17,8 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func init() {
@@ -185,52 +185,63 @@ func initialModel() model {
 func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 	var items []workspaceItem
 
-	idx, err := index.Load()
+	// Find project root to get workspaces from project-level registry
+	cwd, err := os.Getwd()
 	if err != nil {
 		return items
 	}
 
-	mainByProject := map[string]string{}
-	projectIDs := map[string]struct{}{}
-	for _, ws := range idx.Workspaces {
-		projectIDs[ws.ProjectID] = struct{}{}
+	var parentRoot string
+	var parentCfg *config.ParentConfig
+	if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
+		parentRoot, parentCfg, _ = config.FindParentRootFrom(wsRoot)
+	} else {
+		parentRoot, parentCfg, _ = config.FindParentRootFrom(cwd)
 	}
-	for projectID := range projectIDs {
-		if mainID, err := index.GetProjectMainWorkspaceID(projectID); err == nil && mainID != "" {
-			mainByProject[projectID] = mainID
-		}
+	if parentRoot == "" {
+		return items
+	}
+
+	s := store.OpenAt(parentRoot)
+	wsList, listErr := s.ListWorkspaces()
+	if listErr != nil {
+		return items
+	}
+
+	mainID := ""
+	if parentCfg != nil {
+		mainID = parentCfg.MainWorkspaceID
 	}
 
 	// Group by project for better display
-	projectNames := make(map[string]string) // projectID -> name (use first workspace's project)
+	projectNames := make(map[string]string)
 
-	for _, ws := range idx.Workspaces {
+	for _, ws := range wsList {
 		// Check if workspace still exists
 		if _, err := os.Stat(filepath.Join(ws.Path, ".fst")); os.IsNotExist(err) {
 			continue
 		}
 
-		mainID, hasMain := mainByProject[ws.ProjectID]
+		projectID := currentProjectID
 		item := workspaceItem{
-			ProjectID:     ws.ProjectID,
+			ProjectID:     projectID,
 			WorkspaceID:   ws.WorkspaceID,
 			WorkspaceName: ws.WorkspaceName,
 			Path:          ws.Path,
-			SameProject:   ws.ProjectID == currentProjectID,
-			IsMain:        hasMain && mainID == ws.WorkspaceID,
-			MainMissing:   !hasMain,
+			SameProject:   true,
+			IsMain:        mainID != "" && mainID == ws.WorkspaceID,
+			MainMissing:   mainID == "",
 		}
 
 		// Try to get project name from workspace config
 		if _, err := config.LoadAt(ws.Path); err == nil {
-			if projectNames[ws.ProjectID] == "" {
-				// Use directory name as project name
-				projectNames[ws.ProjectID] = filepath.Base(filepath.Dir(ws.Path))
+			if projectNames[projectID] == "" {
+				projectNames[projectID] = filepath.Base(filepath.Dir(ws.Path))
 			}
 		}
 
 		// Get drift info
-		if changes, err := getWorkspaceChanges(ws); err == nil {
+		if changes, err := getWorkspaceChanges(ws.Path); err == nil {
 			item.Added = len(changes.FilesAdded)
 			item.Modified = len(changes.FilesModified)
 			item.Deleted = len(changes.FilesDeleted)
@@ -1030,8 +1041,8 @@ func max(a, b int) int {
 }
 
 // getWorkspaceChanges computes drift from the base snapshot for a workspace.
-func getWorkspaceChanges(ws index.WorkspaceEntry) (*drift.Report, error) {
-	wsCfg, err := config.LoadAt(ws.Path)
+func getWorkspaceChanges(wsPath string) (*drift.Report, error) {
+	wsCfg, err := config.LoadAt(wsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1040,12 +1051,12 @@ func getWorkspaceChanges(ws index.WorkspaceEntry) (*drift.Report, error) {
 		return &drift.Report{}, nil
 	}
 
-	manifestHash, err := config.ManifestHashFromSnapshotIDAt(ws.Path, wsCfg.BaseSnapshotID)
+	manifestHash, err := config.ManifestHashFromSnapshotIDAt(wsPath, wsCfg.BaseSnapshotID)
 	if err != nil {
 		return nil, err
 	}
 
-	manifestsDir := config.GetManifestsDirAt(ws.Path)
+	manifestsDir := config.GetManifestsDirAt(wsPath)
 	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -1057,7 +1068,7 @@ func getWorkspaceChanges(ws index.WorkspaceEntry) (*drift.Report, error) {
 		return nil, err
 	}
 
-	currentManifest, err := manifest.GenerateWithCache(ws.Path, config.GetStatCachePath(ws.Path))
+	currentManifest, err := manifest.GenerateWithCache(wsPath, config.GetStatCachePath(wsPath))
 	if err != nil {
 		return nil, err
 	}

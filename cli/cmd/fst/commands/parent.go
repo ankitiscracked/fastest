@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/index"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func init() {
@@ -140,7 +140,6 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 	parentDir := filepath.Dir(workspaceRoot)
 	parentPath := filepath.Join(parentDir, projectName)
 
-	originalWorkspaceRoot := workspaceRoot
 	if err := createParentContainer(parentPath, workspaceRoot, workspaceName); err != nil {
 		return err
 	}
@@ -182,32 +181,25 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		}
 	}
 
-	if err := index.UpsertWorkspace(index.WorkspaceEntry{
-		WorkspaceID:    workspaceID,
-		ProjectID:      projectID,
-		WorkspaceName:  workspaceName,
-		Path:           workspaceRoot,
+	// Register workspace in project-level registry
+	projectStore := store.OpenAt(parentPath)
+	if err := projectStore.RegisterWorkspace(store.WorkspaceInfo{
+		WorkspaceID:   workspaceID,
+		WorkspaceName: workspaceName,
+		Path:          workspaceRoot,
 		BaseSnapshotID: baseSnapshotID,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-		LocalOnly:      true,
-	}, originalWorkspaceRoot); err != nil {
-		fmt.Printf("Warning: Could not update workspace registry: %v\n", err)
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		fmt.Printf("Warning: Could not register workspace: %v\n", err)
 	}
 
-	// Update parent config with base snapshot and workspace IDs
+	// Update parent config with base snapshot, workspace, and main workspace IDs
 	parentCfg.BaseSnapshotID = baseSnapshotID
 	parentCfg.BaseWorkspaceID = workspaceID
+	parentCfg.MainWorkspaceID = workspaceID
 	if err := config.SaveParentConfigAt(parentPath, parentCfg); err != nil {
 		return err
 	}
-	_ = index.UpsertProject(index.ProjectEntry{
-		ProjectID:   projectID,
-		ProjectName: projectName,
-		ProjectPath: parentPath,
-		CreatedAt:   parentCfg.CreatedAt,
-		LocalOnly:   true,
-	})
-	_ = index.SetProjectMainWorkspace(projectID, workspaceID)
 
 	fmt.Println("✓ Project folder initialized")
 	fmt.Printf("  Project:   %s\n", projectName)
@@ -279,25 +271,25 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 		}
 	}
 
-	if err := index.RegisterWorkspace(index.WorkspaceEntry{
-		WorkspaceID:    workspaceID,
-		ProjectID:      projectID,
-		WorkspaceName:  workspaceName,
-		Path:           workspacePath,
+	// Register workspace in project-level registry
+	projectStore := store.OpenAt(projectPath)
+	if err := projectStore.RegisterWorkspace(store.WorkspaceInfo{
+		WorkspaceID:   workspaceID,
+		WorkspaceName: workspaceName,
+		Path:          workspacePath,
 		BaseSnapshotID: snapshotID,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		fmt.Printf("Warning: Could not register workspace: %v\n", err)
 	}
 
-	_ = index.UpsertProject(index.ProjectEntry{
-		ProjectID:   projectID,
-		ProjectName: projectName,
-		ProjectPath: projectPath,
-		CreatedAt:   parentCfg.CreatedAt,
-		LocalOnly:   true,
-	})
-	_ = index.SetProjectMainWorkspace(projectID, workspaceID)
+	// Store main workspace in parent config
+	parentCfg.BaseSnapshotID = snapshotID
+	parentCfg.BaseWorkspaceID = workspaceID
+	parentCfg.MainWorkspaceID = workspaceID
+	if err := config.SaveParentConfigAt(projectPath, parentCfg); err != nil {
+		fmt.Printf("Warning: Could not update parent config: %v\n", err)
+	}
 
 	fmt.Println("✓ Project created")
 	fmt.Printf("  Project:   %s\n", projectName)

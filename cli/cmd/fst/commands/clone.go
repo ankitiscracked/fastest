@@ -13,8 +13,8 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func newCloneCmd() *cobra.Command {
@@ -140,15 +140,18 @@ func runClone(target string, targetDir string) error {
 		_ = config.SaveAt(absTargetDir, cfg)
 	}
 
-	if err := index.RegisterWorkspace(index.WorkspaceEntry{
-		WorkspaceID:    workspaceID,
-		ProjectID:      projectID,
-		WorkspaceName:  workspaceName,
-		Path:           absTargetDir,
-		BaseSnapshotID: forkSnapshotID,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		fmt.Printf("Warning: Could not register workspace: %v\n", err)
+	// Register in project-level registry if inside a project
+	if parentRoot, _, findErr := config.FindParentRootFrom(absTargetDir); findErr == nil {
+		projectStore := store.OpenAt(parentRoot)
+		if regErr := projectStore.RegisterWorkspace(store.WorkspaceInfo{
+			WorkspaceID:   workspaceID,
+			WorkspaceName: workspaceName,
+			Path:          absTargetDir,
+			BaseSnapshotID: forkSnapshotID,
+			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		}); regErr != nil {
+			fmt.Printf("Warning: Could not register workspace: %v\n", regErr)
+		}
 	}
 
 	fmt.Println("✓ Clone complete!")

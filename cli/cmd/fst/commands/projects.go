@@ -16,7 +16,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/index"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func init() {
@@ -216,16 +216,18 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		}
 	}
 
-	// Register workspace in global registry
-	if err := index.RegisterWorkspace(index.WorkspaceEntry{
-		WorkspaceID:    workspaceID,
-		ProjectID:      projectID,
-		WorkspaceName:  workspaceName,
-		Path:           cwd,
-		BaseSnapshotID: snapshotID,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		fmt.Printf("Warning: Could not register workspace: %v\n", err)
+	// Register workspace in project-level registry
+	if parentRoot, _, findErr := config.FindParentRootFrom(cwd); findErr == nil {
+		projectStore := store.OpenAt(parentRoot)
+		if regErr := projectStore.RegisterWorkspace(store.WorkspaceInfo{
+			WorkspaceID:   workspaceID,
+			WorkspaceName: workspaceName,
+			Path:          cwd,
+			BaseSnapshotID: snapshotID,
+			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		}); regErr != nil {
+			fmt.Printf("Warning: Could not register workspace: %v\n", regErr)
+		}
 	}
 
 	fmt.Println()
@@ -243,7 +245,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  fst drift                       # Check for changes")
-	fmt.Println("  fst workspace copy -n feature   # Create a workspace copy")
+	fmt.Println("  fst workspace create feature     # Create a new workspace")
 
 	return nil
 }
@@ -281,11 +283,6 @@ func newProjectsCmd() *cobra.Command {
 func runProjects(cmd *cobra.Command, args []string) error {
 	var cloudProjects []api.Project
 
-	idx, err := index.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load local index: %w", err)
-	}
-
 	token, err := deps.AuthGetToken()
 	if err != nil {
 		fmt.Printf("Warning: %v\n", deps.AuthFormatError(err))
@@ -301,15 +298,20 @@ func runProjects(cmd *cobra.Command, args []string) error {
 	}
 
 	merged := map[string]*mergedProject{}
-	for _, p := range idx.Projects {
-		merged[p.ProjectID] = &mergedProject{
-			ID:          p.ProjectID,
-			Name:        p.ProjectName,
-			LocalPath:   p.ProjectPath,
-			LocalSeenAt: p.LastSeenAt,
-			Local:       true,
+
+	// Include current project if we're inside one
+	cwd, _ := os.Getwd()
+	if cwd != "" {
+		if parentRoot, parentCfg, findErr := config.FindParentRootFrom(cwd); findErr == nil {
+			merged[parentCfg.ProjectID] = &mergedProject{
+				ID:        parentCfg.ProjectID,
+				Name:      parentCfg.ProjectName,
+				LocalPath: parentRoot,
+				Local:     true,
+			}
 		}
 	}
+
 	for _, p := range cloudProjects {
 		entry, ok := merged[p.ID]
 		if !ok {
@@ -386,6 +388,9 @@ func runProject(cmd *cobra.Command, args []string) error {
 	}
 
 	var projectID string
+	var parentRoot string
+	var parentCfg *config.ParentConfig
+
 	if projectArg == "" {
 		// Try to get from local config
 		cfg, err := config.Load()
@@ -393,11 +398,13 @@ func runProject(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("no project ID provided and not in a workspace directory")
 		}
 		projectID = cfg.ProjectID
-	}
-
-	idx, err := index.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load local index: %w", err)
+		// Find parent root for local workspace listing
+		if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
+			if pr, pc, parentErr := config.FindParentRootFrom(wsRoot); parentErr == nil {
+				parentRoot = pr
+				parentCfg = pc
+			}
+		}
 	}
 
 	var cloudProject *api.Project
@@ -417,7 +424,7 @@ func runProject(cmd *cobra.Command, args []string) error {
 			cloudProjects = projects
 		}
 		if projectArg != "" {
-			resolvedID, err := resolveProjectID(projectArg, idx, cloudProjects)
+			resolvedID, err := resolveProjectID(projectArg, cloudProjects)
 			if err != nil {
 				return err
 			}
@@ -431,34 +438,28 @@ func runProject(cmd *cobra.Command, args []string) error {
 			cloudWorkspaces = workspaces
 		}
 	} else if projectArg != "" {
-		resolvedID, err := resolveProjectID(projectArg, idx, nil)
+		resolvedID, err := resolveProjectID(projectArg, nil)
 		if err != nil {
 			return err
 		}
 		projectID = resolvedID
 	}
 
-	var localProject *index.ProjectEntry
-	for i := range idx.Projects {
-		if idx.Projects[i].ProjectID == projectID {
-			localProject = &idx.Projects[i]
-			break
-		}
-	}
-	if cloudProject == nil && localProject == nil {
+	hasLocal := parentCfg != nil && parentCfg.ProjectID == projectID
+	if cloudProject == nil && !hasLocal {
 		return fmt.Errorf("project not found locally and not available from cloud")
 	}
 
 	projectName := projectID
 	if cloudProject != nil && cloudProject.Name != "" {
 		projectName = cloudProject.Name
-	} else if localProject != nil && localProject.ProjectName != "" {
-		projectName = localProject.ProjectName
+	} else if parentCfg != nil && parentCfg.ProjectName != "" {
+		projectName = parentCfg.ProjectName
 	}
 
 	fmt.Printf("Project: %s\n", projectName)
 	fmt.Printf("ID: %s\n", projectID)
-	fmt.Printf("Location: %s\n", locationTag(localProject != nil, cloudProject != nil))
+	fmt.Printf("Location: %s\n", locationTag(hasLocal, cloudProject != nil))
 	if cloudProject != nil {
 		fmt.Printf("Created: %s\n", formatRelativeTime(cloudProject.CreatedAt))
 		fmt.Printf("Updated: %s\n", formatRelativeTime(cloudProject.UpdatedAt))
@@ -466,21 +467,21 @@ func runProject(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Last Snapshot: %s\n", *cloudProject.LastSnapshotID)
 		}
 	}
-	if localProject != nil {
-		if localProject.ProjectPath != "" {
-			fmt.Printf("Path: %s\n", localProject.ProjectPath)
-		}
-		if localProject.LastSeenAt != "" {
-			fmt.Printf("Last Seen: %s\n", formatRelativeTime(localProject.LastSeenAt))
-		}
+	if hasLocal {
+		fmt.Printf("Path: %s\n", parentRoot)
 	}
 
 	fmt.Println()
 
-	localWorkspaces := map[string]index.WorkspaceEntry{}
-	for _, ws := range idx.Workspaces {
-		if ws.ProjectID == projectID {
-			localWorkspaces[ws.WorkspaceID] = ws
+	// Load local workspaces from project-level registry
+	localWorkspaces := map[string]store.WorkspaceInfo{}
+	if parentRoot != "" {
+		s := store.OpenAt(parentRoot)
+		wsList, listErr := s.ListWorkspaces()
+		if listErr == nil {
+			for _, ws := range wsList {
+				localWorkspaces[ws.WorkspaceID] = ws
+			}
 		}
 	}
 
@@ -490,7 +491,7 @@ func runProject(cmd *cobra.Command, args []string) error {
 			ID:          ws.WorkspaceID,
 			Name:        ws.WorkspaceName,
 			Path:        ws.Path,
-			ProjectID:   ws.ProjectID,
+			ProjectID:   projectID,
 			Local:       true,
 			LocationTag: "local",
 		}
@@ -528,13 +529,12 @@ func runProject(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Workspaces (%d):\n", len(workspaces))
 	fmt.Println()
-	fmt.Printf("  %-12s  %-10s  %-20s  %-35s  %s\n", "ID", "LOC", "NAME", "PATH", "LAST SEEN")
-	fmt.Printf("  %-12s  %-10s  %-20s  %-35s  %s\n",
+	fmt.Printf("  %-12s  %-10s  %-20s  %s\n", "ID", "LOC", "NAME", "PATH")
+	fmt.Printf("  %-12s  %-10s  %-20s  %s\n",
 		strings.Repeat("-", 12),
 		strings.Repeat("-", 10),
 		strings.Repeat("-", 20),
-		strings.Repeat("-", 35),
-		strings.Repeat("-", 15))
+		strings.Repeat("-", 35))
 
 	workspaceIDs := make([]string, 0, len(workspaces))
 	for _, w := range workspaces {
@@ -555,13 +555,7 @@ func runProject(cmd *cobra.Command, args []string) error {
 		if len(displayPath) > 35 {
 			displayPath = "..." + displayPath[len(displayPath)-32:]
 		}
-		lastSeen := "-"
-		if w.Local {
-			if local, ok := localWorkspaces[w.ID]; ok && local.LastSeenAt != "" {
-				lastSeen = formatRelativeTime(local.LastSeenAt)
-			}
-		}
-		fmt.Printf("  %-12s  %-10s  %-20s  %-35s  %s\n", shortID, w.LocationTag, name, displayPath, lastSeen)
+		fmt.Printf("  %-12s  %-10s  %-20s  %s\n", shortID, w.LocationTag, name, displayPath)
 	}
 
 	return nil
@@ -601,7 +595,7 @@ func formatProjectUpdatedAt(cloudUpdatedAt, localSeenAt string) string {
 	return "-"
 }
 
-func resolveProjectID(input string, idx *index.Index, cloudProjects []api.Project) (string, error) {
+func resolveProjectID(input string, cloudProjects []api.Project) (string, error) {
 	if input == "" {
 		return "", fmt.Errorf("project name or ID is required")
 	}
@@ -611,27 +605,11 @@ func resolveProjectID(input string, idx *index.Index, cloudProjects []api.Projec
 			return p.ID, nil
 		}
 	}
-	if idx != nil {
-		for _, p := range idx.Projects {
-			if p.ProjectID == input {
-				return p.ProjectID, nil
-			}
-		}
-	}
 
 	if strings.HasPrefix(input, "proj-") {
-		localCount := 0
-		if idx != nil {
-			localCount = len(idx.Projects)
-		}
-		ids := make([]string, 0, len(cloudProjects)+localCount)
+		ids := make([]string, 0, len(cloudProjects))
 		for _, p := range cloudProjects {
 			ids = append(ids, p.ID)
-		}
-		if idx != nil {
-			for _, p := range idx.Projects {
-				ids = append(ids, p.ProjectID)
-			}
 		}
 		if resolved, err := resolveIDPrefix(input, ids, "project"); err == nil {
 			return resolved, nil
@@ -644,13 +622,6 @@ func resolveProjectID(input string, idx *index.Index, cloudProjects []api.Projec
 	for _, p := range cloudProjects {
 		if p.Name == input {
 			matches[p.ID] = true
-		}
-	}
-	if idx != nil {
-		for _, p := range idx.Projects {
-			if p.ProjectName == input {
-				matches[p.ProjectID] = true
-			}
 		}
 	}
 

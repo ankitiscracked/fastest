@@ -11,8 +11,8 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/index"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func init() {
@@ -82,19 +82,26 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 			return fmt.Errorf("no upstream workspace found - specify a workspace to diff against")
 		}
 
-		// Look up upstream workspace path from registry
-		idx, err := index.Load()
-		if err != nil {
-			return fmt.Errorf("failed to load workspace registry: %w", err)
+		// Look up upstream workspace path from project-level registry
+		parentRoot, _, parentErr := config.FindParentRootFrom(root)
+		if parentErr != nil {
+			return fmt.Errorf("no project folder found - specify a workspace path")
 		}
+		s := store.OpenAt(parentRoot)
 
 		found := false
-		for _, ws := range idx.Workspaces {
-			if ws.WorkspaceID == upstreamID || ws.WorkspaceName == upstreamName {
-				otherRoot = ws.Path
-				otherName = ws.WorkspaceName
+		if upstreamID != "" {
+			if wsInfo, lookupErr := s.FindWorkspaceByID(upstreamID); lookupErr == nil {
+				otherRoot = wsInfo.Path
+				otherName = wsInfo.WorkspaceName
 				found = true
-				break
+			}
+		}
+		if !found && upstreamName != "" {
+			if wsInfo, lookupErr := s.FindWorkspaceByName(upstreamName); lookupErr == nil {
+				otherRoot = wsInfo.Path
+				otherName = wsInfo.WorkspaceName
+				found = true
 			}
 		}
 
@@ -119,25 +126,18 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 				return fmt.Errorf("not a workspace: %s", otherRoot)
 			}
 		} else {
-			// Treat as workspace name
-			idx, err := index.Load()
-			if err != nil {
-				return fmt.Errorf("failed to load workspace registry: %w", err)
+			// Treat as workspace name - look up in project-level registry
+			parentRoot, _, parentErr := config.FindParentRootFrom(root)
+			if parentErr != nil {
+				return fmt.Errorf("no project folder found - specify a workspace path")
 			}
-
-			found := false
-			for _, ws := range idx.Workspaces {
-				if ws.WorkspaceName == target && ws.ProjectID == cfg.ProjectID {
-					otherRoot = ws.Path
-					otherName = ws.WorkspaceName
-					found = true
-					break
-				}
-			}
-
-			if !found {
+			s := store.OpenAt(parentRoot)
+			wsInfo, lookupErr := s.FindWorkspaceByName(target)
+			if lookupErr != nil {
 				return fmt.Errorf("workspace '%s' not found in project", target)
 			}
+			otherRoot = wsInfo.Path
+			otherName = wsInfo.WorkspaceName
 		}
 	}
 
