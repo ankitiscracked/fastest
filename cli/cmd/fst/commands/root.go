@@ -31,16 +31,17 @@ func register(r registrar) {
 func newRootCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "fst",
-		Short: "Fastest - sync project state across interfaces",
-		Long: `Fastest (fst) is a tool for keeping projects and their state in sync
-across CLI and Web interfaces, designed for agentic coding workflows.
+		Short: "Fastest - parallel agent workflows from the ground up",
+		Long: `Fastest (fst) is infrastructure for parallel agent workflows, built from the
+ground up. Existing tools treat parallel development as an afterthought — fst
+makes it the core primitive.
 
 It provides:
-  - Project management and identity
+  - Parallel workspaces with independent snapshot histories
   - Immutable snapshots of project state
-  - Workspace management for parallel development
-  - Drift detection with LLM-powered summaries
-  - Merge tools with agent-assisted conflict resolution`,
+  - Three-way merge with agent-assisted conflict resolution
+  - Drift detection across workspaces
+  - CLI-first interface for agents and humans alike`,
 	}
 }
 

@@ -36,7 +36,7 @@ This will:
 1. Scan all files (respecting .fstignore)
 2. Save the snapshot locally for rollback support
 3. Optionally sync to cloud if authenticated
-4. Set this as the new base for drift calculations
+4. Update the workspace head to point to this snapshot
 
 Use --agent-message to generate a description using your local coding agent.`,
 		RunE: func(cmd *cobra.Command, args []string) error {

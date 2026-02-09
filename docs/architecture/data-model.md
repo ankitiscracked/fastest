@@ -54,7 +54,7 @@ A workspace is a local directory with a `.fst/` metadata directory, linked to a 
 | `APIURL` | `api_url` | Optional API URL override |
 | `Mode` | `mode` | `"cloud"` or `"local"` |
 
-**Global registry** (`cli/internal/index/index.go`): All workspaces on the local machine are tracked in `~/.config/fst/index.json` so commands like `fst workspaces` and `fst merge <name>` can resolve workspace names to filesystem paths.
+**Project-level registry** (`cli/internal/store/`): All workspaces within a project are tracked in per-workspace files at `.fst/workspaces/<id>.json` so commands like `fst workspaces` and `fst merge <name>` can resolve workspace names to filesystem paths.
 
 ## Snapshot
 

@@ -21,8 +21,8 @@ Internal packages:
 | `dag` | `cli/internal/dag/` | Snapshot DAG traversal and merge-base (common ancestor) via BFS |
 | `agent` | `cli/internal/agent/` | Local coding agent integration (Claude, Aider, etc.) |
 | `ignore` | `cli/internal/ignore/` | `.fstignore` pattern matching |
-| `index` | `cli/internal/index/` | Global workspace registry at `~/.config/fst/index.json` |
-| `watcher` | `cli/internal/watcher/` | File system watching |
+| `store` | `cli/internal/store/` | Project-level workspace registry, atomic file I/O |
+| `workspace` | `cli/internal/workspace/` | Workspace lifecycle, locking, snapshot operations |
 
 ### API (`api/`)
 

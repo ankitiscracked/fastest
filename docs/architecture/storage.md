@@ -66,11 +66,11 @@ Blobs are written during `fst snapshot` (caches all current file contents) and d
 
 Implemented in `config.GetBlobsDir()` and `config.GetBlobsDirAt()` which follow the same project-level resolution as snapshots and manifests. Orphaned blobs are cleaned up by `fst gc`.
 
-## Global workspace index
+## Project-level workspace registry
 
-All workspaces on the machine are registered in `~/.config/fst/index.json` (respects `XDG_CONFIG_HOME`). This allows commands like `fst merge <name>` and `fst workspaces` to resolve workspace names to filesystem paths without requiring cloud access.
+All workspaces within a project are tracked in per-workspace JSON files at `.fst/workspaces/<workspace-id>.json` in the project root. This allows commands like `fst merge <name>` and `fst workspaces` to resolve workspace names to filesystem paths without requiring cloud access. Per-workspace files avoid concurrent write conflicts when multiple agents operate in parallel.
 
-Defined in `cli/internal/index/index.go`. The index contains both project and workspace entries with their paths, IDs, and timestamps.
+Defined in `cli/internal/store/` (`Store`, `WorkspaceInfo`, `RegisterWorkspace`, `FindWorkspaceByName`, `ListWorkspaces`).
 
 ## Manifest format
 

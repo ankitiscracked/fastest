@@ -1,6 +1,6 @@
 # Fastest (fst)
 
-Fastest is a version control system designed for AI-native development with parallel workspaces. It provides immutable snapshots, workspace-level branching, drift detection, and three-way merge with optional AI-assisted conflict resolution.
+Fastest is infrastructure for parallel agent workflows, built from the ground up. Existing tools treat parallel development as an afterthought — fst makes it the core primitive, providing immutable snapshots, workspace-level branching, drift detection, and three-way merge with agent-assisted conflict resolution.
 
 The CLI binary is `fst`. The project is structured as a monorepo with a Go CLI, a Hono/Cloudflare Workers API, and a Vite+React web frontend.
 
@@ -51,6 +51,7 @@ fst git import <repo-path>
 
 | Command | Description |
 |---------|-------------|
+| `fst project init` | Initialize current directory as a project |
 | `fst workspace init` | Initialize a workspace with `.fst/` directory |
 | `fst workspace create` | Create a new workspace under a project |
 | `fst snapshot` | Capture current state as an immutable snapshot |
@@ -59,15 +60,21 @@ fst git import <repo-path>
 | `fst merge` | Three-way merge from another workspace |
 | `fst diff` | Line-level content differences between workspaces |
 | `fst rollback` | Restore files from a previous snapshot |
-| `fst workspace clone` | Clone a project or snapshot to a new workspace |
+| `fst clone` | Clone a project or snapshot to a new workspace |
 | `fst sync` | Sync local and remote workspace state |
 | `fst pull` | Pull latest snapshot from cloud |
 | `fst login` / `fst logout` | Authenticate with Fastest cloud |
 | `fst whoami` | Show current user |
+| `fst projects` | List your projects |
 | `fst workspaces` | List all workspaces for a project |
-| `fst git export` / `fst git import` | Bidirectional Git interop |
 | `fst log` | Show snapshot history |
-| `fst info` | Show project and workspace details |
+| `fst info` | Show workspace or project details |
+| `fst history drop/squash/rebase` | History rewriting operations |
+| `fst gc` | Garbage collect orphaned snapshots and blobs |
+| `fst agents` | List and configure coding agents |
+| `fst config` | Author identity configuration |
+| `fst git export` / `fst git import` | Bidirectional Git interop |
+| `fst ui` | Open the web UI |
 
 ## Documentation
 

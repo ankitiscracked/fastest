@@ -25,19 +25,22 @@ Implementation: `cli/internal/config/config.go` (`ProjectConfig`, `Load`, `Save`
 
 ## Workspace Registry
 
-All workspaces on a machine are tracked in a global index at `~/.config/fst/index.json` (respects `XDG_CONFIG_HOME`). The index contains both project and workspace entries:
+All workspaces within a project are tracked in a project-level registry at `.fst/workspaces/<workspace-id>.json` (stored in the project root's `.fst/` directory). Each file contains a single workspace's metadata:
 
-```
+```json
 {
-  "version": 1,
-  "projects": [{ "project_id", "project_name", "project_path", ... }],
-  "workspaces": [{ "workspace_id", "workspace_name", "project_id", "path", "base_snapshot_id", ... }]
+  "workspace_id": "ws-abc123",
+  "workspace_name": "feature-x",
+  "path": "/path/to/feature-x",
+  "base_snapshot_id": "snap-123",
+  "current_snapshot_id": "snap-456",
+  "created_at": "2025-01-01T00:00:00Z"
 }
 ```
 
-The registry enables cross-workspace commands like `fst drift` and `fst merge` to locate other workspaces by name. Entries include `last_seen_at` timestamps updated via `TouchWorkspace`.
+The registry enables cross-workspace commands like `fst drift` and `fst merge` to locate other workspaces by name. Per-workspace files avoid concurrent write conflicts when multiple workspaces operate in parallel.
 
-Implementation: `cli/internal/index/index.go` (`Index`, `WorkspaceEntry`, `UpsertWorkspace`, `Load`, `Save`).
+Implementation: `cli/internal/store/` (`Store`, `WorkspaceInfo`, `RegisterWorkspace`, `FindWorkspaceByName`).
 
 ## Lifecycle
 
@@ -47,28 +50,15 @@ Creates a new workspace in the current directory:
 1. Creates `.fst/` with `config.json`, `snapshots/`, `manifests/`
 2. Creates `.fstignore` with default patterns if missing
 3. Optionally creates an initial snapshot (`--no-snapshot` to skip)
-4. Registers the workspace in the global index
+4. Registers the workspace in the project-level workspace registry
 
 Implementation: `cli/cmd/fst/commands/workspace.go` (`runInit`), `cli/internal/config/config.go` (`InitAt`).
 
 ### Create (`fst workspace create`)
 
-Creates a new workspace directory under the current project folder. When run inside a project container (with `fst.json`), the workspace is linked to that project's ID and placed as a subdirectory.
+Creates a new workspace directory under the current project folder. Forks from the source workspace's latest snapshot with all files copied. The new workspace is linked to the project's ID and placed as a subdirectory.
 
 Implementation: `cli/cmd/fst/commands/workspace.go` (`newWorkspaceCreateCmd`).
-
-### Copy (`fst workspace copy`)
-
-Creates an independent copy of the current workspace:
-1. Copies all project files (respecting `.fstignore`) to a new directory
-2. Initializes a new `.fst/` with a fresh workspace ID
-3. Sets `base_snapshot_id` to the source workspace's latest snapshot
-4. Copies the fork-point snapshot metadata and manifest to the new workspace
-5. Registers the new workspace in the global index
-
-Blobs are stored in the global cache (`~/.cache/fst/blobs/`), so copies share blob storage with no duplication.
-
-Implementation: `cli/cmd/fst/commands/copy.go` (`runCopy`).
 
 ## Main Workspace
 
@@ -89,7 +79,7 @@ Implementation: `cli/cmd/fst/commands/workspace.go` (`runWorkspaceStatus`, `runW
 ## Storage
 
 - Blobs: `.fst/blobs/` (project-scoped, shared across workspaces under the same project)
-- Config/index: `~/.config/fst/` (respects `XDG_CONFIG_HOME`)
+- Global config: `~/.config/fst/` (respects `XDG_CONFIG_HOME`) — agent preferences, author identity, auth tokens
 
 Implementation: `cli/internal/config/config.go` (`GetBlobsDir`, `GetBlobsDirAt`, `GetGlobalConfigDir`).
 

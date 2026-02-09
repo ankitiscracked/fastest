@@ -1,6 +1,6 @@
 # Local State Layout
 
-How `fst` stores state on disk. Source: `cli/internal/config/config.go`, `cli/internal/index/index.go`.
+How `fst` stores state on disk. Source: `cli/internal/config/config.go`, `cli/internal/store/`.
 
 ## Per-Workspace: `.fst/`
 
@@ -9,11 +9,16 @@ Created by `fst workspace init` or `fst project init` in the workspace root.
 ```
 .fst/
   config.json       # Workspace configuration
+  lock              # Exclusive flock for workspace-level locking
   author.json       # Optional project-level author identity (name, email)
   snapshots/        # Snapshot metadata files
     <id>.meta.json  # SnapshotMeta: ID, ManifestHash, Parents, Author, CreatedAt, Message
   manifests/        # Manifest files (file tree hashes)
     <hash>.json     # Manifest: map of relative paths to content hashes
+  blobs/            # Content-addressed blob storage (project-scoped)
+    <sha256-hash>   # Raw file content keyed by SHA-256 hash
+  workspaces/       # Project-level workspace registry (project root only)
+    <ws-id>.json    # Per-workspace metadata (name, path, snapshot IDs)
   stat-cache.json   # Stat cache for accelerating manifest generation
   export/           # Git export state (created by `fst git export`)
     git-map.json    # Snapshot ID <-> git commit SHA mapping
@@ -38,50 +43,14 @@ Defined as `ProjectConfig` in `cli/internal/config/config.go`. The `fork_snapsho
 
 ## Global Config: `~/.config/fst/`
 
-Respects `XDG_CONFIG_HOME`. Contains cross-workspace state.
+Respects `XDG_CONFIG_HOME`. Contains user-level state shared across all projects.
 
 ```
 ~/.config/fst/
-  index.json        # Workspace and project registry
   agents.json       # Preferred agent configuration
   author.json       # Global author identity (name, email)
   auth.json         # Authentication tokens (managed by login/logout)
 ```
-
-### `index.json` structure
-
-Version 1 format. Migrates automatically from legacy `workspaces.json`.
-
-```json
-{
-  "version": 1,
-  "projects": [
-    {
-      "project_id": "uuid",
-      "project_name": "my-project",
-      "project_path": "/path/to/project",
-      "created_at": "2024-01-01T00:00:00Z",
-      "last_seen_at": "2024-01-01T00:00:00Z",
-      "local_only": false
-    }
-  ],
-  "workspaces": [
-    {
-      "workspace_id": "uuid",
-      "workspace_name": "my-workspace",
-      "project_id": "uuid",
-      "path": "/path/to/workspace",
-      "base_snapshot_id": "uuid",
-      "created_at": "2024-01-01T00:00:00Z",
-      "last_seen_at": "2024-01-01T00:00:00Z",
-      "machine_id": "hostname",
-      "local_only": false
-    }
-  ]
-}
-```
-
-Source: `cli/internal/index/index.go`.
 
 ### `agents.json` structure
 
@@ -92,18 +61,6 @@ Source: `cli/internal/index/index.go`.
 ```
 
 Source: `cli/internal/agent/agent.go`.
-
-## Global Cache: `~/.cache/fst/`
-
-Respects `XDG_CACHE_HOME`. Contains content-addressable blob storage.
-
-```
-~/.cache/fst/
-  blobs/
-    <sha256-hash>   # File contents keyed by SHA-256 hash
-```
-
-Blobs are populated during `fst snapshot` and read during `fst rollback` and `fst workspace clone`. Each blob is the raw file content stored under its SHA-256 digest.
 
 ## `.fstignore`
 

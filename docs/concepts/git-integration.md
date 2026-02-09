@@ -98,7 +98,7 @@ This metadata is used by `fst git import` to discover which branches correspond 
    - For each commit: checkout the tree, generate a manifest, cache blobs, create a snapshot with parent mappings
    - Agent name is recovered from the author email if it ends in `@fastest.local`
    - Set `current_snapshot_id` to the last imported snapshot, `base_snapshot_id` to the first
-4. Register the workspace in the global index
+4. Register the workspace in the project-level workspace registry
 
 ### Options
 

@@ -30,13 +30,11 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst workspace` | | Show current workspace status | `workspace.go` |
 | `fst workspace init` | | Initialize workspace in an existing project dir | `workspace.go` |
 | `fst workspace create` | | Create a new workspace (cloud + local) | `workspace.go` |
-| `fst workspace copy` | | Copy current workspace to a new directory | `copy.go` |
 | `fst workspace set-main` | | Set this workspace as the project's main workspace | `workspace.go` |
 | `fst workspace clone <project\|snapshot>` | | Clone a project/snapshot from cloud | `clone.go` |
 
 **`workspaces` flags:** `--all, -a` (show all, not just current project)
 **`workspace init` flags:** `--workspace, -w`, `--no-snapshot`, `--force`
-**`workspace copy` flags:** `--name, -n` (required), `--to, -t`
 **`workspace clone` flags:** `--to, -t`
 
 ## Snapshots
@@ -77,7 +75,7 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst info` | Show workspace or project info | `info.go` |
 
 **`drift` flags:** `--json`, `--agent-summary`, `--no-dirty`
-**`merge` flags:** `--manual`, `--theirs`, `--ours`, `--dry-run`, `--agent-summary`, `--from`, `--no-pre-snapshot`, `--force`, `--abort`
+**`merge` flags:** `--manual`, `--theirs`, `--ours`, `--dry-run`, `--agent-summary`, `--no-pre-snapshot`, `--force`, `--abort`
 **`diff` flags:** `--context, -C` (default 3), `--no-color`, `--names-only`
 **`pull` flags:** `--snapshot`, `--hard`, `--manual`, `--theirs`, `--ours`, `--dry-run`, `--agent-summary`
 **`sync` flags:** `--manual`, `--theirs`, `--ours`, `--files`, `--dry-run`, `--agent-summary`, `--no-snapshot`
