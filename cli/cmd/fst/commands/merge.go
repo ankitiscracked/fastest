@@ -57,7 +57,11 @@ Non-conflicting changes are applied automatically. For conflicts:
 
 Use --dry-run to preview the merge and see line-level conflict details.
 By default, a pre-merge snapshot is created only if the target has local changes.
-After a successful conflict-free merge, a snapshot is created automatically.`,
+After a successful conflict-free merge, a snapshot is created automatically.
+
+Exit codes:
+  0  Merge completed without conflicts
+  1  Merge completed with unresolved conflicts (for CI/CD scripting)`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if abort {
@@ -91,7 +95,7 @@ After a successful conflict-free merge, a snapshot is created automatically.`,
 				return fmt.Errorf("must specify workspace name")
 			}
 
-			return runMerge(args[0], mode, dryRun, dryRunSummary, noPreSnapshot, force)
+			return runMerge(cmd, args[0], mode, dryRun, dryRunSummary, noPreSnapshot, force)
 		},
 	}
 
@@ -121,7 +125,7 @@ func runMergeAbort() error {
 	return nil
 }
 
-func runMerge(sourceName string, mode ConflictMode, dryRun bool, dryRunSummary bool, noPreSnapshot bool, force bool) error {
+func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun bool, dryRunSummary bool, noPreSnapshot bool, force bool) error {
 	ws, err := workspace.Open()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -291,6 +295,10 @@ func runMerge(sourceName string, mode ConflictMode, dryRun bool, dryRunSummary b
 		fmt.Println("  1. Edit the conflicting files (look for <<<<<<< markers)")
 		fmt.Println("  2. Remove the conflict markers")
 		fmt.Println("  3. Run 'fst snapshot' to save the merged state")
+		if cmd != nil {
+			cmd.SilenceErrors = true
+			return SilentExit(1)
+		}
 	}
 
 	return nil

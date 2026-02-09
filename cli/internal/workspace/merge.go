@@ -54,6 +54,14 @@ func (ws *Workspace) ApplyMerge(opts ApplyMergeOpts) (*MergeResult, error) {
 		return nil, err
 	}
 
+	// Record merge parents BEFORE applying changes so that if we crash
+	// mid-apply, the next 'fst snapshot' still creates a merge commit
+	// with the correct parent IDs in the history DAG.
+	parents := []string{plan.CurrentSnapshotID, plan.SourceSnapshotID}
+	if err := config.WritePendingMergeParentsAt(ws.root, parents); err != nil {
+		return nil, fmt.Errorf("failed to record merge parents: %w", err)
+	}
+
 	result := &MergeResult{}
 
 	// Apply non-conflicting changes
@@ -100,12 +108,8 @@ func (ws *Workspace) ApplyMerge(opts ApplyMergeOpts) (*MergeResult, error) {
 		}
 	}
 
-	// Record merge parents for the next snapshot
-	if len(result.Failed) == 0 && (len(result.Applied) > 0 || len(result.Conflicts) > 0) {
-		parents := []string{plan.CurrentSnapshotID, plan.SourceSnapshotID}
-		_ = config.WritePendingMergeParentsAt(ws.root, parents)
-	}
-	if len(result.Failed) > 0 {
+	// If everything failed, clear the merge parents
+	if len(result.Failed) > 0 && len(result.Applied) == 0 && len(result.Conflicts) == 0 {
 		_ = config.ClearPendingMergeParentsAt(ws.root)
 	}
 

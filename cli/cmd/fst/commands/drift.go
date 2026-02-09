@@ -58,6 +58,10 @@ Use --no-dirty to compare only committed snapshots.
 
 With no argument, compares against the project's main workspace.
 
+Exit codes:
+  0  No drift detected
+  1  Drift detected (for CI/CD scripting)
+
 Examples:
   fst drift                    # Drift vs main workspace
   fst drift feature-branch     # Drift vs workspace named "feature-branch"
@@ -70,7 +74,7 @@ Examples:
 			if len(args) > 0 {
 				target = args[0]
 			}
-			return runDrift(target, jsonOutput, summary, noDirty)
+			return runDrift(cmd, target, jsonOutput, summary, noDirty)
 		},
 	}
 
@@ -81,7 +85,7 @@ Examples:
 	return cmd
 }
 
-func runDrift(target string, jsonOutput, generateSummary, noDirty bool) error {
+func runDrift(cmd *cobra.Command, target string, jsonOutput, generateSummary, noDirty bool) error {
 	ws, err := workspace.Open()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -136,6 +140,14 @@ func runDrift(target string, jsonOutput, generateSummary, noDirty bool) error {
 	}
 
 	printDriftReport(result, !noDirty)
+
+	// Exit code 1 when drift is detected
+	hasDrift := (result.OurChanges != nil && result.OurChanges.HasChanges()) ||
+		(result.TheirChanges != nil && result.TheirChanges.HasChanges())
+	if hasDrift {
+		cmd.SilenceErrors = true
+		return SilentExit(1)
+	}
 	return nil
 }
 

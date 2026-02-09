@@ -28,9 +28,8 @@
 ### ~~7. Pre-Operation Safety Snapshots Are Non-Fatal~~ FIXED
 - Pre-operation snapshot failures now abort the destructive operation. Users can opt out with `--no-pre-snapshot` (merge), `--hard` (pull), or `--no-snapshot` (sync).
 
-### 8. Merge State Corruption on Mid-Apply Crash
-- `workspace/merge.go:59-107` — Merge applies file changes to the working tree one-by-one, then writes `merge-parents.json` only after ALL changes succeed. A crash mid-apply means: (a) some files are already modified, (b) merge-parents.json is never written, (c) the next `fst snapshot` creates a single-parent snapshot instead of a merge commit, losing merge history context.
-- **Impact**: History DAG loses merge relationship; future merge base computation may give wrong results.
+### ~~8. Merge State Corruption on Mid-Apply Crash~~ FIXED
+- Merge-parents.json is now written BEFORE applying file changes, not after. If a crash occurs mid-apply, the next `fst snapshot` still creates a merge commit with correct parent IDs. If all actions fail, merge parents are cleared.
 
 ### 9. Rollback Has No Atomicity or Recovery
 - `workspace/rollback.go:164-221` — Rollback restores files one at a time in a loop. If crash occurs mid-loop, workspace is partially rolled back with no record of progress. Cannot safely retry (some files already restored, some not).
@@ -44,9 +43,8 @@
 ### ~~11. `workspaces` Command Uses Global Index, Not Project Registry~~ FIXED
 - Now uses project-level registry consistently. Global index removed.
 
-### 12. Merge/Diff/Drift Exit Codes Don't Distinguish Results
-- `drift.go`, `diff.go`, `merge.go` — All return exit code 0 regardless of whether changes/conflicts were found. Scripts cannot programmatically detect drift, diffs, or unresolved merge conflicts.
-- **Impact**: CI/CD pipelines can't use `fst drift` as a gate.
+### ~~12. Merge/Diff/Drift Exit Codes Don't Distinguish Results~~ FIXED
+- `drift` exits 1 when drift is detected, `diff` exits 1 when differences are found, `merge` exits 1 when unresolved conflicts remain. Exit 0 means no changes/conflicts. Uses `SilentExit` error type to suppress Cobra error output.
 
 ### 13. `RegisterWorkspace` Merge Semantics Can't Clear Fields
 - `store/registry.go:59-87` — `RegisterWorkspace()` only overwrites non-empty fields. This means if a workspace's `CurrentSnapshotID` needs to be *cleared* (set to empty), it's impossible through this API. The registry will keep the stale value.
@@ -86,5 +84,5 @@
 | ~~P1~~ | ~~No workspace-level locking (#10)~~ | ~~FIXED — flock-based exclusive workspace lock~~ |
 | ~~P1~~ | ~~Pre-operation snapshots should be fatal (#7)~~ | ~~FIXED — snapshot failure now aborts operation~~ |
 | ~~P1~~ | ~~GC vs in-flight race (#1)~~ | ~~FIXED — shared/exclusive project-level GC lock~~ |
-| P2 | Merge state crash recovery (#8) | Write merge-parents.json *before* applying changes, not after |
-| P2 | Exit codes for drift/diff/merge (#12) | Return non-zero for "found changes/conflicts" |
+| ~~P2~~ | ~~Merge state crash recovery (#8)~~ | ~~FIXED — merge-parents.json written before applying changes~~ |
+| ~~P2~~ | ~~Exit codes for drift/diff/merge (#12)~~ | ~~FIXED — SilentExit(1) for changes/conflicts found~~ |

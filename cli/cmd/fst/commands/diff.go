@@ -34,6 +34,10 @@ workspace that created this workspace's base snapshot).
 
 With file arguments, only shows diffs for those specific files.
 
+Exit codes:
+  0  No differences found
+  1  Differences found (for CI/CD scripting)
+
 Examples:
   fst diff                     # Diff against upstream workspace
   fst diff main                # Diff against workspace named "main"
@@ -50,7 +54,7 @@ Examples:
 					files = args[1:]
 				}
 			}
-			return runDiff(target, files, contextLines, noColor, namesOnly)
+			return runDiff(cmd, target, files, contextLines, noColor, namesOnly)
 		},
 	}
 
@@ -61,7 +65,7 @@ Examples:
 	return cmd
 }
 
-func runDiff(target string, files []string, contextLines int, noColor, namesOnly bool) error {
+func runDiff(cmd *cobra.Command, target string, files []string, contextLines int, noColor, namesOnly bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -176,6 +180,7 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 		return nil
 	}
 
+
 	// Names only mode
 	if namesOnly {
 		for _, f := range added {
@@ -187,7 +192,8 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 		for _, f := range deleted {
 			fmt.Printf("\033[31mD %s\033[0m\n", f)
 		}
-		return nil
+		cmd.SilenceErrors = true
+		return SilentExit(1)
 	}
 
 	// Show actual diffs
@@ -268,7 +274,9 @@ func runDiff(target string, files []string, contextLines int, noColor, namesOnly
 		fmt.Println()
 	}
 
-	return nil
+	// Exit code 1 when differences are found
+	cmd.SilenceErrors = true
+	return SilentExit(1)
 }
 
 func filterFiles(files []string, filter map[string]bool) []string {
