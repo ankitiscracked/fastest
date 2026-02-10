@@ -300,11 +300,7 @@ func displayMergedWorkspace(ws mergedWorkspace, currentPath string) {
 func newWorkspaceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workspace",
-		Short: "Show current workspace status",
-		Long: `Show the status of the current workspace.
-
-Displays workspace name, ID, project, base snapshot, and mode.`,
-		RunE: runWorkspaceStatus,
+		Short: "Manage workspaces",
 	}
 
 	cmd.AddCommand(newWorkspaceInitCmd())
@@ -453,46 +449,6 @@ func runSetMain(workspaceName string) error {
 		fmt.Println()
 	}
 	fmt.Println("Other workspaces can now use 'fst drift' to compare against this workspace.")
-
-	return nil
-}
-
-func runWorkspaceStatus(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
-	}
-
-	root, _ := config.FindProjectRoot()
-
-	fmt.Printf("Current workspace:\n")
-	fmt.Println()
-	fmt.Printf("  Name:       %s\n", cfg.WorkspaceName)
-	fmt.Printf("  ID:         %s\n", cfg.WorkspaceID)
-	fmt.Printf("  Project:    %s\n", cfg.ProjectID)
-	fmt.Printf("  Directory:  %s\n", root)
-
-	if cfg.BaseSnapshotID != "" {
-		fmt.Printf("  Base:       %s\n", cfg.BaseSnapshotID)
-	} else {
-		fmt.Printf("  Base:       (no base snapshot)\n")
-	}
-
-	fmt.Printf("  Mode:       %s\n", cfg.Mode)
-
-	// Show drift summary
-	report, err := drift.ComputeFromCache(root)
-	if err == nil {
-		fmt.Println()
-		if report.HasChanges() {
-			fmt.Printf("  Drift:      +%d added, ~%d modified, -%d deleted\n",
-				len(report.FilesAdded),
-				len(report.FilesModified),
-				len(report.FilesDeleted))
-		} else {
-			fmt.Printf("  Drift:      clean (no changes)\n")
-		}
-	}
 
 	return nil
 }

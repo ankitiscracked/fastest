@@ -27,7 +27,7 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | Command | Aliases | Description | Source |
 |---------|---------|-------------|--------|
 | `fst workspaces` | `ws` | List workspaces for the current project | `workspace.go` |
-| `fst workspace` | | Show current workspace status | `workspace.go` |
+| `fst workspace` | | Manage workspaces (requires subcommand) | `workspace.go` |
 | `fst workspace init` | | Initialize workspace in an existing project dir | `workspace.go` |
 | `fst workspace create` | | Create a new workspace (cloud + local) | `workspace.go` |
 | `fst workspace set-main` | | Set this workspace as the project's main workspace | `workspace.go` |

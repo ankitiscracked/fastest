@@ -94,7 +94,11 @@ func runStatus(jsonOutput bool) error {
 
 func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string) error {
 	fmt.Printf("Workspace: \033[1m%s\033[0m\n", cfg.WorkspaceName)
+	fmt.Printf("ID:        %s\n", cfg.WorkspaceID)
 	fmt.Printf("Path:      %s\n", root)
+	if cfg.Mode != "" {
+		fmt.Printf("Mode:      %s\n", cfg.Mode)
+	}
 	fmt.Println()
 
 	snapshotIDs := make([]string, 0, 2)
@@ -155,6 +159,7 @@ func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.
 	fmt.Printf("  \"workspace_name\": %q,\n", cfg.WorkspaceName)
 	fmt.Printf("  \"workspace_id\": %q,\n", cfg.WorkspaceID)
 	fmt.Printf("  \"path\": %q,\n", root)
+	fmt.Printf("  \"mode\": %q,\n", cfg.Mode)
 	fmt.Printf("  \"latest_snapshot_id\": %q,\n", latestSnapshotID)
 	fmt.Printf("  \"latest_snapshot_time\": %q,\n", latestSnapshotTime)
 	fmt.Printf("  \"base_snapshot_id\": %q,\n", cfg.BaseSnapshotID)
