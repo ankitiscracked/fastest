@@ -70,7 +70,7 @@ fst git import <repo-path>
 | `fst info workspaces` | List all workspaces for a project |
 | `fst info workspace` | Show details for a specific workspace |
 | `fst info project` | Show current project details |
-| `fst history drop/squash/rebase` | History rewriting operations |
+| `fst edit` / `fst drop` / `fst squash` | History rewriting operations |
 | `fst gc` | Garbage collect orphaned snapshots and blobs |
 | `fst agents` | List and configure coding agents |
 | `fst config` | Author identity configuration |
@@ -85,6 +85,16 @@ fst git import <repo-path>
 - [Authentication](architecture/auth.md) -- device flow, Google OAuth, token storage
 - [Security](architecture/security.md) -- trust boundaries, token scoping, storage isolation
 
+## Testing
+
+```bash
+# Go unit/integration tests
+cd cli && go test ./...
+
+# End-to-end workflow tests (builds binary, runs 9 workflow scripts)
+./tests/e2e/run.sh
+```
+
 ## Repository structure
 
 ```
@@ -92,4 +102,5 @@ cli/           Go CLI tool (module github.com/anthropics/fastest/cli)
 api/           Hono API on Cloudflare Workers
 web/           Vite + React frontend (TanStack Router)
 packages/shared/  Shared TypeScript types and manifest utilities
+tests/e2e/     End-to-end bash workflow tests
 ```
