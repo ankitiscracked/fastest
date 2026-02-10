@@ -58,6 +58,13 @@ func runRollback(files []string, toSnapshot string, toBase bool, dryRun bool, fo
 	}
 	defer ws.Close()
 
+	// Resolve the rollback target BEFORE creating the auto-snapshot,
+	// otherwise the auto-snapshot becomes the "latest" and rollback
+	// would roll back to the dirty state it just saved.
+	if toSnapshot == "" && !toBase {
+		toSnapshot = ws.CurrentSnapshotID()
+	}
+
 	// Pre-rollback auto-snapshot — ensures a recovery point if rollback
 	// is interrupted mid-apply.
 	if !dryRun {
