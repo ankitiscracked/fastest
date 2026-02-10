@@ -79,4 +79,4 @@ fst agents set-preferred claude # Set preferred agent
 | `fst pull` | `--agent-summary` | Summarize pulled changes |
 | `fst sync` | `--agent-summary` | Summarize sync results |
 
-The default merge conflict mode is **Agent** -- `fst merge` invokes the preferred agent to resolve conflicts automatically. Use `--manual`, `--theirs`, or `--ours` to override.
+The default merge conflict mode is **Agent** -- `fst merge` first auto-merges files with non-overlapping line changes via diff3, then invokes the preferred agent to resolve any remaining true conflicts. Use `--manual`, `--theirs`, or `--ours` to override the conflict resolution strategy (auto-merge still applies in all modes).

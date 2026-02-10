@@ -12,25 +12,30 @@ The merge operates on three manifests:
 
 Merge inputs are snapshot-based -- working tree files are not used as merge inputs. The merge aborts if it would overwrite local uncommitted changes that overlap with files the merge would touch.
 
-Implementation: `cli/cmd/fst/commands/merge.go` (`runMerge`, `computeMergeActions`).
+Implementation: `cli/cmd/fst/commands/merge.go` (`runMerge`), `cli/internal/store/merge.go` (`computeMergeActions`).
 
 ## Merge Actions
 
 For each file path across all three manifests, `computeMergeActions` classifies it:
 
-| Scenario                          | Action      |
-|-----------------------------------|-------------|
-| Only source changed               | `apply`     |
-| Only current changed              | `in_sync`   |
-| Both changed, same content        | `in_sync`   |
-| Both changed, different content   | `conflict`  |
-| File only in source (new)         | `apply`     |
-| Current deleted, source has it    | `conflict`  |
-| Source deleted, current has it    | `in_sync`   |
+| Scenario                                            | Action       |
+|-----------------------------------------------------|--------------|
+| Only source changed                                 | `apply`      |
+| Only current changed                                | `in_sync`    |
+| Both changed, same content                          | `in_sync`    |
+| Both changed, non-overlapping lines                 | `auto-merge` |
+| Both changed, overlapping lines                     | `conflict`   |
+| File only in source (new)                           | `apply`      |
+| Current deleted, source has it                      | `conflict`   |
+| Source deleted, current has it                       | `in_sync`    |
 
 "Changed" means the file's hash differs from the base manifest, or the file was added since the base.
 
+When both sides change the same file, the planner attempts a **line-level three-way merge** using the diff3 algorithm (`epiclabs-io/diff3`). If changes are on non-overlapping lines, the file is auto-merged with both sets of changes applied. Only files with true line-level overlaps are classified as conflicts. Binary files (containing null bytes) and files without a base version skip auto-merge and go directly to conflict.
+
 ## Conflict Resolution Strategies
+
+In all modes, files with non-overlapping changes are auto-merged first via diff3. The conflict resolution strategy only applies to files with true line-level conflicts:
 
 | Flag       | Mode         | Behavior                                          |
 |------------|--------------|---------------------------------------------------|
@@ -41,7 +46,7 @@ For each file path across all three manifests, `computeMergeActions` classifies 
 
 When agent resolution fails for a file, the merge falls back to manual conflict markers for that file.
 
-Implementation: `cli/cmd/fst/commands/merge.go` (`ConflictMode`, conflict handling in `runMerge`).
+Implementation: `cli/cmd/fst/commands/merge.go` (`ConflictMode`, conflict handling in `runMerge`), `cli/internal/workspace/merge.go` (`ApplyMerge`).
 
 ## Conflict Detection
 
@@ -92,7 +97,7 @@ type Report struct {
 `fst merge --dry-run` previews the merge without modifying files. It shows:
 - The merge plan (files to apply, conflicts, in-sync)
 - Line-level conflict details with region line numbers and content previews
-- Auto-mergeable file count (overlapping but non-conflicting)
+- Auto-merged file count (files modified in both workspaces with non-overlapping line changes)
 - Optional AI summary with `--agent-summary`
 
 ## The `fst diff` Command

@@ -85,7 +85,7 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 
 ### Merge conflict modes
 
-Merge supports four conflict resolution strategies (set via flags on `merge`, `pull`, or `sync`):
+Files modified in both workspaces with non-overlapping line changes are auto-merged via the diff3 algorithm in all modes. The conflict resolution strategy only applies to files with true line-level overlaps:
 
 - **Agent** (default) -- invokes the preferred coding agent to resolve conflicts
 - **Manual** (`--manual`) -- writes conflict markers for manual resolution
