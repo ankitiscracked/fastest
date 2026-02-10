@@ -14,8 +14,6 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 
 | Command | Aliases | Description | Source |
 |---------|---------|-------------|--------|
-| `fst projects` | `ps` | List projects (local index + cloud) | `projects.go` |
-| `fst projects show [id\|name]` | | Show project details with workspaces | `projects.go` |
 | `fst project init [name]` | | Initialize current directory as a project | `parent.go` |
 | `fst project create <name>` | | Create a new project on the server | `parent.go` |
 
@@ -26,14 +24,12 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 
 | Command | Aliases | Description | Source |
 |---------|---------|-------------|--------|
-| `fst workspaces` | `ws` | List workspaces for the current project | `workspace.go` |
 | `fst workspace` | | Manage workspaces (requires subcommand) | `workspace.go` |
 | `fst workspace init` | | Initialize workspace in an existing project dir | `workspace.go` |
 | `fst workspace create` | | Create a new workspace (cloud + local) | `workspace.go` |
 | `fst workspace set-main` | | Set this workspace as the project's main workspace | `workspace.go` |
 | `fst workspace clone <project\|snapshot>` | | Clone a project/snapshot from cloud | `clone.go` |
 
-**`workspaces` flags:** `--all, -a` (show all, not just current project)
 **`workspace init` flags:** `--workspace, -w`, `--no-snapshot`, `--force`
 **`workspace clone` flags:** `--to, -t`
 
@@ -72,7 +68,10 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst pull [workspace]` | Pull changes from another workspace | `pull.go` |
 | `fst sync` | Sync with the upstream workspace | `sync.go` |
 | `fst status` | Show workspace status with drift summary | `status.go` |
-| `fst info` | Show workspace or project info | `info.go` |
+| `fst info` | Show workspace or project info (context-aware) | `info.go` |
+| `fst info workspaces` | `ws` | List all workspaces for the current project | `info.go` |
+| `fst info workspace [name\|id]` | | Show details for a specific workspace | `info.go` |
+| `fst info project` | | Show current project details | `info.go` |
 
 **`drift` flags:** `--json`, `--agent-summary`, `--no-dirty`
 **`merge` flags:** `--manual`, `--theirs`, `--ours`, `--dry-run`, `--agent-summary`, `--no-pre-snapshot`, `--force`, `--abort`
@@ -80,7 +79,9 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 **`pull` flags:** `--snapshot`, `--hard`, `--manual`, `--theirs`, `--ours`, `--dry-run`, `--agent-summary`
 **`sync` flags:** `--manual`, `--theirs`, `--ours`, `--files`, `--dry-run`, `--agent-summary`, `--no-snapshot`
 **`status` flags:** `--json`
-**`info` flags:** `--json`, `--list`
+**`info` flags:** `--json`
+**`info workspace` flags:** `--json`
+**`info project` flags:** `--json`
 
 ### Merge conflict modes
 

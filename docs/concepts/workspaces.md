@@ -72,9 +72,11 @@ Implementation: `cli/cmd/fst/commands/workspace.go` (`runSetMain`), `cli/interna
 
 `fst status` displays current workspace info including name, ID, path, mode, snapshots, upstream, and change summary.
 
-`fst workspaces` lists all workspaces for the current project (or all projects with `--all`). It merges local registry data with cloud workspace data and shows location tags (local, cloud, or both), status (ok, missing, current, cloud), and drift summary.
+`fst info workspaces` lists all workspaces for the current project from the local registry, showing name, path, role (main), and drift summary.
 
-Implementation: `cli/cmd/fst/commands/status.go` (`runStatus`), `cli/cmd/fst/commands/workspace.go` (`runWorkspaces`).
+`fst info workspace [name|id]` shows details for a specific workspace including snapshots, upstream, and project info.
+
+Implementation: `cli/cmd/fst/commands/status.go` (`runStatus`), `cli/cmd/fst/commands/info.go` (`runInfoWorkspaces`, `runInfoWorkspace`).
 
 ## Storage
 

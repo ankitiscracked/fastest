@@ -65,10 +65,11 @@ fst git import <repo-path>
 | `fst pull` | Pull latest snapshot from cloud |
 | `fst login` / `fst logout` | Authenticate with Fastest cloud |
 | `fst whoami` | Show current user |
-| `fst projects` | List your projects |
-| `fst workspaces` | List all workspaces for a project |
 | `fst log` | Show snapshot history |
 | `fst info` | Show workspace or project details |
+| `fst info workspaces` | List all workspaces for a project |
+| `fst info workspace` | Show details for a specific workspace |
+| `fst info project` | Show current project details |
 | `fst history drop/squash/rebase` | History rewriting operations |
 | `fst gc` | Garbage collect orphaned snapshots and blobs |
 | `fst agents` | List and configure coding agents |
