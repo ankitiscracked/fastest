@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 func init() {
@@ -49,7 +50,7 @@ Examples:
   fst conflicts ../feature-workspace         # Deprecated`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("\033[33mNote: 'fst conflicts' is deprecated. Use 'fst merge --dry-run' instead.\033[0m")
+			fmt.Println(ui.Yellow("Note: 'fst conflicts' is deprecated. Use 'fst merge --dry-run' instead."))
 			fmt.Println()
 			return runConflicts(args[0], showAll, includeDirty, jsonOutput, summary)
 		},
@@ -142,7 +143,7 @@ func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, gene
 				fmt.Println()
 				fmt.Println("Overlapping files (auto-mergeable):")
 				for _, path := range report.OverlappingFiles {
-					fmt.Printf("  \033[33m%s\033[0m\n", path)
+					fmt.Printf("  %s\n", ui.Yellow(path))
 				}
 			}
 		} else {
@@ -156,7 +157,7 @@ func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, gene
 	fmt.Println()
 
 	for _, c := range report.Conflicts {
-		fmt.Printf("  \033[31m%s\033[0m (%d conflicting regions)\n", c.Path, len(c.Hunks))
+		fmt.Printf("  %s (%d conflicting regions)\n", ui.Red(c.Path), len(c.Hunks))
 		for i, h := range c.Hunks {
 			if h.EndLine > h.StartLine {
 				fmt.Printf("    Conflict %d: lines %d-%d\n", i+1, h.StartLine, h.EndLine)
@@ -172,7 +173,7 @@ func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, gene
 		fmt.Println("Files modified in both (auto-mergeable):")
 		for _, path := range report.OverlappingFiles {
 			if !hasConflict(report.Conflicts, path) {
-				fmt.Printf("  \033[33m%s\033[0m\n", path)
+				fmt.Printf("  %s\n", ui.Yellow(path))
 			}
 		}
 	}

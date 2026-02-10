@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 func init() {
@@ -93,7 +94,7 @@ func runStatus(jsonOutput bool) error {
 }
 
 func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string) error {
-	fmt.Printf("Workspace: \033[1m%s\033[0m\n", cfg.WorkspaceName)
+	fmt.Printf("Workspace: %s\n", ui.Bold(cfg.WorkspaceName))
 	fmt.Printf("ID:        %s\n", cfg.WorkspaceID)
 	fmt.Printf("Path:      %s\n", root)
 	if cfg.Mode != "" {
@@ -140,15 +141,15 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 	if driftReport == nil {
 		fmt.Println("Changes:   (unable to compute)")
 	} else if !driftReport.HasChanges() {
-		fmt.Println("\033[32m✓ No changes since last snapshot\033[0m")
+		fmt.Println(ui.Green("✓ No changes since last snapshot"))
 	} else {
 		added := len(driftReport.FilesAdded)
 		modified := len(driftReport.FilesModified)
 		deleted := len(driftReport.FilesDeleted)
 		total := added + modified + deleted
 
-		fmt.Printf("Changes:   \033[33m%d files changed\033[0m since last snapshot (+%d ~%d -%d)\n",
-			total, added, modified, deleted)
+		fmt.Printf("Changes:   %s since last snapshot (+%d ~%d -%d)\n",
+			ui.Yellow(fmt.Sprintf("%d files changed", total)), added, modified, deleted)
 	}
 
 	return nil

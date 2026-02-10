@@ -9,6 +9,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
 	"github.com/anthropics/fastest/cli/internal/drift"
+	"github.com/anthropics/fastest/cli/internal/ui"
 	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
@@ -303,21 +304,21 @@ func printChanges(report *drift.Report) {
 	if len(report.FilesAdded) > 0 {
 		fmt.Printf("  Added (%d):\n", len(report.FilesAdded))
 		for _, f := range report.FilesAdded {
-			fmt.Printf("    \033[32m+ %s\033[0m\n", f)
+			fmt.Printf("    %s\n", ui.Green("+ "+f))
 		}
 	}
 
 	if len(report.FilesModified) > 0 {
 		fmt.Printf("  Modified (%d):\n", len(report.FilesModified))
 		for _, f := range report.FilesModified {
-			fmt.Printf("    \033[33m~ %s\033[0m\n", f)
+			fmt.Printf("    %s\n", ui.Yellow("~ "+f))
 		}
 	}
 
 	if len(report.FilesDeleted) > 0 {
 		fmt.Printf("  Deleted (%d):\n", len(report.FilesDeleted))
 		for _, f := range report.FilesDeleted {
-			fmt.Printf("    \033[31m- %s\033[0m\n", f)
+			fmt.Printf("    %s\n", ui.Red("- "+f))
 		}
 	}
 }
@@ -328,7 +329,7 @@ func printConflictSummary(cs *conflictSummary) {
 		if f.ConflictCount == 1 {
 			label = "conflict"
 		}
-		fmt.Printf("  \033[31m%-40s %d %s\033[0m\n", f.Path, f.ConflictCount, label)
+		fmt.Printf("  %s\n", ui.Red(fmt.Sprintf("%-40s %d %s", f.Path, f.ConflictCount, label)))
 	}
 	filesLabel := "files"
 	if cs.TotalFiles == 1 {

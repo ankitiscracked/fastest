@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/anthropics/fastest/cli/internal/ui"
 	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
@@ -140,7 +141,7 @@ func printRollbackActions(result *workspace.RollbackResult) {
 			if a.Status != "" {
 				status = " (" + a.Status + ")"
 			}
-			fmt.Printf("  \033[32m↩ %s\033[0m%s\n", a.Path, status)
+			fmt.Printf("  %s%s\n", ui.Green("↩ "+a.Path), status)
 		}
 		fmt.Println()
 	}
@@ -148,7 +149,7 @@ func printRollbackActions(result *workspace.RollbackResult) {
 	if len(deleteActions) > 0 {
 		fmt.Printf("Files to delete (%d):\n", len(deleteActions))
 		for _, a := range deleteActions {
-			fmt.Printf("  \033[31m✗ %s\033[0m\n", a.Path)
+			fmt.Printf("  %s\n", ui.Red("✗ "+a.Path))
 		}
 		fmt.Println()
 	}

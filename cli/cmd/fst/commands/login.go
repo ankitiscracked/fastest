@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/api"
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 func init() {
@@ -52,10 +53,10 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	// Display the code and URL
 	fmt.Println()
 	fmt.Println("To authenticate, visit:")
-	fmt.Printf("  \033[1m%s\033[0m\n", deviceResp.VerificationURI)
+	fmt.Printf("  %s\n", ui.Bold(deviceResp.VerificationURI))
 	fmt.Println()
 	fmt.Println("And enter code:")
-	fmt.Printf("  \033[1;36m%s\033[0m\n", deviceResp.UserCode)
+	fmt.Printf("  %s\n", ui.BoldCyan(deviceResp.UserCode))
 	fmt.Println()
 
 	// Try to open browser automatically
@@ -108,7 +109,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 		// Success! Save the token
 		fmt.Println("\r\033[K")
-		fmt.Printf("✓ Logged in as \033[1m%s\033[0m\n", tokenResp.User.Email)
+		fmt.Printf("✓ Logged in as %s\n", ui.Bold(tokenResp.User.Email))
 
 		if err := deps.AuthSaveToken(tokenResp.AccessToken); err != nil {
 			return fmt.Errorf("logged in but failed to save token: %w", deps.AuthFormatError(err))

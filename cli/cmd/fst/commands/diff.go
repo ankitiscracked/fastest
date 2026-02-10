@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 func init() {
@@ -66,6 +67,10 @@ Examples:
 }
 
 func runDiff(cmd *cobra.Command, target string, files []string, contextLines int, noColor, namesOnly bool) error {
+	if noColor {
+		ui.Disable()
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -184,13 +189,13 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 	// Names only mode
 	if namesOnly {
 		for _, f := range added {
-			fmt.Printf("\033[32mA %s\033[0m\n", f)
+			fmt.Println(ui.Green("A " + f))
 		}
 		for _, f := range modified {
-			fmt.Printf("\033[33mM %s\033[0m\n", f)
+			fmt.Println(ui.Yellow("M " + f))
 		}
 		for _, f := range deleted {
-			fmt.Printf("\033[31mD %s\033[0m\n", f)
+			fmt.Println(ui.Red("D " + f))
 		}
 		cmd.SilenceErrors = true
 		return SilentExit(1)
@@ -201,7 +206,7 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 
 	// Added files - show full content
 	for _, f := range added {
-		printFileHeader(f, "added", noColor)
+		printFileHeader(f, "added")
 		content, err := os.ReadFile(filepath.Join(root, f))
 		if err != nil {
 			fmt.Printf("  (could not read file)\n")
@@ -209,11 +214,7 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 		}
 		lines := strings.Split(string(content), "\n")
 		for i, line := range lines {
-			if noColor {
-				fmt.Printf("+%s\n", line)
-			} else {
-				fmt.Printf("\033[32m+%s\033[0m\n", line)
-			}
+			fmt.Println(ui.Green("+" + line))
 			// Limit output for very large files
 			if i > 100 {
 				fmt.Printf("  ... (%d more lines)\n", len(lines)-i-1)
@@ -225,7 +226,7 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 
 	// Modified files - show diff
 	for _, f := range modified {
-		printFileHeader(f, "modified", noColor)
+		printFileHeader(f, "modified")
 
 		ourContent, err := os.ReadFile(filepath.Join(root, f))
 		if err != nil {
@@ -247,13 +248,13 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 		}
 
 		// Convert to line-based unified diff
-		printUnifiedDiff(diffs, contextLines, noColor)
+		printUnifiedDiff(diffs, contextLines)
 		fmt.Println()
 	}
 
 	// Deleted files - show removal
 	for _, f := range deleted {
-		printFileHeader(f, "deleted", noColor)
+		printFileHeader(f, "deleted")
 		content, err := os.ReadFile(filepath.Join(otherRoot, f))
 		if err != nil {
 			fmt.Printf("  (could not read file)\n")
@@ -261,11 +262,7 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 		}
 		lines := strings.Split(string(content), "\n")
 		for i, line := range lines {
-			if noColor {
-				fmt.Printf("-%s\n", line)
-			} else {
-				fmt.Printf("\033[31m-%s\033[0m\n", line)
-			}
+			fmt.Println(ui.Red("-" + line))
 			if i > 100 {
 				fmt.Printf("  ... (%d more lines)\n", len(lines)-i-1)
 				break
@@ -292,22 +289,17 @@ func filterFiles(files []string, filter map[string]bool) []string {
 	return result
 }
 
-func printFileHeader(path, status string, noColor bool) {
-	if noColor {
-		fmt.Printf("=== %s (%s) ===\n", path, status)
-	} else {
-		var color string
-		switch status {
-		case "added":
-			color = "\033[32m"
-		case "modified":
-			color = "\033[33m"
-		case "deleted":
-			color = "\033[31m"
-		default:
-			color = ""
-		}
-		fmt.Printf("%s=== %s (%s) ===\033[0m\n", color, path, status)
+func printFileHeader(path, status string) {
+	header := fmt.Sprintf("=== %s (%s) ===", path, status)
+	switch status {
+	case "added":
+		fmt.Println(ui.Green(header))
+	case "modified":
+		fmt.Println(ui.Yellow(header))
+	case "deleted":
+		fmt.Println(ui.Red(header))
+	default:
+		fmt.Println(header)
 	}
 }
 
@@ -320,7 +312,7 @@ func allEqual(diffs []diffmatchpatch.Diff) bool {
 	return true
 }
 
-func printUnifiedDiff(diffs []diffmatchpatch.Diff, contextLines int, noColor bool) {
+func printUnifiedDiff(diffs []diffmatchpatch.Diff, contextLines int) {
 	// Convert character-based diff to line-based for better readability
 	var theirLines, ourLines []string
 	var theirBuf, ourBuf strings.Builder
@@ -369,17 +361,9 @@ func printUnifiedDiff(diffs []diffmatchpatch.Diff, contextLines int, noColor boo
 				}
 				fmt.Printf(" %s\n", line)
 			case diffmatchpatch.DiffDelete:
-				if noColor {
-					fmt.Printf("-%s\n", line)
-				} else {
-					fmt.Printf("\033[31m-%s\033[0m\n", line)
-				}
+				fmt.Println(ui.Red("-" + line))
 			case diffmatchpatch.DiffInsert:
-				if noColor {
-					fmt.Printf("+%s\n", line)
-				} else {
-					fmt.Printf("\033[32m+%s\033[0m\n", line)
-				}
+				fmt.Println(ui.Green("+" + line))
 			}
 		}
 	}

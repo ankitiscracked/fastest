@@ -9,6 +9,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
 	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/anthropics/fastest/cli/internal/ui"
 	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
@@ -340,7 +341,7 @@ func printConflictDetails(ws *workspace.Workspace, sourceInfo *store.WorkspaceIn
 	}
 
 	for _, c := range conflictReport.Conflicts {
-		fmt.Printf("\n  \033[31m%s\033[0m (%d conflicting regions)\n", c.Path, len(c.Hunks))
+		fmt.Printf("\n  %s (%d conflicting regions)\n", ui.Red(c.Path), len(c.Hunks))
 		for i, h := range c.Hunks {
 			if h.EndLine > h.StartLine {
 				fmt.Printf("    Region %d: lines %d-%d\n", i+1, h.StartLine, h.EndLine)
@@ -405,24 +406,24 @@ func showMergeDiff(before, after string) {
 			continue
 		}
 		if i < len(beforeLines) {
-			fmt.Printf("      \033[31m- %s\033[0m\n", truncatePreview(beforeLines[i], 60))
+			fmt.Printf("      %s\n", ui.Red("- "+truncatePreview(beforeLines[i], 60)))
 			i++
 			changes++
 		}
 		if j < len(afterLines) && changes < maxChanges {
-			fmt.Printf("      \033[32m+ %s\033[0m\n", truncatePreview(afterLines[j], 60))
+			fmt.Printf("      %s\n", ui.Green("+ "+truncatePreview(afterLines[j], 60)))
 			j++
 			changes++
 		}
 	}
 
 	for i < len(beforeLines) && changes < maxChanges {
-		fmt.Printf("      \033[31m- %s\033[0m\n", truncatePreview(beforeLines[i], 60))
+		fmt.Printf("      %s\n", ui.Red("- "+truncatePreview(beforeLines[i], 60)))
 		i++
 		changes++
 	}
 	for j < len(afterLines) && changes < maxChanges {
-		fmt.Printf("      \033[32m+ %s\033[0m\n", truncatePreview(afterLines[j], 60))
+		fmt.Printf("      %s\n", ui.Green("+ "+truncatePreview(afterLines[j], 60)))
 		j++
 		changes++
 	}

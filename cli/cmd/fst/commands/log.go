@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 func init() {
@@ -214,14 +215,14 @@ func displaySnapshot(snap *logSnapshotMeta, isCurrent bool, shortIDs map[string]
 	// Agent tag (if present)
 	agentTag := ""
 	if snap.Agent != "" {
-		agentTag = fmt.Sprintf(" \033[36m[%s]\033[0m", snap.Agent)
+		agentTag = " " + ui.Cyan("["+snap.Agent+"]")
 	}
 
 	// Format: * snap-abc123  2 hours ago  (5 files, 1.2 KB) [claude]
-	fmt.Printf("%s \033[33m%s\033[0m  \033[90m%s\033[0m  (%d files, %s)%s\n",
+	fmt.Printf("%s %s  %s  (%d files, %s)%s\n",
 		indicator,
-		shortID,
-		timeStr,
+		ui.Yellow(shortID),
+		ui.Dim(timeStr),
 		snap.Files,
 		formatBytes(snap.Size),
 		agentTag,
@@ -237,7 +238,7 @@ func displaySnapshot(snap *logSnapshotMeta, isCurrent bool, shortIDs map[string]
 				authorStr = snap.AuthorEmail
 			}
 		}
-		fmt.Printf("    \033[90mAuthor: %s\033[0m\n", authorStr)
+		fmt.Printf("    %s\n", ui.Dim("Author: "+authorStr))
 	}
 
 	// Message (indented)

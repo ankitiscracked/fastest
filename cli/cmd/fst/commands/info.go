@@ -14,6 +14,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/drift"
 	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 func init() {
@@ -125,7 +126,7 @@ func runInfoWorkspaces() error {
 		isCurrent := ws.Path != "" && ws.Path == currentPath
 		indicator := " "
 		if isCurrent {
-			indicator = "*"
+			indicator = ui.Bold("*")
 		}
 
 		name := ws.WorkspaceName
@@ -141,9 +142,18 @@ func runInfoWorkspaces() error {
 			displayPath = "..." + displayPath[len(displayPath)-32:]
 		}
 
-		role := "-"
+		// Pad raw text first, then apply color (ANSI codes break %-Ns formatting)
+		roleText := "-"
 		if ws.WorkspaceID == mainWorkspaceID {
-			role = "main"
+			roleText = "main"
+		}
+		rolePad := 6 - len(roleText)
+		if rolePad < 0 {
+			rolePad = 0
+		}
+		roleStr := roleText + strings.Repeat(" ", rolePad)
+		if ws.WorkspaceID == mainWorkspaceID {
+			roleStr = ui.Cyan("main") + strings.Repeat(" ", rolePad)
 		}
 
 		driftStr := "-"
@@ -151,17 +161,24 @@ func runInfoWorkspaces() error {
 			if _, statErr := os.Stat(filepath.Join(ws.Path, ".fst")); statErr == nil {
 				report, driftErr := drift.ComputeFromCache(ws.Path)
 				if driftErr == nil && report.HasChanges() {
-					driftStr = fmt.Sprintf("+%d ~%d -%d",
-						len(report.FilesAdded),
-						len(report.FilesModified),
-						len(report.FilesDeleted))
+					parts := []string{}
+					if len(report.FilesAdded) > 0 {
+						parts = append(parts, ui.Green(fmt.Sprintf("+%d", len(report.FilesAdded))))
+					}
+					if len(report.FilesModified) > 0 {
+						parts = append(parts, ui.Yellow(fmt.Sprintf("~%d", len(report.FilesModified))))
+					}
+					if len(report.FilesDeleted) > 0 {
+						parts = append(parts, ui.Red(fmt.Sprintf("-%d", len(report.FilesDeleted))))
+					}
+					driftStr = strings.Join(parts, " ")
 				} else if driftErr == nil {
-					driftStr = "clean"
+					driftStr = ui.Green("clean")
 				}
 			}
 		}
 
-		fmt.Printf("%s %-15s  %-35s  %-6s  %s\n", indicator, name, displayPath, role, driftStr)
+		fmt.Printf("%s %-15s  %-35s  %s  %s\n", indicator, name, displayPath, roleStr, driftStr)
 	}
 
 	return nil
@@ -306,12 +323,12 @@ func printWorkspaceInfoAt(cfg *config.ProjectConfig, root string, jsonOutput boo
 		return nil
 	}
 
-	fmt.Printf("Workspace: %s\n", cfg.WorkspaceName)
-	fmt.Printf("  ID:      %s\n", cfg.WorkspaceID)
+	fmt.Printf("Workspace: %s\n", ui.Bold(cfg.WorkspaceName))
+	fmt.Printf("  ID:      %s\n", ui.Dim(cfg.WorkspaceID))
 	fmt.Printf("  Path:    %s\n", root)
 	fmt.Printf("  Mode:    %s\n", cfg.Mode)
 	if isMain {
-		fmt.Printf("  Role:    main\n")
+		fmt.Printf("  Role:    %s\n", ui.Cyan("main"))
 	}
 	fmt.Println()
 	fmt.Printf("Project:   %s\n", cfg.ProjectID)
@@ -331,14 +348,14 @@ func printWorkspaceInfoAt(cfg *config.ProjectConfig, root string, jsonOutput boo
 	if cfg.BaseSnapshotID != "" {
 		fmt.Printf("  Base:    %s", cfg.BaseSnapshotID)
 		if baseTime != "" {
-			fmt.Printf(" (%s)", baseTime)
+			fmt.Printf(" %s", ui.Dim("("+baseTime+")"))
 		}
 		fmt.Println()
 	}
 	if cfg.CurrentSnapshotID != "" {
 		fmt.Printf("  Current: %s", cfg.CurrentSnapshotID)
 		if currentTime != "" {
-			fmt.Printf(" (%s)", currentTime)
+			fmt.Printf(" %s", ui.Dim("("+currentTime+")"))
 		}
 		fmt.Println()
 	}
@@ -377,8 +394,8 @@ func printProjectInfo(parentRoot string, parentCfg *config.ParentConfig, jsonOut
 		return nil
 	}
 
-	fmt.Printf("Project: %s\n", parentCfg.ProjectName)
-	fmt.Printf("  ID:    %s\n", parentCfg.ProjectID)
+	fmt.Printf("Project: %s\n", ui.Bold(parentCfg.ProjectName))
+	fmt.Printf("  ID:    %s\n", ui.Dim(parentCfg.ProjectID))
 	fmt.Printf("  Path:  %s\n", parentRoot)
 	if parentCfg.BaseSnapshotID != "" {
 		fmt.Printf("  Base:  %s\n", parentCfg.BaseSnapshotID)
