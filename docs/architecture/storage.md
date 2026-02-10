@@ -68,7 +68,7 @@ Implemented in `config.GetBlobsDir()` and `config.GetBlobsDirAt()` which follow 
 
 ## Project-level workspace registry
 
-All workspaces within a project are tracked in per-workspace JSON files at `.fst/workspaces/<workspace-id>.json` in the project root. This allows commands like `fst merge <name>` and `fst workspaces` to resolve workspace names to filesystem paths without requiring cloud access. Per-workspace files avoid concurrent write conflicts when multiple agents operate in parallel.
+All workspaces within a project are tracked in per-workspace JSON files at `.fst/workspaces/<workspace-id>.json` in the project root. This allows commands like `fst merge <name>` and `fst info workspaces` to resolve workspace names to filesystem paths without requiring cloud access. Per-workspace files avoid concurrent write conflicts when multiple agents operate in parallel.
 
 Defined in `cli/internal/store/` (`Store`, `WorkspaceInfo`, `RegisterWorkspace`, `FindWorkspaceByName`, `ListWorkspaces`).
 

@@ -110,7 +110,7 @@ Implementation: `cli/cmd/fst/commands/log.go` (`walkSnapshotChain`).
 
 ### TODO
 
-- Add `fst history gc` to delete orphaned snapshots/manifests not reachable from the current/base heads.
+- ~~Add `fst gc` to delete orphaned snapshots/manifests~~ (done)
 
 ## Cloud Snapshots
 

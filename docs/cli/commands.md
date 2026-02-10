@@ -49,14 +49,14 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 
 | Command | Description | Source |
 |---------|-------------|--------|
-| `fst history edit <snapshot>` | Edit a snapshot's message | `history.go` |
-| `fst history drop <snapshot>` | Remove a snapshot from the chain | `history.go` |
-| `fst history squash <from>..<to>` | Squash a range of snapshots into one | `history.go` |
-| `fst history rebase <from>..<to>` | Rebase snapshots onto a different base | `history.go` |
+| `fst edit <snapshot>` | Edit a snapshot's message | `history.go` |
+| `fst drop <snapshot>` | Remove a snapshot from the chain | `history.go` |
+| `fst squash <from>..<to>` | Squash a range of snapshots into one | `history.go` |
+| `fst rebase <from>..<to>` | Rebase snapshots onto a different base | `history.go` |
 
-**`history edit` flags:** `--message, -m`
-**`history squash` flags:** `--message, -m`
-**`history rebase` flags:** `--onto` (required)
+**`edit` flags:** `--message, -m`
+**`squash` flags:** `--message, -m`
+**`rebase` flags:** `--onto` (required)
 
 ## Drift, Merge, and Sync
 
