@@ -385,6 +385,47 @@ func TestApplyMerge_RecordsMergeParents(t *testing.T) {
 	}
 }
 
+func TestApplyMerge_AutoMerge(t *testing.T) {
+	baseContent := "line1\nline2\nline3\nline4\nline5\n"
+	currentContent := "CURRENT-LINE1\nline2\nline3\nline4\nline5\n"
+	sourceContent := "line1\nline2\nline3\nline4\nSOURCE-LINE5\n"
+
+	ws, sourceID := setupMergeTest(t,
+		map[string]string{"file.txt": baseContent},
+		map[string]string{"file.txt": currentContent},
+		map[string]string{"file.txt": sourceContent},
+	)
+
+	plan, err := ws.store.PlanMerge(ws.CurrentSnapshotID(), sourceID, false)
+	if err != nil {
+		t.Fatalf("PlanMerge: %v", err)
+	}
+
+	result, err := ws.ApplyMerge(ApplyMergeOpts{
+		Plan: plan,
+		Mode: ConflictModeManual,
+	})
+	if err != nil {
+		t.Fatalf("ApplyMerge: %v", err)
+	}
+
+	if len(result.AutoMerged) != 1 {
+		t.Fatalf("expected 1 auto-merged, got %d (applied: %d, conflicts: %d)", len(result.AutoMerged), len(result.Applied), len(result.Conflicts))
+	}
+
+	// Verify merged file on disk has both changes
+	content, err := os.ReadFile(filepath.Join(ws.Root(), "file.txt"))
+	if err != nil {
+		t.Fatalf("read file.txt: %v", err)
+	}
+	if !strings.Contains(string(content), "CURRENT-LINE1") {
+		t.Fatalf("expected CURRENT-LINE1 in merged file, got %q", string(content))
+	}
+	if !strings.Contains(string(content), "SOURCE-LINE5") {
+		t.Fatalf("expected SOURCE-LINE5 in merged file, got %q", string(content))
+	}
+}
+
 func TestMergeAbort(t *testing.T) {
 	_, ws := setupTestWorkspace(t, nil)
 

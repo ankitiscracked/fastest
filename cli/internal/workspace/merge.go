@@ -35,9 +35,10 @@ type ApplyMergeOpts struct {
 
 // MergeResult contains the outcome of applying a merge.
 type MergeResult struct {
-	Applied   []string // files successfully merged
-	Conflicts []string // files left with conflict markers
-	Failed    []string // files that failed
+	Applied    []string // files successfully merged
+	AutoMerged []string // files auto-merged at line level (non-overlapping changes)
+	Conflicts  []string // files left with conflict markers
+	Failed     []string // files that failed
 }
 
 // ApplyMerge writes a merge plan to the workspace's working tree.
@@ -70,6 +71,21 @@ func (ws *Workspace) ApplyMerge(opts ApplyMergeOpts) (*MergeResult, error) {
 			result.Failed = append(result.Failed, action.Path)
 		} else {
 			result.Applied = append(result.Applied, action.Path)
+		}
+	}
+
+	// Apply auto-merged files (line-level merge succeeded in planner)
+	for _, action := range plan.AutoMerged {
+		targetPath := filepath.Join(ws.root, action.Path)
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			result.Failed = append(result.Failed, action.Path)
+			continue
+		}
+		mode := fileModeOrDefault(action.SourceMode, 0644)
+		if err := os.WriteFile(targetPath, action.MergedContent, mode); err != nil {
+			result.Failed = append(result.Failed, action.Path)
+		} else {
+			result.AutoMerged = append(result.AutoMerged, action.Path)
 		}
 	}
 
@@ -161,6 +177,11 @@ func (ws *Workspace) checkDirtyConflicts(plan *store.MergePlan) error {
 	// Check overlap with merge-touched paths
 	var overlaps []string
 	for _, a := range plan.ToApply {
+		if _, ok := dirtyPaths[a.Path]; ok {
+			overlaps = append(overlaps, a.Path)
+		}
+	}
+	for _, a := range plan.AutoMerged {
 		if _, ok := dirtyPaths[a.Path]; ok {
 			overlaps = append(overlaps, a.Path)
 		}

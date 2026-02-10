@@ -3,6 +3,7 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/fastest/cli/internal/manifest"
@@ -221,6 +222,53 @@ func TestPlanMerge_OnlySourceChanged(t *testing.T) {
 	if plan.ToApply[0].Path != "file.txt" {
 		t.Fatalf("expected file.txt, got %s", plan.ToApply[0].Path)
 	}
+	if len(plan.Conflicts) != 0 {
+		t.Fatalf("expected 0 conflicts, got %d", len(plan.Conflicts))
+	}
+}
+
+func TestPlanMerge_AutoMerge(t *testing.T) {
+	s, _ := setupStore(t)
+
+	// Base: multi-line file
+	baseContent := "line1\nline2\nline3\nline4\nline5\n"
+	base := seedSnapshot(t, s, "snap-base", nil, map[string]string{
+		"file.txt": baseContent,
+	})
+
+	// Current: change line 1 only
+	currentContent := "CURRENT-LINE1\nline2\nline3\nline4\nline5\n"
+	current := seedSnapshot(t, s, "snap-current", []string{base}, map[string]string{
+		"file.txt": currentContent,
+	})
+
+	// Source: change line 5 only (non-overlapping)
+	sourceContent := "line1\nline2\nline3\nline4\nSOURCE-LINE5\n"
+	source := seedSnapshot(t, s, "snap-source", []string{base}, map[string]string{
+		"file.txt": sourceContent,
+	})
+
+	plan, err := s.PlanMerge(current, source, false)
+	if err != nil {
+		t.Fatalf("PlanMerge: %v", err)
+	}
+
+	// Non-overlapping changes should be auto-merged
+	if len(plan.AutoMerged) != 1 {
+		t.Fatalf("expected 1 auto-merged, got %d (conflicts: %d, toApply: %d)", len(plan.AutoMerged), len(plan.Conflicts), len(plan.ToApply))
+	}
+	if plan.AutoMerged[0].Path != "file.txt" {
+		t.Fatalf("expected file.txt, got %s", plan.AutoMerged[0].Path)
+	}
+
+	merged := string(plan.AutoMerged[0].MergedContent)
+	if !strings.Contains(merged, "CURRENT-LINE1") {
+		t.Fatalf("merged content should contain CURRENT-LINE1, got %q", merged)
+	}
+	if !strings.Contains(merged, "SOURCE-LINE5") {
+		t.Fatalf("merged content should contain SOURCE-LINE5, got %q", merged)
+	}
+
 	if len(plan.Conflicts) != 0 {
 		t.Fatalf("expected 0 conflicts, got %d", len(plan.Conflicts))
 	}

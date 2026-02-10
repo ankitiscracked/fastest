@@ -169,11 +169,14 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 	fmt.Println()
 	fmt.Printf("Merge plan:\n")
 	fmt.Printf("  Apply from source:  %d files\n", len(plan.ToApply))
+	if len(plan.AutoMerged) > 0 {
+		fmt.Printf("  Auto-merge:         %d files\n", len(plan.AutoMerged))
+	}
 	fmt.Printf("  Conflicts:          %d files\n", len(plan.Conflicts))
 	fmt.Printf("  Already in sync:    %d files\n", plan.InSync)
 	fmt.Println()
 
-	if len(plan.ToApply) == 0 && len(plan.Conflicts) == 0 {
+	if len(plan.ToApply) == 0 && len(plan.AutoMerged) == 0 && len(plan.Conflicts) == 0 {
 		fmt.Println("Nothing to merge - workspaces are in sync")
 		return nil
 	}
@@ -261,6 +264,9 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 	for _, f := range result.Applied {
 		fmt.Printf("  Applied: %s\n", f)
 	}
+	for _, f := range result.AutoMerged {
+		fmt.Printf("  Auto-merged: %s\n", f)
+	}
 	for _, f := range result.Conflicts {
 		fmt.Printf("  Conflict: %s (needs manual resolution)\n", f)
 	}
@@ -270,7 +276,8 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 	fmt.Println()
 
 	// Post-merge auto-snapshot (only if clean)
-	if len(result.Conflicts) == 0 && len(result.Failed) == 0 && len(result.Applied) > 0 {
+	totalApplied := len(result.Applied) + len(result.AutoMerged)
+	if len(result.Conflicts) == 0 && len(result.Failed) == 0 && totalApplied > 0 {
 		_, err := ws.Snapshot(workspace.SnapshotOpts{
 			Message: fmt.Sprintf("Merged %s", sourceInfo.WorkspaceName),
 		})
@@ -282,12 +289,15 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 
 	// Summary
 	fmt.Println("Merge complete:")
-	fmt.Printf("  Applied:   %d files\n", len(result.Applied))
+	fmt.Printf("  Applied:      %d files\n", len(result.Applied))
+	if len(result.AutoMerged) > 0 {
+		fmt.Printf("  Auto-merged:  %d files\n", len(result.AutoMerged))
+	}
 	if len(result.Conflicts) > 0 {
-		fmt.Printf("  Conflicts: %d files (need resolution)\n", len(result.Conflicts))
+		fmt.Printf("  Conflicts:    %d files (need resolution)\n", len(result.Conflicts))
 	}
 	if len(result.Failed) > 0 {
-		fmt.Printf("  Failed:    %d files\n", len(result.Failed))
+		fmt.Printf("  Failed:       %d files\n", len(result.Failed))
 	}
 
 	if len(result.Conflicts) > 0 {
@@ -310,6 +320,13 @@ func printMergePlan(plan *store.MergePlan) {
 		fmt.Println("Will apply from source:")
 		for _, a := range plan.ToApply {
 			fmt.Printf("  + %s\n", a.Path)
+		}
+	}
+
+	if len(plan.AutoMerged) > 0 {
+		fmt.Println("Will auto-merge (non-overlapping changes):")
+		for _, a := range plan.AutoMerged {
+			fmt.Printf("  ~ %s\n", a.Path)
 		}
 	}
 

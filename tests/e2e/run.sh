@@ -201,8 +201,14 @@ test_branching_and_merge() {
     assert_exit_code 0
     cd "$TEST_DIR/myproject/main"
 
-    # Shared base file
-    echo "shared content" > shared.txt
+    # Shared base file with multiple lines
+    cat > app.txt <<'EOF'
+line1: original header
+line2: shared content
+line3: shared content
+line4: shared content
+line5: original footer
+EOF
     run_fst snapshot -m "base snapshot"
     assert_exit_code 0
 
@@ -211,15 +217,15 @@ test_branching_and_merge() {
     assert_exit_code 0
     assert_contains "Workspace created"
 
-    # Feature: add a new file (no overlap with main's changes)
+    # Feature: change the LAST line (non-overlapping with main's change)
     cd "$TEST_DIR/myproject/feature"
-    echo "feature addition" > feature-only.txt
+    sed -i.bak 's/line5: original footer/line5: FEATURE FOOTER/' app.txt && rm -f app.txt.bak
     run_fst snapshot -m "feature work"
     assert_exit_code 0
 
-    # Main: add a different new file
+    # Main: change the FIRST line (non-overlapping with feature's change)
     cd "$TEST_DIR/myproject/main"
-    echo "main addition" > main-only.txt
+    sed -i.bak 's/line1: original header/line1: MAIN HEADER/' app.txt && rm -f app.txt.bak
     run_fst snapshot -m "main work"
     assert_exit_code 0
 
@@ -230,17 +236,17 @@ test_branching_and_merge() {
     # Diff names-only
     run_fst diff feature --names-only
     assert_exit_code 1
-    assert_contains "feature-only.txt"
+    assert_contains "app.txt"
 
-    # Merge: different files → auto-merge, no conflicts
-    run_fst merge feature --theirs
+    # Merge: same file, different lines → line-level auto-merge
+    run_fst merge feature
     assert_exit_code 0
     assert_contains "Merge complete"
+    assert_contains "Auto-merged"
 
-    # Verify both files exist after merge
-    assert_file_exists "$TEST_DIR/myproject/main/main-only.txt"
-    assert_file_exists "$TEST_DIR/myproject/main/feature-only.txt"
-    assert_file_contains "$TEST_DIR/myproject/main/feature-only.txt" "feature addition"
+    # Verify the merged file has BOTH changes
+    assert_file_contains "$TEST_DIR/myproject/main/app.txt" "MAIN HEADER"
+    assert_file_contains "$TEST_DIR/myproject/main/app.txt" "FEATURE FOOTER"
 
     teardown_test
 }
