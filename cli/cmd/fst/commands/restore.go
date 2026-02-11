@@ -10,17 +10,16 @@ import (
 )
 
 func init() {
-	register(func(root *cobra.Command) { root.AddCommand(newRollbackCmd()) })
+	register(func(root *cobra.Command) { root.AddCommand(newRestoreCmd()) })
 }
 
-func newRollbackCmd() *cobra.Command {
+func newRestoreCmd() *cobra.Command {
 	var toSnapshot string
 	var toBase bool
 	var dryRun bool
-	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "rollback [files...]",
+		Use:   "restore [files...]",
 		Short: "Restore files from a snapshot",
 		Long: `Restore files from a previous snapshot.
 
@@ -29,61 +28,39 @@ Use --to to specify a different snapshot.
 Use --to-base to restore to the base/base point snapshot.
 
 Examples:
-  fst rollback src/main.py           # Restore single file from last snapshot
-  fst rollback src/                  # Restore all files in directory
-  fst rollback                       # Restore entire workspace to last snapshot
-  fst rollback --to snap-abc         # Restore to specific snapshot
-  fst rollback --to-base             # Restore to base point
-  fst rollback --dry-run             # Show what would be restored`,
+  fst restore src/main.py           # Restore single file from last snapshot
+  fst restore src/                  # Restore all files in directory
+  fst restore                       # Restore entire workspace to last snapshot
+  fst restore --to snap-abc         # Restore to specific snapshot
+  fst restore --to-base             # Restore to base point
+  fst restore --dry-run             # Show what would be restored`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if toSnapshot != "" && toBase {
 				return fmt.Errorf("cannot use both --to and --to-base")
 			}
-			return runRollback(args, toSnapshot, toBase, dryRun, force)
+			return runRestore(args, toSnapshot, toBase, dryRun)
 		},
 	}
 
 	cmd.Flags().StringVar(&toSnapshot, "to", "", "Target snapshot ID (default: last snapshot)")
 	cmd.Flags().BoolVar(&toBase, "to-base", false, "Restore to base/base point snapshot")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be restored without making changes")
-	cmd.Flags().BoolVar(&force, "force", false, "Force rollback even if files have local changes")
 
 	return cmd
 }
 
-func runRollback(files []string, toSnapshot string, toBase bool, dryRun bool, force bool) error {
+func runRestore(files []string, toSnapshot string, toBase bool, dryRun bool) error {
 	ws, err := workspace.Open()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 	defer ws.Close()
 
-	// Resolve the rollback target BEFORE creating the auto-snapshot,
-	// otherwise the auto-snapshot becomes the "latest" and rollback
-	// would roll back to the dirty state it just saved.
-	if toSnapshot == "" && !toBase {
-		toSnapshot = ws.CurrentSnapshotID()
-	}
-
-	// Pre-rollback auto-snapshot — ensures a recovery point if rollback
-	// is interrupted mid-apply.
-	if !dryRun {
-		snapshotID, snapErr := ws.AutoSnapshot("Before rollback")
-		if snapErr != nil {
-			return fmt.Errorf("failed to create pre-rollback snapshot (create one manually first): %w", snapErr)
-		}
-		if snapshotID != "" {
-			fmt.Printf("Created snapshot %s (use 'fst rollback --to %s' to undo)\n", snapshotID, snapshotID)
-			fmt.Println()
-		}
-	}
-
-	result, err := ws.Rollback(workspace.RollbackOpts{
+	result, err := ws.Restore(workspace.RestoreOpts{
 		SnapshotID: toSnapshot,
 		ToBase:     toBase,
 		Files:      files,
 		DryRun:     dryRun,
-		Force:      force,
 	})
 
 	if result != nil && len(result.MissingBlobs) > 0 {
@@ -98,14 +75,14 @@ func runRollback(files []string, toSnapshot string, toBase bool, dryRun bool, fo
 	}
 
 	if result != nil && len(result.Actions) == 0 {
-		fmt.Println("Nothing to rollback.")
+		fmt.Println("Nothing to restore.")
 		return nil
 	}
 
 	if result != nil {
-		fmt.Printf("Rollback to: %s\n", result.TargetSnapshotID)
+		fmt.Printf("Restore to: %s\n", result.TargetSnapshotID)
 		fmt.Println()
-		printRollbackActions(result)
+		printRestoreActions(result)
 	}
 
 	if dryRun {
@@ -114,10 +91,6 @@ func runRollback(files []string, toSnapshot string, toBase bool, dryRun bool, fo
 	}
 
 	if err != nil {
-		if result != nil && result.HasLocalChanges {
-			fmt.Println("Warning: Some files have local changes that will be lost.")
-			fmt.Println("Use --force to proceed, or create a snapshot first.")
-		}
 		return err
 	}
 
@@ -130,8 +103,8 @@ func runRollback(files []string, toSnapshot string, toBase bool, dryRun bool, fo
 	return nil
 }
 
-func printRollbackActions(result *workspace.RollbackResult) {
-	var restoreActions, deleteActions []workspace.RollbackAction
+func printRestoreActions(result *workspace.RestoreResult) {
+	var restoreActions, deleteActions []workspace.RestoreAction
 	for _, a := range result.Actions {
 		switch a.Action {
 		case "restore":

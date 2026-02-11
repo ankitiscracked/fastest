@@ -138,7 +138,7 @@ func (ws *Workspace) Snapshot(opts SnapshotOpts) (*SnapshotResult, error) {
 
 // AutoSnapshot creates a snapshot silently if there are changes since the
 // current snapshot. Returns the snapshot ID, or empty string if no changes.
-// Used before destructive operations (merge, rollback, pull).
+// Used before destructive operations (merge, restore, pull).
 func (ws *Workspace) AutoSnapshot(message string) (string, error) {
 	// Generate manifest
 	m, err := manifest.Generate(ws.root, false)

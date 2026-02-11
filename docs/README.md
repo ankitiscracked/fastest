@@ -32,7 +32,7 @@ fst merge other-workspace
 fst diff other-workspace
 
 # Restore files from a previous snapshot
-fst rollback
+fst restore
 
 # Sync local and remote state
 fst sync
@@ -59,7 +59,7 @@ fst git import <repo-path>
 | `fst drift` | Compare workspaces with DAG-based ancestor detection |
 | `fst merge` | Three-way merge from another workspace |
 | `fst diff` | Line-level content differences between workspaces |
-| `fst rollback` | Restore files from a previous snapshot |
+| `fst restore` | Restore files from a previous snapshot |
 | `fst clone` | Clone a project or snapshot to a new workspace |
 | `fst sync` | Sync local and remote workspace state |
 | `fst pull` | Pull latest snapshot from cloud |

@@ -309,8 +309,8 @@ func TestStatusShowsWorkspaceSnapshot(t *testing.T) {
 	_ = sourceRoot
 }
 
-func TestRollbackCreatesPreSnapshot(t *testing.T) {
-	root := setupWorkspace(t, "ws-rollback", map[string]string{
+func TestRestoreOverwritesDirtyFiles(t *testing.T) {
+	root := setupWorkspace(t, "ws-restore", map[string]string{
 		"file.txt": "v1",
 	})
 
@@ -343,31 +343,31 @@ func TestRollbackCreatesPreSnapshot(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	// Rollback to v1 (with --force since file is dirty)
+	// Restore to v1 — should overwrite dirty file without needing --force
 	cmd = NewRootCmd()
-	cmd.SetArgs([]string{"rollback", "--to", snapV1, "--force"})
+	cmd.SetArgs([]string{"restore", "--to", snapV1})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("rollback failed: %v", err)
+		t.Fatalf("restore failed: %v", err)
 	}
 
-	// The pre-rollback auto-snapshot should have been created,
-	// so current snapshot should NOT be snapV1 (it should be the
-	// auto-snapshot or the post-rollback state)
-	cfg2, err := config.LoadAt(root)
+	// Verify file content was restored
+	content, err := os.ReadFile(filepath.Join(root, "file.txt"))
 	if err != nil {
-		t.Fatalf("LoadAt after rollback: %v", err)
+		t.Fatalf("read file: %v", err)
+	}
+	if string(content) != "v1" {
+		t.Fatalf("expected 'v1', got %q", string(content))
 	}
 
-	// Count snapshots — should have more than 1 (v1 + auto-snapshot)
+	// No auto-snapshot should have been created — only the v1 snapshot
 	snapshotsDir := filepath.Join(root, ".fst", "snapshots")
 	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		t.Fatalf("ReadDir snapshots: %v", err)
 	}
-	if len(entries) < 2 {
-		t.Fatalf("expected at least 2 snapshots (v1 + pre-rollback auto), got %d", len(entries))
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 snapshot (v1), got %d", len(entries))
 	}
-	_ = cfg2
 }
 
 // setupForkedWorkspaces creates two workspaces that share a common base

@@ -78,7 +78,7 @@ Downloading a remote snapshot's files to a local directory (`materializeSnapshot
 
 ## Pre-Sync Snapshots
 
-Before sync or pull modifies local files, a safety snapshot is created (via `CreateAutoSnapshot`) if there are uncommitted local changes. This allows rollback via `fst rollback` if the sync produces undesirable results.
+Before sync or pull modifies local files, a safety snapshot is created (via `CreateAutoSnapshot`) if there are uncommitted local changes. This allows restoring via `fst restore` if the sync produces undesirable results.
 
 ## Related Docs
 

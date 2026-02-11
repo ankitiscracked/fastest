@@ -34,7 +34,7 @@ func newSnapshotCmd() *cobra.Command {
 
 This will:
 1. Scan all files (respecting .fstignore)
-2. Save the snapshot locally for rollback support
+2. Save the snapshot locally for restore support
 3. Optionally sync to cloud if authenticated
 4. Update the workspace head to point to this snapshot
 

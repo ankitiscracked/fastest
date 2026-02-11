@@ -39,11 +39,11 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 |---------|-------------|--------|
 | `fst snapshot` | Create an immutable snapshot of the workspace | `snapshot.go` |
 | `fst log` | Show snapshot history chain | `log.go` |
-| `fst rollback [files...]` | Restore files from a previous snapshot | `rollback.go` |
+| `fst restore [files...]` | Restore files from a previous snapshot | `restore.go` |
 
 **`snapshot` flags:** `--message, -m`, `--agent-summary`, `--agent`
 **`log` flags:** `--limit, -n` (default 10), `--all, -a`
-**`rollback` flags:** `--to`, `--to-base`, `--dry-run`, `--force`
+**`restore` flags:** `--to`, `--to-base`, `--dry-run`
 
 ## History Rewriting
 

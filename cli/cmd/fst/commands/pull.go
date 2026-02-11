@@ -195,7 +195,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 			return fmt.Errorf("failed to create pre-pull snapshot (use --hard to skip): %w", err)
 		}
 		if snapshotID != "" {
-			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo pull)\n", snapshotID)
+			fmt.Printf("Created snapshot %s (use 'fst restore' to undo pull)\n", snapshotID)
 		}
 	}
 

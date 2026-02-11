@@ -204,14 +204,14 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 		return nil
 	}
 
-	// Pre-merge auto-snapshot — abort if it fails so the user has a rollback point
+	// Pre-merge auto-snapshot — abort if it fails so the user has a restore point
 	if !noPreSnapshot {
 		snapshotID, err := ws.AutoSnapshot(fmt.Sprintf("Before merge from %s", sourceInfo.WorkspaceName))
 		if err != nil {
 			return fmt.Errorf("failed to create pre-merge snapshot (use --no-pre-snapshot to skip): %w", err)
 		}
 		if snapshotID != "" {
-			fmt.Printf("Created snapshot %s (use 'fst rollback' to undo merge)\n", snapshotID)
+			fmt.Printf("Created snapshot %s (use 'fst restore' to undo merge)\n", snapshotID)
 			fmt.Println()
 		}
 	}

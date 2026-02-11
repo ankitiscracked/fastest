@@ -3,7 +3,7 @@
 // references a project-level Store for snapshot/manifest/blob I/O.
 //
 // Commands should call Open(path) to get a Workspace, use its methods for
-// high-level operations (Snapshot, Merge, Rollback, etc.), and defer Close.
+// high-level operations (Snapshot, Merge, Restore, etc.), and defer Close.
 package workspace
 
 import (

@@ -8,7 +8,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/config"
 )
 
-func TestRollbackRestoresFiles(t *testing.T) {
+func TestRestoreFiles(t *testing.T) {
 	root, ws := setupTestWorkspace(t, map[string]string{
 		"file.txt": "original",
 	})
@@ -25,12 +25,11 @@ func TestRollbackRestoresFiles(t *testing.T) {
 	// Modify file
 	os.WriteFile(filepath.Join(root, "file.txt"), []byte("modified"), 0644)
 
-	result, err := ws.Rollback(RollbackOpts{
+	result, err := ws.Restore(RestoreOpts{
 		SnapshotID: r.SnapshotID,
-		Force:      true,
 	})
 	if err != nil {
-		t.Fatalf("Rollback: %v", err)
+		t.Fatalf("Restore: %v", err)
 	}
 	if result.Restored == 0 {
 		t.Fatalf("expected at least 1 restored file")
@@ -43,7 +42,7 @@ func TestRollbackRestoresFiles(t *testing.T) {
 	}
 }
 
-func TestRollbackDryRun(t *testing.T) {
+func TestRestoreDryRun(t *testing.T) {
 	root, ws := setupTestWorkspace(t, map[string]string{
 		"file.txt": "original",
 	})
@@ -59,12 +58,12 @@ func TestRollbackDryRun(t *testing.T) {
 	// Modify file
 	os.WriteFile(filepath.Join(root, "file.txt"), []byte("modified"), 0644)
 
-	result, err := ws.Rollback(RollbackOpts{
+	result, err := ws.Restore(RestoreOpts{
 		SnapshotID: r.SnapshotID,
 		DryRun:     true,
 	})
 	if err != nil {
-		t.Fatalf("Rollback dry-run: %v", err)
+		t.Fatalf("Restore dry-run: %v", err)
 	}
 	if result.Restored != 0 {
 		t.Fatalf("dry-run should not restore, got %d", result.Restored)
@@ -77,32 +76,7 @@ func TestRollbackDryRun(t *testing.T) {
 	}
 }
 
-func TestRollbackBlocksWithoutForce(t *testing.T) {
-	root, ws := setupTestWorkspace(t, map[string]string{
-		"file.txt": "original",
-	})
-
-	r, err := ws.Snapshot(SnapshotOpts{
-		Message: "v1",
-		Author:  &config.Author{Name: "T", Email: "t@t"},
-	})
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-
-	// Modify file
-	os.WriteFile(filepath.Join(root, "file.txt"), []byte("modified"), 0644)
-
-	_, err = ws.Rollback(RollbackOpts{
-		SnapshotID: r.SnapshotID,
-		Force:      false,
-	})
-	if err == nil {
-		t.Fatalf("expected error for local changes without --force")
-	}
-}
-
-func TestRollbackDeletesExtraFiles(t *testing.T) {
+func TestRestoreDeletesExtraFiles(t *testing.T) {
 	root, ws := setupTestWorkspace(t, map[string]string{
 		"file.txt": "original",
 	})
@@ -118,12 +92,11 @@ func TestRollbackDeletesExtraFiles(t *testing.T) {
 	// Add extra file
 	os.WriteFile(filepath.Join(root, "extra.txt"), []byte("extra"), 0644)
 
-	result, err := ws.Rollback(RollbackOpts{
+	result, err := ws.Restore(RestoreOpts{
 		SnapshotID: r.SnapshotID,
-		Force:      true,
 	})
 	if err != nil {
-		t.Fatalf("Rollback: %v", err)
+		t.Fatalf("Restore: %v", err)
 	}
 	if result.Deleted == 0 {
 		t.Fatalf("expected extra file to be deleted")
@@ -135,7 +108,7 @@ func TestRollbackDeletesExtraFiles(t *testing.T) {
 	}
 }
 
-func TestRollbackSpecificFiles(t *testing.T) {
+func TestRestoreSpecificFiles(t *testing.T) {
 	root, ws := setupTestWorkspace(t, map[string]string{
 		"a.txt": "a-content",
 		"b.txt": "b-content",
@@ -153,13 +126,12 @@ func TestRollbackSpecificFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "a.txt"), []byte("a-modified"), 0644)
 	os.WriteFile(filepath.Join(root, "b.txt"), []byte("b-modified"), 0644)
 
-	result, err := ws.Rollback(RollbackOpts{
+	result, err := ws.Restore(RestoreOpts{
 		SnapshotID: r.SnapshotID,
 		Files:      []string{"a.txt"},
-		Force:      true,
 	})
 	if err != nil {
-		t.Fatalf("Rollback: %v", err)
+		t.Fatalf("Restore: %v", err)
 	}
 	if result.Restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", result.Restored)
@@ -176,7 +148,7 @@ func TestRollbackSpecificFiles(t *testing.T) {
 	}
 }
 
-func TestRollbackToBase(t *testing.T) {
+func TestRestoreToBase(t *testing.T) {
 	root, ws := setupTestWorkspace(t, map[string]string{
 		"file.txt": "base-content",
 	})
@@ -204,12 +176,11 @@ func TestRollbackToBase(t *testing.T) {
 		t.Fatalf("Snapshot later: %v", err)
 	}
 
-	result, err := ws.Rollback(RollbackOpts{
+	result, err := ws.Restore(RestoreOpts{
 		ToBase: true,
-		Force:  true,
 	})
 	if err != nil {
-		t.Fatalf("Rollback to base: %v", err)
+		t.Fatalf("Restore to base: %v", err)
 	}
 	if result.TargetSnapshotID != r1.SnapshotID {
 		t.Fatalf("expected target %s, got %s", r1.SnapshotID, result.TargetSnapshotID)

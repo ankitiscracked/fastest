@@ -7,40 +7,37 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
 
-// RollbackOpts configures a rollback operation.
-type RollbackOpts struct {
+// RestoreOpts configures a restore operation.
+type RestoreOpts struct {
 	SnapshotID string   // target; empty = latest snapshot
 	ToBase     bool     // use base snapshot
 	Files      []string // specific files/dirs; empty = all
 	DryRun     bool
-	Force      bool // skip local-change check
 }
 
-// RollbackAction describes a single file-level action.
-type RollbackAction struct {
+// RestoreAction describes a single file-level action.
+type RestoreAction struct {
 	Path   string
 	Action string // "restore", "delete", "skip"
 	Status string // "missing", "modified", "unchanged"
 }
 
-// RollbackResult contains the outcome of a rollback operation.
-type RollbackResult struct {
+// RestoreResult contains the outcome of a restore operation.
+type RestoreResult struct {
 	TargetSnapshotID string
-	Actions          []RollbackAction
+	Actions          []RestoreAction
 	Restored         int
 	Deleted          int
 	Skipped          int
 	MissingBlobs     []string
-	HasLocalChanges  bool // true if local changes would be lost and Force is false
 }
 
-// Rollback restores files from a target snapshot.
-func (ws *Workspace) Rollback(opts RollbackOpts) (*RollbackResult, error) {
-	targetID, err := ws.resolveRollbackTarget(opts)
+// Restore restores files from a target snapshot.
+func (ws *Workspace) Restore(opts RestoreOpts) (*RestoreResult, error) {
+	targetID, err := ws.resolveRestoreTarget(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -106,18 +103,17 @@ func (ws *Workspace) Rollback(opts RollbackOpts) (*RollbackResult, error) {
 		}
 	}
 	if len(missingBlobs) > 0 {
-		return &RollbackResult{
+		return &RestoreResult{
 			TargetSnapshotID: targetID,
 			MissingBlobs:     missingBlobs,
 		}, fmt.Errorf("missing blobs for %d files", len(missingBlobs))
 	}
 
 	// Build actions with status info
-	var actions []RollbackAction
-	hasLocalChanges := false
+	var actions []RestoreAction
 
 	for _, f := range toRestore {
-		action := RollbackAction{Path: f.Path, Action: "restore"}
+		action := RestoreAction{Path: f.Path, Action: "restore"}
 		currentPath := filepath.Join(ws.root, f.Path)
 		if _, err := os.Lstat(currentPath); os.IsNotExist(err) {
 			action.Status = "missing"
@@ -127,14 +123,12 @@ func (ws *Workspace) Rollback(opts RollbackOpts) (*RollbackResult, error) {
 				currentHash, _ := manifest.HashFile(currentPath)
 				if currentHash != f.Hash {
 					action.Status = "modified"
-					hasLocalChanges = true
 				} else {
 					action.Status = "unchanged"
 				}
 			case manifest.EntryTypeSymlink:
 				if target, err := os.Readlink(currentPath); err != nil || target != f.Target {
 					action.Status = "modified"
-					hasLocalChanges = true
 				} else {
 					action.Status = "unchanged"
 				}
@@ -144,24 +138,19 @@ func (ws *Workspace) Rollback(opts RollbackOpts) (*RollbackResult, error) {
 	}
 
 	for _, f := range toDelete {
-		actions = append(actions, RollbackAction{Path: f, Action: "delete"})
+		actions = append(actions, RestoreAction{Path: f, Action: "delete"})
 	}
 
-	result := &RollbackResult{
+	result := &RestoreResult{
 		TargetSnapshotID: targetID,
 		Actions:          actions,
-		HasLocalChanges:  hasLocalChanges,
 	}
 
 	if opts.DryRun {
 		return result, nil
 	}
 
-	if hasLocalChanges && !opts.Force {
-		return result, fmt.Errorf("local changes would be lost")
-	}
-
-	// Perform rollback
+	// Perform restore
 	for _, f := range toRestore {
 		targetPath := filepath.Join(ws.root, f.Path)
 		switch f.Type {
@@ -223,7 +212,7 @@ func (ws *Workspace) Rollback(opts RollbackOpts) (*RollbackResult, error) {
 	return result, nil
 }
 
-func (ws *Workspace) resolveRollbackTarget(opts RollbackOpts) (string, error) {
+func (ws *Workspace) resolveRestoreTarget(opts RestoreOpts) (string, error) {
 	if opts.SnapshotID != "" {
 		return opts.SnapshotID, nil
 	}
@@ -235,13 +224,10 @@ func (ws *Workspace) resolveRollbackTarget(opts RollbackOpts) (string, error) {
 		return base, nil
 	}
 
-	// Default: latest snapshot
-	latestID, err := config.GetLatestSnapshotIDAt(ws.root)
-	if err != nil {
-		return "", fmt.Errorf("failed to find snapshots: %w", err)
-	}
-	if latestID == "" {
+	// Default: current workspace head
+	current := ws.cfg.CurrentSnapshotID
+	if current == "" {
 		return "", fmt.Errorf("no snapshots found - create one with 'fst snapshot'")
 	}
-	return latestID, nil
+	return current, nil
 }

@@ -52,7 +52,7 @@ Config constants are defined in `cli/internal/config/config.go`:
 
 ## Blob storage
 
-File contents are stored at the project level so rollback and workspace operations can restore files without re-downloading from cloud. When a workspace is under a project (has `fst.json`), blobs are stored in the project-level `.fst/blobs/`. For standalone workspaces, blobs are stored in the workspace-local `.fst/blobs/`.
+File contents are stored at the project level so restore and workspace operations can recover files without re-downloading from cloud. When a workspace is under a project (has `fst.json`), blobs are stored in the project-level `.fst/blobs/`. For standalone workspaces, blobs are stored in the workspace-local `.fst/blobs/`.
 
 Each blob is stored as a flat file named by its SHA-256 hash:
 
@@ -62,7 +62,7 @@ Each blob is stored as a flat file named by its SHA-256 hash:
   b7e8f9a0c1d2...
 ```
 
-Blobs are written during `fst snapshot` (caches all current file contents) and during `fst workspace clone` / `fst pull` (caches downloaded blobs). The `fst rollback` command reads from this store to restore files.
+Blobs are written during `fst snapshot` (caches all current file contents) and during `fst workspace clone` / `fst pull` (caches downloaded blobs). The `fst restore` command reads from this store to restore files.
 
 Implemented in `config.GetBlobsDir()` and `config.GetBlobsDirAt()` which follow the same project-level resolution as snapshots and manifests. Orphaned blobs are cleaned up by `fst gc`.
 

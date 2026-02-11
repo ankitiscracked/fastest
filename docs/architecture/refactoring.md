@@ -87,7 +87,7 @@ defer ws.Close()
 // High-level operations that handle all bookkeeping internally.
 ws.Snapshot(message, opts)      // generate manifest, cache blobs (via store), write snapshot meta (via store), update config, populate stat cache
 ws.Merge(target, mode)          // auto-snapshot, find merge base (via store), detect conflicts, apply resolution, create merge snapshot — no merge-parents.json
-ws.Rollback(snapshotID, files)  // auto-snapshot, restore from blob store
+ws.Restore(snapshotID, files)  // restore from blob store
 ws.Export(gitOpts)              // read snapshot chain from store, write git commits
 ws.Import(repoPath, opts)       // read git commits, write snapshots to store
 ```
@@ -110,7 +110,7 @@ Commands call `workspace.Open()`. The workspace internally opens the project sto
 
 | Concern | Today | With `store` + `workspace` |
 |---------|-------|----------------------------|
-| Auto-snapshot before destructive ops | Each command calls `CreateAutoSnapshot` | `ws.Merge`, `ws.Rollback` do it automatically |
+| Auto-snapshot before destructive ops | Each command calls `CreateAutoSnapshot` | `ws.Merge` does it automatically |
 | Merge parent tracking | Commands write/read `merge-parents.json` | Internal to `ws.Merge` — no intermediate file |
 | Stat cache population | Each snapshot call site does `BuildStatCacheFromManifest` | Internal to `ws.Snapshot` |
 | Cloud upload after snapshot | `snapshot.go` manually calls upload helpers | Optional callback or mode on `ws.Snapshot` |
@@ -134,7 +134,7 @@ Incremental approach:
 2. Create `workspace/` with `Open`/`Close` — loads config, opens parent store ← **next**
 3. Move `Snapshot` workflow into `workspace` first (most self-contained, called from many places)
 4. Move `Merge` next (eliminates `merge-parents.json` state)
-5. Move `Rollback`, then `Export`/`Import` as needed
+5. Move `Restore`, then `Export`/`Import` as needed
 6. Commands shrink as logic moves into `workspace/`
 
 ## Completed Cleanups

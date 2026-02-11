@@ -329,15 +329,15 @@ test_snapshot_history() {
     assert_contains "version three"
     assert_not_contains "version one"
 
-    # Dirty change + dry-run rollback
+    # Dirty change + dry-run restore
     echo "v4-dirty" > data.txt
-    run_fst rollback --dry-run
+    run_fst restore --dry-run
     assert_exit_code 0
     assert_contains "dry run"
     assert_file_contains "$TEST_DIR/myproject/main/data.txt" "v4-dirty"
 
-    # Actual rollback
-    run_fst rollback --force
+    # Actual restore
+    run_fst restore
     assert_exit_code 0
     assert_contains "Restored"
     assert_file_contains "$TEST_DIR/myproject/main/data.txt" "v3"
