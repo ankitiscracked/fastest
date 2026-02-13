@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,22 +15,30 @@ import (
 )
 
 func newImportGitCmd() *cobra.Command {
-	var branchName string
-	var workspaceName string
 	var projectName string
 	var rebuild bool
 
 	cmd := &cobra.Command{
 		Use:   "import <repo-path>",
 		Short: "Import from a Git repository exported by fst",
-		Args:  cobra.ExactArgs(1),
+		Long: `Import all workspace branches from a Git repository into a project.
+
+Each branch in the export metadata becomes a workspace.
+If no project exists, a new one is created.
+
+The repository must contain fst export metadata (refs/fst/meta),
+which is written by 'fst git export'.
+
+Examples:
+  fst git import /path/to/repo              # Import into current or new project
+  fst git import /path/to/repo --project my-project  # Create named project
+  fst git import /path/to/repo --rebuild    # Overwrite existing snapshots`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runImportGit(args[0], branchName, workspaceName, projectName, rebuild)
+			return runImportGit(args[0], projectName, rebuild)
 		},
 	}
 
-	cmd.Flags().StringVarP(&branchName, "branch", "b", "", "Branch name to import (default: from export metadata)")
-	cmd.Flags().StringVarP(&workspaceName, "workspace", "w", "", "Target workspace name (default: from export metadata)")
 	cmd.Flags().StringVarP(&projectName, "project", "p", "", "Project name when creating a new project")
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "Rebuild snapshots from scratch (overwrites existing snapshot history)")
 
@@ -47,7 +54,7 @@ type importTarget struct {
 	Existing      bool
 }
 
-func runImportGit(repoPath, branchName, workspaceName, projectName string, rebuild bool) error {
+func runImportGit(repoPath, projectName string, rebuild bool) error {
 	repoRoot, err := filepath.Abs(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve repo path: %w", err)
@@ -78,72 +85,28 @@ func runImportGit(repoPath, branchName, workspaceName, projectName string, rebui
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	var mode string
-	var workspaceRoot string
+	// Find existing project or create new one
 	var parentRoot string
 	var parentCfg *config.ParentConfig
 
-	if root, err := config.FindProjectRoot(); err == nil {
-		mode = "workspace"
-		workspaceRoot = root
-		parentRoot, parentCfg, _ = config.FindParentRootFrom(root)
-	} else if pr, pc, err := config.FindParentRootFrom(cwd); err == nil {
-		mode = "project"
-		parentRoot = pr
-		parentCfg = pc
-		if cwd != parentRoot {
-			return fmt.Errorf("run import from the project root (%s) or inside a workspace", parentRoot)
+	// Try from workspace root first, then from cwd
+	if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
+		parentRoot, parentCfg, _ = config.FindParentRootFrom(wsRoot)
+	}
+	if parentCfg == nil {
+		if pr, pc, findErr := config.FindParentRootFrom(cwd); findErr == nil {
+			parentRoot = pr
+			parentCfg = pc
+		}
+	}
+
+	if parentCfg != nil {
+		// Existing project — validate project ID
+		if meta.ProjectID != "" && meta.ProjectID != parentCfg.ProjectID {
+			return fmt.Errorf("project ID mismatch: repo %s, current project %s", meta.ProjectID, parentCfg.ProjectID)
 		}
 	} else {
-		mode = "none"
-	}
-
-	if parentCfg != nil && meta.ProjectID != "" && meta.ProjectID != parentCfg.ProjectID {
-		return fmt.Errorf("project ID mismatch: repo %s, current project %s", meta.ProjectID, parentCfg.ProjectID)
-	}
-
-	if mode == "workspace" {
-		cfg, err := config.LoadAt(workspaceRoot)
-		if err != nil {
-			return fmt.Errorf("failed to load workspace config: %w", err)
-		}
-		if workspaceName != "" && workspaceName != cfg.WorkspaceName {
-			return fmt.Errorf("workspace flag must match current workspace (%s)", cfg.WorkspaceName)
-		}
-		if meta.ProjectID != "" && meta.ProjectID != cfg.ProjectID {
-			return fmt.Errorf("project ID mismatch: repo %s, workspace %s", meta.ProjectID, cfg.ProjectID)
-		}
-
-		if branchName != "" && !exportMetaHasBranch(meta, branchName) {
-			return fmt.Errorf("branch '%s' not found in export metadata", branchName)
-		}
-
-		targetBranch := branchName
-		if targetBranch == "" {
-			if entry, ok := meta.Workspaces[cfg.WorkspaceID]; ok {
-				targetBranch = entry.Branch
-			} else if len(meta.Workspaces) == 1 {
-				for _, entry := range meta.Workspaces {
-					targetBranch = entry.Branch
-				}
-			}
-		}
-		if targetBranch == "" {
-			return fmt.Errorf("branch is required when importing into this workspace")
-		}
-
-		target := importTarget{
-			WorkspaceID:   cfg.WorkspaceID,
-			WorkspaceName: cfg.WorkspaceName,
-			Branch:        targetBranch,
-			Root:          workspaceRoot,
-			ProjectID:     cfg.ProjectID,
-			Existing:      true,
-		}
-		return importTargets(git, []importTarget{target}, rebuild)
-	}
-
-	if mode == "none" {
+		// No project found — create one
 		if projectName == "" {
 			projectName = filepath.Base(repoRoot)
 		}
@@ -160,60 +123,31 @@ func runImportGit(repoPath, branchName, workspaceName, projectName string, rebui
 			return fmt.Errorf("failed to create project: %w", err)
 		}
 		parentCfg = &config.ParentConfig{ProjectID: projectID, ProjectName: projectName}
-		mode = "project"
 	}
 
-	targets, err := buildProjectTargets(parentRoot, parentCfg, meta, branchName, workspaceName)
+	targets, err := buildImportTargets(parentRoot, parentCfg, meta)
 	if err != nil {
 		return err
 	}
-	return importTargets(git, targets, rebuild)
+
+	s := store.OpenAt(parentRoot)
+	if err := s.EnsureDirs(); err != nil {
+		return fmt.Errorf("failed to create store directories: %w", err)
+	}
+
+	for _, target := range targets {
+		if err := importWorkspaceFromGit(git, s, target, rebuild); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func buildProjectTargets(parentRoot string, parentCfg *config.ParentConfig, meta *exportMeta, branchName, workspaceName string) ([]importTarget, error) {
+func buildImportTargets(parentRoot string, parentCfg *config.ParentConfig, meta *exportMeta) ([]importTarget, error) {
 	if parentCfg == nil {
 		return nil, fmt.Errorf("missing project configuration")
 	}
 	var targets []importTarget
-
-	if branchName != "" || workspaceName != "" {
-		entry, err := findExportWorkspace(meta, branchName, workspaceName)
-		if err != nil {
-			return nil, err
-		}
-		if entry.Branch == "" {
-			return nil, fmt.Errorf("export metadata missing branch for workspace")
-		}
-		name := workspaceName
-		if name == "" {
-			if entry.WorkspaceName != "" {
-				name = entry.WorkspaceName
-			} else {
-				name = entry.Branch
-			}
-		}
-		root := filepath.Join(parentRoot, name)
-		existing, cfg, err := existingWorkspaceConfig(root)
-		if err != nil {
-			return nil, err
-		}
-		targetID := entry.WorkspaceID
-		if existing {
-			if entry.WorkspaceID != "" && entry.WorkspaceID != cfg.WorkspaceID {
-				return nil, fmt.Errorf("workspace ID mismatch for %s", root)
-			}
-			targetID = cfg.WorkspaceID
-		}
-		targets = append(targets, importTarget{
-			WorkspaceID:   targetID,
-			WorkspaceName: name,
-			Branch:        entry.Branch,
-			Root:          root,
-			ProjectID:     parentCfg.ProjectID,
-			Existing:      existing,
-		})
-		return targets, nil
-	}
 
 	for _, entry := range meta.Workspaces {
 		if entry.Branch == "" {
@@ -250,57 +184,6 @@ func buildProjectTargets(parentRoot string, parentCfg *config.ParentConfig, meta
 	return targets, nil
 }
 
-func findExportWorkspace(meta *exportMeta, branchName, workspaceName string) (exportWorkspaceMeta, error) {
-	var match exportWorkspaceMeta
-	found := false
-	for _, entry := range meta.Workspaces {
-		if branchName != "" && entry.Branch != branchName {
-			continue
-		}
-		if workspaceName != "" {
-			if entry.WorkspaceName != "" && entry.WorkspaceName != workspaceName {
-				continue
-			}
-			if entry.WorkspaceName == "" && entry.WorkspaceID != workspaceName {
-				continue
-			}
-		}
-		if found {
-			return exportWorkspaceMeta{}, fmt.Errorf("multiple export workspaces match; specify --branch")
-		}
-		match = entry
-		found = true
-	}
-	if !found {
-		if branchName != "" {
-			return exportWorkspaceMeta{}, fmt.Errorf("branch '%s' not found in export metadata", branchName)
-		}
-		return exportWorkspaceMeta{}, fmt.Errorf("workspace not found in export metadata")
-	}
-	if match.Branch == "" {
-		return exportWorkspaceMeta{}, fmt.Errorf("export metadata missing branch for workspace")
-	}
-	return match, nil
-}
-
-func importTargets(git gitEnv, targets []importTarget, rebuild bool) error {
-	for _, target := range targets {
-		if err := importWorkspaceFromGit(git, target, rebuild); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func exportMetaHasBranch(meta *exportMeta, branch string) bool {
-	for _, entry := range meta.Workspaces {
-		if entry.Branch == branch {
-			return true
-		}
-	}
-	return false
-}
-
 func existingWorkspaceConfig(root string) (bool, *config.ProjectConfig, error) {
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
@@ -318,7 +201,7 @@ func existingWorkspaceConfig(root string) (bool, *config.ProjectConfig, error) {
 	return true, cfg, nil
 }
 
-func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error {
+func importWorkspaceFromGit(git gitEnv, s *store.Store, target importTarget, rebuild bool) error {
 	targetRoot := target.Root
 	if targetRoot == "" {
 		return fmt.Errorf("missing workspace path")
@@ -362,16 +245,13 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 		cfg.WorkspaceName = target.WorkspaceName
 	}
 
-	if hasSnapshots, err := workspaceHasSnapshots(targetRoot); err != nil {
-		return err
-	} else if hasSnapshots && !rebuild {
+	if cfg.CurrentSnapshotID != "" && !rebuild {
 		return fmt.Errorf("workspace %s already has snapshots (use --rebuild to overwrite)", cfg.WorkspaceName)
 	}
 
 	if rebuild {
-		if err := resetWorkspaceSnapshots(targetRoot, cfg); err != nil {
-			return err
-		}
+		cfg.CurrentSnapshotID = ""
+		cfg.BaseSnapshotID = ""
 	}
 
 	tempWorkDir, err := os.MkdirTemp("", "fst-import-worktree-")
@@ -390,6 +270,9 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 	if len(commits) == 0 {
 		return fmt.Errorf("no commits found for branch %s", target.Branch)
 	}
+
+	fmt.Printf("\n--- Workspace: %s (branch: %s) ---\n", target.WorkspaceName, target.Branch)
+	fmt.Printf("Found %d commits\n", len(commits))
 
 	commitToSnapshot := make(map[string]string, len(commits))
 	var firstSnapshot string
@@ -418,7 +301,7 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 			agentName = info.AuthorName
 		}
 
-		snapshotID, err := createImportedSnapshot(targetRoot, tempWorkDir, cfg, parentSnapshots, info.Subject, info.AuthorDate, info.AuthorName, info.AuthorEmail, agentName)
+		snapshotID, err := createImportedSnapshot(s, tempWorkDir, cfg, parentSnapshots, info.Subject, info.AuthorDate, info.AuthorName, info.AuthorEmail, agentName)
 		if err != nil {
 			return err
 		}
@@ -438,47 +321,19 @@ func importWorkspaceFromGit(git gitEnv, target importTarget, rebuild bool) error
 	}
 
 	// Register in project-level registry
-	if parentRoot, _, findErr := config.FindParentRootFrom(targetRoot); findErr == nil {
-		projectStore := store.OpenAt(parentRoot)
-		if regErr := projectStore.RegisterWorkspace(store.WorkspaceInfo{
-			WorkspaceID:   cfg.WorkspaceID,
-			WorkspaceName: cfg.WorkspaceName,
-			Path:          targetRoot,
-			BaseSnapshotID: cfg.BaseSnapshotID,
-			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-		}); regErr != nil {
-			fmt.Printf("Warning: Could not register workspace: %v\n", regErr)
-		}
+	if regErr := s.RegisterWorkspace(store.WorkspaceInfo{
+		WorkspaceID:       cfg.WorkspaceID,
+		WorkspaceName:     cfg.WorkspaceName,
+		Path:              targetRoot,
+		CurrentSnapshotID: lastSnapshot,
+		BaseSnapshotID:    cfg.BaseSnapshotID,
+		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
+	}); regErr != nil {
+		fmt.Printf("Warning: Could not register workspace: %v\n", regErr)
 	}
 
-	fmt.Printf("✓ Imported branch '%s' into workspace '%s'\n", target.Branch, cfg.WorkspaceName)
+	fmt.Printf("Imported %d commits into workspace '%s'\n", len(commits), cfg.WorkspaceName)
 	return nil
-}
-
-func workspaceHasSnapshots(root string) (bool, error) {
-	latest, err := config.GetLatestSnapshotIDAt(root)
-	if err != nil {
-		return false, err
-	}
-	return latest != "", nil
-}
-
-func resetWorkspaceSnapshots(root string, cfg *config.ProjectConfig) error {
-	if err := os.RemoveAll(config.GetSnapshotsDirAt(root)); err != nil {
-		return fmt.Errorf("failed to reset snapshots: %w", err)
-	}
-	if err := os.RemoveAll(config.GetManifestsDirAt(root)); err != nil {
-		return fmt.Errorf("failed to reset manifests: %w", err)
-	}
-	if err := os.MkdirAll(config.GetSnapshotsDirAt(root), 0755); err != nil {
-		return fmt.Errorf("failed to create snapshots dir: %w", err)
-	}
-	if err := os.MkdirAll(config.GetManifestsDirAt(root), 0755); err != nil {
-		return fmt.Errorf("failed to create manifests dir: %w", err)
-	}
-	cfg.CurrentSnapshotID = ""
-	cfg.BaseSnapshotID = ""
-	return config.ClearPendingMergeParentsAt(root)
 }
 
 type gitCommitInfo struct {
@@ -531,7 +386,7 @@ func gitCheckoutTree(g gitEnv, commit string) error {
 	return g.run("checkout", "-f", commit, "--", ".")
 }
 
-func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectConfig, parents []string, message, createdAt, authorName, authorEmail, agentName string) (string, error) {
+func createImportedSnapshot(s *store.Store, sourceRoot string, cfg *config.ProjectConfig, parents []string, message, createdAt, authorName, authorEmail, agentName string) (string, error) {
 	if message == "" {
 		message = "Imported commit"
 	}
@@ -541,39 +396,19 @@ func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectCo
 		return "", fmt.Errorf("failed to scan files: %w", err)
 	}
 
-	manifestHash, err := m.Hash()
+	manifestHash, err := s.WriteManifest(m)
 	if err != nil {
-		return "", fmt.Errorf("failed to hash manifest: %w", err)
+		return "", fmt.Errorf("failed to write manifest: %w", err)
 	}
 
 	if createdAt == "" {
 		createdAt = time.Now().UTC().Format(time.RFC3339)
 	}
-	snapshotID := config.ComputeSnapshotID(manifestHash, parents, authorName, authorEmail, createdAt)
+	snapshotID := store.ComputeSnapshotID(manifestHash, parents, authorName, authorEmail, createdAt)
 
-	manifestJSON, err := m.ToJSON()
-	if err != nil {
-		return "", fmt.Errorf("failed to serialize manifest: %w", err)
-	}
-
-	manifestsDir := config.GetManifestsDirAt(targetRoot)
-	if err := os.MkdirAll(manifestsDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create manifests directory: %w", err)
-	}
-	manifestPath := filepath.Join(manifestsDir, manifestHash+".json")
-	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-		if err := os.WriteFile(manifestPath, manifestJSON, 0644); err != nil {
-			return "", fmt.Errorf("failed to save manifest: %w", err)
-		}
-	}
-
-	blobDir := config.GetBlobsDirAt(targetRoot)
-	if err := os.MkdirAll(blobDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create blob directory: %w", err)
-	}
+	// Cache blobs from source files
 	for _, f := range m.FileEntries() {
-		blobPath := filepath.Join(blobDir, f.Hash)
-		if _, err := os.Stat(blobPath); err == nil {
+		if s.BlobExists(f.Hash) {
 			continue
 		}
 		srcPath := filepath.Join(sourceRoot, f.Path)
@@ -581,34 +416,24 @@ func createImportedSnapshot(targetRoot, sourceRoot string, cfg *config.ProjectCo
 		if err != nil {
 			continue
 		}
-		_ = os.WriteFile(blobPath, content, 0644)
+		_ = s.WriteBlob(f.Hash, content)
 	}
 
-	snapshotsDir := config.GetSnapshotsDirAt(targetRoot)
-	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create snapshots directory: %w", err)
-	}
-
-	parentIDsJSON, _ := json.Marshal(parents)
-	metadata := fmt.Sprintf(`{
-  "id": "%s",
-  "workspace_id": "%s",
-  "workspace_name": "%s",
-  "manifest_hash": "%s",
-  "parent_snapshot_ids": %s,
-  "author_name": "%s",
-  "author_email": "%s",
-  "message": "%s",
-  "agent": "%s",
-  "created_at": "%s",
-  "files": %d,
-  "size": %d
-}`, snapshotID, cfg.WorkspaceID, escapeJSON(cfg.WorkspaceName), manifestHash, parentIDsJSON,
-		escapeJSON(authorName), escapeJSON(authorEmail),
-		escapeJSON(message), escapeJSON(agentName), createdAt, m.FileCount(), m.TotalSize())
-
-	metadataPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-	if err := os.WriteFile(metadataPath, []byte(metadata), 0644); err != nil {
+	// Write snapshot metadata
+	if err := s.WriteSnapshotMeta(&store.SnapshotMeta{
+		ID:                snapshotID,
+		WorkspaceID:       cfg.WorkspaceID,
+		WorkspaceName:     cfg.WorkspaceName,
+		ManifestHash:      manifestHash,
+		ParentSnapshotIDs: parents,
+		AuthorName:        authorName,
+		AuthorEmail:       authorEmail,
+		Message:           message,
+		Agent:             agentName,
+		CreatedAt:         createdAt,
+		Files:             m.FileCount(),
+		Size:              m.TotalSize(),
+	}); err != nil {
 		return "", fmt.Errorf("failed to save snapshot metadata: %w", err)
 	}
 

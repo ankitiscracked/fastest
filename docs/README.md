@@ -104,3 +104,23 @@ web/           Vite + React frontend (TanStack Router)
 packages/shared/  Shared TypeScript types and manifest utilities
 tests/e2e/     End-to-end bash workflow tests
 ```
+
+## Roadmap
+
+### Testing gaps
+
+- [ ] `clone` -- 319 lines, zero tests. Core feature for onboarding new workspaces
+- [ ] `pull` -- zero tests, has dangerous `--hard` flag that can destroy local state
+- [ ] `git import` -- no tests at all (git export has E2E coverage)
+- [ ] `diff` -- no command-level tests despite CI-important exit code semantics
+- [ ] `history` -- `drop` and `rebase` subcommands have no command-level tests
+- [ ] `login` -- device flow + polling loop untested
+
+### UX improvements
+
+- [ ] `status` -- no clean/dirty indicator, no upstream divergence info. Most-used command should surface more at a glance
+- [ ] Remove deprecated `conflicts` command (replaced by `merge --dry-run`)
+
+### Cleanup
+
+- [ ] Remove or document internal helpers registered as commands (`deps`, `ids`, `id_resolve` are internal utilities, not user-facing commands, but live in the commands package)

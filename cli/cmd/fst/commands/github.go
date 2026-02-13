@@ -61,8 +61,6 @@ func newGitHubExportCmd() *cobra.Command {
 }
 
 func newGitHubImportCmd() *cobra.Command {
-	var branchName string
-	var workspaceName string
 	var projectName string
 	var rebuild bool
 	var noGH bool
@@ -72,12 +70,10 @@ func newGitHubImportCmd() *cobra.Command {
 		Short: "Import from a GitHub repository exported by fst",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGitHubImport(args[0], branchName, workspaceName, projectName, rebuild, noGH)
+			return runGitHubImport(args[0], projectName, rebuild, noGH)
 		},
 	}
 
-	cmd.Flags().StringVarP(&branchName, "branch", "b", "", "Branch name to import (default: from export metadata)")
-	cmd.Flags().StringVarP(&workspaceName, "workspace", "w", "", "Target workspace name (default: from export metadata)")
 	cmd.Flags().StringVarP(&projectName, "project", "p", "", "Project name when creating a new project")
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "Rebuild snapshots from scratch (overwrites existing snapshot history)")
 	cmd.Flags().BoolVar(&noGH, "no-gh", false, "Disable gh CLI even if installed")
@@ -167,7 +163,7 @@ func runGitHubExport(repo string, initRepo bool, rebuild bool, remoteName string
 	return nil
 }
 
-func runGitHubImport(repo string, branchName, workspaceName, projectName string, rebuild bool, noGH bool) error {
+func runGitHubImport(repo string, projectName string, rebuild bool, noGH bool) error {
 	useGH := !noGH && hasGH()
 	_, remoteURL, err := parseGitHubRepo(repo)
 	if err != nil {
@@ -194,7 +190,7 @@ func runGitHubImport(repo string, branchName, workspaceName, projectName string,
 		return fmt.Errorf("failed to fetch export metadata refs: %w", err)
 	}
 
-	return runImportGit(tempRepoDir, branchName, workspaceName, projectName, rebuild)
+	return runImportGit(tempRepoDir, projectName, rebuild)
 }
 
 func hasGH() bool {
