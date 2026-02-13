@@ -14,41 +14,38 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/store"
 )
 
 func newExportGitCmd() *cobra.Command {
-	var branchName string
-	var includeDirty bool
-	var message string
 	var initRepo bool
 	var rebuild bool
 
 	cmd := &cobra.Command{
 		Use:   "export",
-		Short: "Export to Git repository",
-		Long: `Export workspace snapshots to Git commits.
+		Short: "Export project to Git repository",
+		Long: `Export all workspace snapshots to Git commits.
 
-	This will:
-1. Map each snapshot in the chain to a Git commit
-2. Create/update a branch for the current workspace
-3. Optionally include uncommitted changes
+Each workspace becomes a Git branch (named after the workspace).
+The Git repository is created at the project root.
+
+This will:
+1. Walk the snapshot DAG for each workspace
+2. Create Git commits preserving the snapshot history
+3. Create one branch per workspace
 
 The mapping is stored in .fst/export/git-map.json to enable incremental exports.
 Subsequent exports only create commits for new snapshots.
 
 Examples:
-  fst git export                     # Export to current branch
-  fst git export --branch feature    # Export to specific branch
-  fst git export --include-dirty     # Include uncommitted changes
-  fst git export --init              # Initialize git repo if needed`,
+  fst git export                     # Export all workspaces
+  fst git export --init              # Initialize git repo if needed
+  fst git export --rebuild           # Rebuild all commits from scratch`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runExportGit(branchName, includeDirty, message, initRepo, rebuild)
+			return runExportGit(initRepo, rebuild)
 		},
 	}
 
-	cmd.Flags().StringVarP(&branchName, "branch", "b", "", "Branch name (default: workspace name)")
-	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include uncommitted changes as a commit")
-	cmd.Flags().StringVarP(&message, "message", "m", "", "Commit message for dirty export (requires --include-dirty)")
 	cmd.Flags().BoolVar(&initRepo, "init", false, "Initialize git repo if it doesn't exist")
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "Rebuild all commits from scratch (ignores existing mapping)")
 
@@ -99,38 +96,37 @@ func SaveGitMapping(configDir string, mapping *GitMapping) error {
 	return os.WriteFile(filepath.Join(exportDir, "git-map.json"), data, 0644)
 }
 
-func runExportGit(branchName string, includeDrift bool, message string, initRepo bool, rebuild bool) error {
-	// Load config
-	cfg, err := config.Load()
+func runExportGit(initRepo bool, rebuild bool) error {
+	// Find project root
+	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("not in a workspace directory: %w", err)
+		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	root, err := config.FindProjectRoot()
+	// Try from cwd first, then from workspace root
+	projectRoot, parentCfg, err := config.FindParentRootFrom(cwd)
 	if err != nil {
-		return fmt.Errorf("failed to find project root: %w", err)
+		if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
+			projectRoot, parentCfg, err = config.FindParentRootFrom(wsRoot)
+		}
+		if err != nil {
+			return fmt.Errorf("not in a project (no fst.json found): %w", err)
+		}
 	}
 
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return fmt.Errorf("failed to get config dir: %w", err)
-	}
-
-	// Default branch name to workspace name
-	if branchName == "" {
-		branchName = cfg.WorkspaceName
-	}
+	s := store.OpenAt(projectRoot)
+	configDir := filepath.Join(projectRoot, ".fst")
 
 	// Check if git repo exists
-	gitDir := filepath.Join(root, ".git")
+	gitDir := filepath.Join(projectRoot, ".git")
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
 		if initRepo {
 			fmt.Println("Initializing git repository...")
-			if err := runGitCommand(root, "init"); err != nil {
+			if err := runGitCommand(projectRoot, "init"); err != nil {
 				return fmt.Errorf("failed to init git repo: %w", err)
 			}
 		} else {
-			fmt.Println("No git repository found.")
+			fmt.Println("No git repository found at project root.")
 			fmt.Print("Initialize one? [Y/n] ")
 			var response string
 			fmt.Scanln(&response)
@@ -139,7 +135,7 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 				return fmt.Errorf("git repository required for export")
 			}
 			fmt.Println("Initializing git repository...")
-			if err := runGitCommand(root, "init"); err != nil {
+			if err := runGitCommand(projectRoot, "init"); err != nil {
 				return fmt.Errorf("failed to init git repo: %w", err)
 			}
 		}
@@ -152,179 +148,69 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 	defer os.RemoveAll(tempDir)
 
 	indexPath := filepath.Join(tempDir, "index")
-	git := newGitEnv(root, tempDir, indexPath)
+	git := newGitEnv(projectRoot, tempDir, indexPath)
 	metaDir := filepath.Join(tempDir, "meta")
 	metaIndexPath := filepath.Join(tempDir, "meta-index")
-	metaGit := newGitEnv(root, metaDir, metaIndexPath)
+	metaGit := newGitEnv(projectRoot, metaDir, metaIndexPath)
 
 	// Load or create mapping
 	var mapping *GitMapping
 	if rebuild {
-		mapping = &GitMapping{RepoPath: root, Snapshots: make(map[string]string)}
+		mapping = &GitMapping{RepoPath: projectRoot, Snapshots: make(map[string]string)}
 	} else {
 		mapping, err = LoadGitMapping(configDir)
 		if err != nil {
 			return fmt.Errorf("failed to load git mapping: %w", err)
 		}
-		mapping.RepoPath = root
+		mapping.RepoPath = projectRoot
 	}
 
-	if rebuild {
-		branchExists, err := gitBranchExists(git, branchName)
-		if err != nil {
-			return fmt.Errorf("failed to check branch: %w", err)
-		}
-		if branchExists {
-			if err := deleteGitBranchRef(git, branchName); err != nil {
-				return fmt.Errorf("failed to reset branch '%s': %w", branchName, err)
-			}
-		}
-	}
-
-	// Check if we have a current snapshot
-	if cfg.CurrentSnapshotID == "" {
-		return fmt.Errorf("no snapshots to export - create one with 'fst snapshot'")
-	}
-
-	// Build snapshot chain (walk back through parents)
-	chain, err := buildSnapshotDAG(root, cfg.CurrentSnapshotID)
+	// List all workspaces
+	workspaces, err := s.ListWorkspaces()
 	if err != nil {
-		return fmt.Errorf("failed to build snapshot chain: %w", err)
+		return fmt.Errorf("failed to list workspaces: %w", err)
+	}
+	if len(workspaces) == 0 {
+		return fmt.Errorf("no workspaces found in project")
 	}
 
-	if len(chain) == 0 {
-		return fmt.Errorf("no snapshots found")
-	}
+	totalNewCommits := 0
+	exportedWorkspaces := 0
 
-	fmt.Printf("Found %d snapshots to export\n", len(chain))
-
-	currentBranch, err := getGitCurrentBranch(git)
-	if err == nil && currentBranch == branchName {
-		fmt.Printf("Note: branch '%s' is currently checked out; export will not update your working tree.\n", branchName)
-	}
-
-	// Export each snapshot in chain (oldest first)
-	newCommits := 0
-	var lastCommitSHA string
-
-	for _, snap := range chain {
-		// Check if already exported
-		if existingSHA, ok := mapping.Snapshots[snap.ID]; ok && !rebuild {
-			// Verify commit still exists
-			if gitCommitExists(git, existingSHA) {
-				fmt.Printf("  %s: already exported (commit %s)\n", snap.ID, existingSHA[:8])
-				lastCommitSHA = existingSHA
-				continue
-			}
-			fmt.Printf("  %s: mapped commit missing, re-exporting\n", snap.ID)
+	for _, ws := range workspaces {
+		if ws.CurrentSnapshotID == "" {
+			fmt.Printf("Skipping workspace '%s' (no snapshots)\n", ws.WorkspaceName)
+			continue
 		}
 
-		// Load snapshot data
-		manifestHash, err := config.ManifestHashFromSnapshotIDAt(root, snap.ID)
+		branchName := ws.WorkspaceName
+		fmt.Printf("\n--- Workspace: %s (branch: %s) ---\n", ws.WorkspaceName, branchName)
+
+		newCommits, err := exportWorkspaceSnapshots(exportWorkspaceParams{
+			store:      s,
+			git:        git,
+			mapping:    mapping,
+			branchName: branchName,
+			snapshotID: ws.CurrentSnapshotID,
+			wsName:     ws.WorkspaceName,
+			rebuild:    rebuild,
+		})
 		if err != nil {
-			return fmt.Errorf("invalid snapshot id %s: %w", snap.ID, err)
+			// Save mapping so progress from previous workspaces isn't lost
+			_ = SaveGitMapping(configDir, mapping)
+			return fmt.Errorf("failed to export workspace '%s': %w", ws.WorkspaceName, err)
 		}
-		manifestPath := filepath.Join(config.GetManifestsDirAt(root), manifestHash+".json")
-		manifestData, err := os.ReadFile(manifestPath)
-		if err != nil {
-			return fmt.Errorf("failed to load snapshot %s: %w", snap.ID, err)
-		}
+		totalNewCommits += newCommits
+		exportedWorkspaces++
 
-		m, err := manifest.FromJSON(manifestData)
-		if err != nil {
-			return fmt.Errorf("failed to parse snapshot %s: %w", snap.ID, err)
+		// Update export metadata for this workspace
+		wsCfg := &config.ProjectConfig{
+			ProjectID:     parentCfg.ProjectID,
+			WorkspaceID:   ws.WorkspaceID,
+			WorkspaceName: ws.WorkspaceName,
 		}
-
-		// Restore files from blobs to working directory
-		if err := restoreFilesFromManifest(tempDir, configDir, m); err != nil {
-			return fmt.Errorf("failed to restore files for %s: %w", snap.ID, err)
-		}
-
-		// Stage all files
-		if err := git.run("add", "-A"); err != nil {
-			return fmt.Errorf("failed to stage files: %w", err)
-		}
-
-		// Create commit
-		commitMsg := snap.Message
-		if commitMsg == "" {
-			commitMsg = fmt.Sprintf("Snapshot %s", snap.ID)
-		}
-
-		parentSHAs, err := resolveGitParentSHAs(git, mapping, snap.ParentIDs)
-		if err != nil {
-			return fmt.Errorf("failed to resolve parents for %s: %w", snap.ID, err)
-		}
-		if len(parentSHAs) == 0 && len(snap.ParentIDs) == 1 && lastCommitSHA != "" {
-			parentSHAs = []string{lastCommitSHA}
-		}
-
-		treeSHA, err := getGitTreeSHA(git)
-		if err != nil {
-			return fmt.Errorf("failed to write tree for %s: %w", snap.ID, err)
-		}
-
-		meta := commitMetaFromSnapshot(snap)
-		sha, err := createGitCommitWithParents(git, treeSHA, commitMsg, parentSHAs, meta)
-		if err != nil {
-			return fmt.Errorf("failed to create commit for %s: %w", snap.ID, err)
-		}
-		if err := updateGitBranchRef(git, branchName, sha); err != nil {
-			return fmt.Errorf("failed to update branch ref for %s: %w", snap.ID, err)
-		}
-
-		mapping.Snapshots[snap.ID] = sha
-		lastCommitSHA = sha
-		newCommits++
-		fmt.Printf("  %s: exported → %s\n", snap.ID, sha[:8])
-	}
-
-	// Handle drift if requested
-	if includeDrift {
-		if err := syncWorkingTree(root, tempDir); err != nil {
-			return fmt.Errorf("failed to prepare drift export: %w", err)
-		}
-
-		// Stage current changes
-		if err := git.run("add", "-A"); err != nil {
-			return fmt.Errorf("failed to stage drift: %w", err)
-		}
-
-		treeSHA, err := getGitTreeSHA(git)
-		if err != nil {
-			return fmt.Errorf("failed to write drift tree: %w", err)
-		}
-
-		driftChanged := true
-		if lastCommitSHA != "" {
-			parentTree, err := getGitCommitTreeSHA(git, lastCommitSHA)
-			if err == nil && parentTree == treeSHA {
-				driftChanged = false
-			}
-		}
-
-		if driftChanged {
-			driftMsg := message
-			if driftMsg == "" {
-				driftMsg = "WIP: uncommitted changes"
-			}
-
-			parents := []string{}
-			if lastCommitSHA != "" {
-				parents = []string{lastCommitSHA}
-			}
-			sha, err := createGitCommitWithParents(git, treeSHA, driftMsg, parents, nil)
-			if err != nil {
-				return fmt.Errorf("failed to commit drift: %w", err)
-			}
-			if err := updateGitBranchRef(git, branchName, sha); err != nil {
-				return fmt.Errorf("failed to update branch ref for drift: %w", err)
-			}
-			fmt.Printf("  drift: exported → %s\n", sha[:8])
-			newCommits++
-			lastCommitSHA = sha
-		} else {
-			fmt.Println("  No uncommitted changes to export")
+		if err := updateExportMetadata(metaGit, wsCfg, branchName); err != nil {
+			fmt.Printf("Warning: failed to update export metadata for %s: %v\n", ws.WorkspaceName, err)
 		}
 	}
 
@@ -333,94 +219,131 @@ func runExportGit(branchName string, includeDrift bool, message string, initRepo
 		return fmt.Errorf("failed to save mapping: %w", err)
 	}
 
-	if err := updateExportMetadata(metaGit, cfg, branchName); err != nil {
-		fmt.Printf("Warning: failed to update export metadata: %v\n", err)
-	}
-
 	fmt.Println()
-	if newCommits > 0 {
-		fmt.Printf("✓ Exported %d new commits to branch '%s'\n", newCommits, branchName)
+	if totalNewCommits > 0 {
+		fmt.Printf("Exported %d new commits across %d workspaces\n", totalNewCommits, exportedWorkspaces)
 	} else {
-		fmt.Printf("✓ Branch '%s' is up to date\n", branchName)
-	}
-
-	// Show current state
-	if !includeDrift {
-		// Check for drift
-		currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
-		if err == nil {
-			baseManifestHash, err := config.ManifestHashFromSnapshotIDAt(root, cfg.BaseSnapshotID)
-			if err == nil {
-				baseManifestPath := filepath.Join(config.GetManifestsDirAt(root), baseManifestHash+".json")
-				if baseData, err := os.ReadFile(baseManifestPath); err == nil {
-					if baseManifest, err := manifest.FromJSON(baseData); err == nil {
-						added, modified, deleted := manifest.Diff(baseManifest, currentManifest)
-						if len(added)+len(modified)+len(deleted) > 0 {
-							fmt.Printf("\nNote: %d uncommitted changes not exported.\n", len(added)+len(modified)+len(deleted))
-							fmt.Println("Use --include-dirty to include them.")
-						}
-					}
-				}
-			}
-		}
+		fmt.Printf("All %d workspaces up to date\n", exportedWorkspaces)
 	}
 
 	return nil
 }
 
-// SnapshotInfo contains basic snapshot metadata
-type SnapshotInfo struct {
-	ID        string
-	ParentIDs []string
-	Message   string
-	CreatedAt string
-	Agent     string
+type exportWorkspaceParams struct {
+	store      *store.Store
+	git        gitEnv
+	mapping    *GitMapping
+	branchName string
+	snapshotID string // workspace head
+	wsName     string // for display
+	rebuild    bool
+}
+
+func exportWorkspaceSnapshots(p exportWorkspaceParams) (int, error) {
+	if p.rebuild {
+		branchExists, err := gitBranchExists(p.git, p.branchName)
+		if err != nil {
+			return 0, fmt.Errorf("failed to check branch: %w", err)
+		}
+		if branchExists {
+			if err := deleteGitBranchRef(p.git, p.branchName); err != nil {
+				return 0, fmt.Errorf("failed to reset branch '%s': %w", p.branchName, err)
+			}
+		}
+	}
+
+	// Build snapshot DAG
+	chain, err := buildSnapshotDAG(p.store, p.snapshotID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to build snapshot chain: %w", err)
+	}
+
+	if len(chain) == 0 {
+		return 0, fmt.Errorf("no snapshots found")
+	}
+
+	fmt.Printf("Found %d snapshots\n", len(chain))
+
+	newCommits := 0
+	var lastCommitSHA string
+
+	for _, snap := range chain {
+		// Check if already exported
+		if existingSHA, ok := p.mapping.Snapshots[snap.ID]; ok && !p.rebuild {
+			if gitCommitExists(p.git, existingSHA) {
+				fmt.Printf("  %s: already exported (commit %s)\n", snap.ID[:12], existingSHA[:8])
+				lastCommitSHA = existingSHA
+				continue
+			}
+			fmt.Printf("  %s: mapped commit missing, re-exporting\n", snap.ID[:12])
+		}
+
+		// Load manifest
+		m, err := p.store.LoadManifest(snap.ManifestHash)
+		if err != nil {
+			return 0, fmt.Errorf("failed to load manifest for %s: %w", snap.ID[:12], err)
+		}
+
+		// Restore files from blobs to temp working directory
+		if err := restoreFilesFromManifest(p.git.workTree, p.store, m); err != nil {
+			return 0, fmt.Errorf("failed to restore files for %s: %w", snap.ID[:12], err)
+		}
+
+		// Stage all files
+		if err := p.git.run("add", "-A"); err != nil {
+			return 0, fmt.Errorf("failed to stage files: %w", err)
+		}
+
+		// Create commit
+		commitMsg := snap.Message
+		if commitMsg == "" {
+			commitMsg = fmt.Sprintf("Snapshot %s", snap.ID[:12])
+		}
+
+		parentSHAs, err := resolveGitParentSHAs(p.git, p.mapping, snap.ParentSnapshotIDs)
+		if err != nil {
+			return 0, fmt.Errorf("failed to resolve parents for %s: %w", snap.ID[:12], err)
+		}
+		if len(parentSHAs) == 0 && len(snap.ParentSnapshotIDs) == 1 && lastCommitSHA != "" {
+			parentSHAs = []string{lastCommitSHA}
+		}
+
+		treeSHA, err := getGitTreeSHA(p.git)
+		if err != nil {
+			return 0, fmt.Errorf("failed to write tree for %s: %w", snap.ID[:12], err)
+		}
+
+		meta := commitMetaFromSnapshot(snap)
+		sha, err := createGitCommitWithParents(p.git, treeSHA, commitMsg, parentSHAs, meta)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create commit for %s: %w", snap.ID[:12], err)
+		}
+		if err := updateGitBranchRef(p.git, p.branchName, sha); err != nil {
+			return 0, fmt.Errorf("failed to update branch ref for %s: %w", snap.ID[:12], err)
+		}
+
+		p.mapping.Snapshots[snap.ID] = sha
+		lastCommitSHA = sha
+		newCommits++
+		fmt.Printf("  %s: exported -> %s\n", snap.ID[:12], sha[:8])
+	}
+
+	return newCommits, nil
 }
 
 // buildSnapshotDAG walks all reachable parents and returns snapshots in parent-before-child order.
-func buildSnapshotDAG(root, startID string) ([]SnapshotInfo, error) {
+func buildSnapshotDAG(s *store.Store, startID string) ([]*store.SnapshotMeta, error) {
 	if startID == "" {
 		return nil, fmt.Errorf("empty snapshot id")
 	}
 
-	snapshotsDir := config.GetSnapshotsDirAt(root)
-	loadMeta := func(snapshotID string) (*SnapshotInfo, error) {
-		metaPath := filepath.Join(snapshotsDir, snapshotID+".meta.json")
-		data, err := os.ReadFile(metaPath)
-		if err != nil {
-			return nil, err
-		}
-
-		var meta struct {
-			ID                string   `json:"id"`
-			ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
-			Message           string   `json:"message"`
-			CreatedAt         string   `json:"created_at"`
-			Agent             string   `json:"agent"`
-		}
-		if err := json.Unmarshal(data, &meta); err != nil {
-			return nil, err
-		}
-
-		return &SnapshotInfo{
-			ID:        meta.ID,
-			ParentIDs: meta.ParentSnapshotIDs,
-			Message:   meta.Message,
-			CreatedAt: meta.CreatedAt,
-			Agent:     meta.Agent,
-		}, nil
-	}
-
-	if _, err := loadMeta(startID); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("snapshot metadata not found for %s", startID)
-		}
-		return nil, err
+	if _, err := s.LoadSnapshotMeta(startID); err != nil {
+		return nil, fmt.Errorf("snapshot metadata not found for %s", startID)
 	}
 
 	state := make(map[string]uint8)
-	infoByID := make(map[string]*SnapshotInfo)
-	var ordered []SnapshotInfo
+	infoByID := make(map[string]*store.SnapshotMeta)
+	var ordered []*store.SnapshotMeta
 
 	var visit func(string) error
 	visit = func(id string) error {
@@ -437,7 +360,7 @@ func buildSnapshotDAG(root, startID string) ([]SnapshotInfo, error) {
 
 		info := infoByID[id]
 		if info == nil {
-			meta, err := loadMeta(id)
+			meta, err := s.LoadSnapshotMeta(id)
 			if err != nil {
 				if os.IsNotExist(err) {
 					fmt.Printf("  warning: snapshot metadata missing for %s (skipping)\n", id)
@@ -450,14 +373,14 @@ func buildSnapshotDAG(root, startID string) ([]SnapshotInfo, error) {
 			infoByID[id] = info
 		}
 
-		for _, parent := range info.ParentIDs {
+		for _, parent := range info.ParentSnapshotIDs {
 			if err := visit(parent); err != nil {
 				return err
 			}
 		}
 
 		state[id] = 2
-		ordered = append(ordered, *info)
+		ordered = append(ordered, info)
 		return nil
 	}
 
@@ -513,19 +436,24 @@ func (m *commitMeta) env() map[string]string {
 	return env
 }
 
-func commitMetaFromSnapshot(s SnapshotInfo) *commitMeta {
-	if s.CreatedAt == "" && s.Agent == "" {
+func commitMetaFromSnapshot(snap *store.SnapshotMeta) *commitMeta {
+	if snap.CreatedAt == "" && snap.Agent == "" && snap.AuthorName == "" {
 		return nil
 	}
 	meta := &commitMeta{
-		AuthorDate:    s.CreatedAt,
-		CommitterDate: s.CreatedAt,
+		AuthorDate:    snap.CreatedAt,
+		CommitterDate: snap.CreatedAt,
 	}
-	if s.Agent != "" {
-		email := agentEmail(s.Agent)
-		meta.AuthorName = s.Agent
+	if snap.AuthorName != "" {
+		meta.AuthorName = snap.AuthorName
+		meta.AuthorEmail = snap.AuthorEmail
+		meta.CommitterName = snap.AuthorName
+		meta.CommitterEmail = snap.AuthorEmail
+	} else if snap.Agent != "" {
+		email := agentEmail(snap.Agent)
+		meta.AuthorName = snap.Agent
 		meta.AuthorEmail = email
-		meta.CommitterName = s.Agent
+		meta.CommitterName = snap.Agent
 		meta.CommitterEmail = email
 	}
 	return meta
@@ -645,15 +573,9 @@ func agentEmail(agent string) string {
 	return slug + "@fastest.local"
 }
 
-// restoreFilesFromManifest restores all files from a manifest using cached blobs
-func restoreFilesFromManifest(root, configDir string, m *manifest.Manifest) error {
-	blobDir, err := config.GetBlobsDir()
-	if err != nil {
-		return err
-	}
-
+// restoreFilesFromManifest restores all files from a manifest using the store's blob cache
+func restoreFilesFromManifest(root string, s *store.Store, m *manifest.Manifest) error {
 	// First, remove files that shouldn't exist (except .git and .fst)
-	// We'll do this by tracking what should exist
 	shouldExist := make(map[string]bool)
 	for _, f := range m.FileEntries() {
 		shouldExist[f.Path] = true
@@ -689,14 +611,12 @@ func restoreFilesFromManifest(root, configDir string, m *manifest.Manifest) erro
 
 	// Now restore files from blobs
 	for _, f := range m.FileEntries() {
-		blobPath := filepath.Join(blobDir, f.Hash)
-		targetPath := filepath.Join(root, f.Path)
-
-		content, err := os.ReadFile(blobPath)
+		content, err := s.ReadBlob(f.Hash)
 		if err != nil {
 			return fmt.Errorf("blob not found for %s: %w", f.Path, err)
 		}
 
+		targetPath := filepath.Join(root, f.Path)
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return err
 		}
@@ -707,79 +627,6 @@ func restoreFilesFromManifest(root, configDir string, m *manifest.Manifest) erro
 	}
 
 	return nil
-}
-
-// syncWorkingTree mirrors the current workspace files into the export directory.
-func syncWorkingTree(srcRoot, destRoot string) error {
-	shouldExist := make(map[string]bool)
-	err := filepath.Walk(srcRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		relPath, _ := filepath.Rel(srcRoot, path)
-		relPath = filepath.ToSlash(relPath)
-
-		if relPath == "." {
-			return nil
-		}
-
-		if strings.HasPrefix(relPath, ".git") || strings.HasPrefix(relPath, ".fst") || relPath == ".fst" {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		shouldExist[relPath] = true
-		targetPath := filepath.Join(destRoot, relPath)
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-			return err
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(targetPath, content, info.Mode().Perm()); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	return filepath.Walk(destRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		relPath, _ := filepath.Rel(destRoot, path)
-		relPath = filepath.ToSlash(relPath)
-
-		if relPath == "." {
-			return nil
-		}
-
-		if strings.HasPrefix(relPath, ".git") || strings.HasPrefix(relPath, ".fst") || relPath == ".fst" {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		if !shouldExist[relPath] {
-			_ = os.Remove(path)
-		}
-
-		return nil
-	})
 }
 
 // Git helper functions

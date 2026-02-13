@@ -32,15 +32,11 @@ func newGitHubCmd() *cobra.Command {
 }
 
 func newGitHubExportCmd() *cobra.Command {
-	var branchName string
-	var includeDirty bool
-	var message string
 	var initRepo bool
 	var rebuild bool
 	var remoteName string
 	var createRepo bool
 	var privateRepo bool
-	var pushAll bool
 	var forceRemote bool
 	var noGH bool
 
@@ -49,19 +45,15 @@ func newGitHubExportCmd() *cobra.Command {
 		Short: "Export to a GitHub repository",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGitHubExport(args[0], branchName, includeDirty, message, initRepo, rebuild, remoteName, createRepo, privateRepo, pushAll, forceRemote, noGH)
+			return runGitHubExport(args[0], initRepo, rebuild, remoteName, createRepo, privateRepo, forceRemote, noGH)
 		},
 	}
 
-	cmd.Flags().StringVarP(&branchName, "branch", "b", "", "Branch name (default: workspace name)")
-	cmd.Flags().BoolVar(&includeDirty, "include-dirty", false, "Include uncommitted changes as a commit")
-	cmd.Flags().StringVarP(&message, "message", "m", "", "Commit message for dirty export (requires --include-dirty)")
 	cmd.Flags().BoolVar(&initRepo, "init", false, "Initialize git repo if it doesn't exist")
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "Rebuild all commits from scratch (ignores existing mapping)")
 	cmd.Flags().StringVar(&remoteName, "remote", "origin", "Remote name to push to")
 	cmd.Flags().BoolVar(&createRepo, "create", false, "Create the GitHub repo if it doesn't exist (requires gh)")
 	cmd.Flags().BoolVar(&privateRepo, "private", false, "Create repo as private (requires --create)")
-	cmd.Flags().BoolVar(&pushAll, "push-all", false, "Push all export branches listed in metadata")
 	cmd.Flags().BoolVar(&forceRemote, "force-remote", false, "Overwrite remote URL if it already exists")
 	cmd.Flags().BoolVar(&noGH, "no-gh", false, "Disable gh CLI even if installed")
 
@@ -93,18 +85,20 @@ func newGitHubImportCmd() *cobra.Command {
 	return cmd
 }
 
-func runGitHubExport(repo string, branchName string, includeDirty bool, message string, initRepo bool, rebuild bool, remoteName string, createRepo bool, privateRepo bool, pushAll bool, forceRemote bool, noGH bool) error {
-	cfg, err := config.Load()
+func runGitHubExport(repo string, initRepo bool, rebuild bool, remoteName string, createRepo bool, privateRepo bool, forceRemote bool, noGH bool) error {
+	// Find project root
+	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("not in a workspace directory: %w", err)
+		return fmt.Errorf("failed to get current directory: %w", err)
 	}
-	root, err := config.FindProjectRoot()
+	projectRoot, _, err := config.FindParentRootFrom(cwd)
 	if err != nil {
-		return fmt.Errorf("failed to find project root: %w", err)
-	}
-
-	if branchName == "" {
-		branchName = cfg.WorkspaceName
+		if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
+			projectRoot, _, err = config.FindParentRootFrom(wsRoot)
+		}
+		if err != nil {
+			return fmt.Errorf("not in a project (no fst.json found): %w", err)
+		}
 	}
 
 	useGH := !noGH && hasGH()
@@ -123,16 +117,16 @@ func runGitHubExport(repo string, branchName string, includeDirty bool, message 
 		} else {
 			args = append(args, "--public")
 		}
-		if err := runGHCommand(root, args...); err != nil {
+		if err := runGHCommand(projectRoot, args...); err != nil {
 			return fmt.Errorf("failed to create repo: %w", err)
 		}
 	}
 
-	if err := runExportGit(branchName, includeDirty, message, initRepo, rebuild); err != nil {
+	if err := runExportGit(initRepo, rebuild); err != nil {
 		return err
 	}
 
-	existingURL, exists, err := getGitRemoteURL(root, remoteName)
+	existingURL, exists, err := getGitRemoteURL(projectRoot, remoteName)
 	if err != nil {
 		return err
 	}
@@ -141,34 +135,32 @@ func runGitHubExport(repo string, branchName string, includeDirty bool, message 
 			if !forceRemote {
 				return fmt.Errorf("remote '%s' already set to %s (use --force-remote to override)", remoteName, existingURL)
 			}
-			if err := runGitCommand(root, "remote", "set-url", remoteName, remoteURL); err != nil {
+			if err := runGitCommand(projectRoot, "remote", "set-url", remoteName, remoteURL); err != nil {
 				return fmt.Errorf("failed to update remote '%s': %w", remoteName, err)
 			}
 		}
 	} else {
-		if err := runGitCommand(root, "remote", "add", remoteName, remoteURL); err != nil {
+		if err := runGitCommand(projectRoot, "remote", "add", remoteName, remoteURL); err != nil {
 			return fmt.Errorf("failed to add remote '%s': %w", remoteName, err)
 		}
 	}
 
-	branches := []string{branchName}
-	if pushAll {
-		meta, err := loadExportMetadataFromRepo(root)
-		if err != nil {
-			return fmt.Errorf("failed to load export metadata: %w", err)
-		}
-		if meta == nil {
-			return fmt.Errorf("missing export metadata in repo")
-		}
-		branches = collectExportBranches(meta)
+	// Push all workspace branches
+	meta, err := loadExportMetadataFromRepo(projectRoot)
+	if err != nil {
+		return fmt.Errorf("failed to load export metadata: %w", err)
 	}
+	if meta == nil {
+		return fmt.Errorf("missing export metadata in repo")
+	}
+	branches := collectExportBranches(meta)
 
 	for _, branch := range branches {
-		if err := runGitCommand(root, "push", remoteName, branch); err != nil {
+		if err := runGitCommand(projectRoot, "push", remoteName, branch); err != nil {
 			return fmt.Errorf("failed to push branch '%s': %w", branch, err)
 		}
 	}
-	if err := runGitCommand(root, "push", remoteName, fstMetaRef); err != nil {
+	if err := runGitCommand(projectRoot, "push", remoteName, fstMetaRef); err != nil {
 		return fmt.Errorf("failed to push export metadata: %w", err)
 	}
 

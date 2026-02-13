@@ -478,32 +478,67 @@ test_git_export() {
     export GIT_COMMITTER_NAME="Test User"
     export GIT_COMMITTER_EMAIL="test@example.com"
 
+    # Create project with main workspace
     run_fst project create myproject --no-snapshot
     assert_exit_code 0
     cd "$TEST_DIR/myproject/main"
 
+    # Create a shared base snapshot in main
     echo "v1" > file.txt
-    run_fst snapshot -m "snapshot one"
+    run_fst snapshot -m "base snapshot"
     assert_exit_code 0
 
+    # Create feature workspace (forks from main)
+    run_fst workspace create feature
+    assert_exit_code 0
+
+    # Add work to feature
+    cd "$TEST_DIR/myproject/feature"
+    echo "feature work" > feature.txt
+    run_fst snapshot -m "feature snapshot"
+    assert_exit_code 0
+
+    # Add more work to main
+    cd "$TEST_DIR/myproject/main"
     echo "v2" > file.txt
-    run_fst snapshot -m "snapshot two"
+    run_fst snapshot -m "main snapshot two"
     assert_exit_code 0
 
-    # Export to git
+    # Export all workspaces (project-level)
     run_fst git export --init
     assert_exit_code 0
     assert_contains "Exported"
 
-    # Verify git repo was created with commits
-    assert_file_exists "$TEST_DIR/myproject/main/.git/HEAD"
-    local git_log
-    git_log=$(cd "$TEST_DIR/myproject/main" && git log --oneline 2>&1)
-    if ! echo "$git_log" | grep -qF "snapshot one"; then
-        fail "git log missing 'snapshot one'"
+    # Verify git repo at project root (not workspace root)
+    assert_file_exists "$TEST_DIR/myproject/.git/HEAD"
+
+    # Verify main branch has correct commits (-- disambiguates branch from directory)
+    local main_log
+    main_log=$(cd "$TEST_DIR/myproject" && git log --oneline main -- 2>&1)
+    if ! echo "$main_log" | grep -qF "base snapshot"; then
+        fail "main branch missing 'base snapshot'"
     fi
-    if ! echo "$git_log" | grep -qF "snapshot two"; then
-        fail "git log missing 'snapshot two'"
+    if ! echo "$main_log" | grep -qF "main snapshot two"; then
+        fail "main branch missing 'main snapshot two'"
+    fi
+
+    # Verify feature branch has correct commits
+    local feature_log
+    feature_log=$(cd "$TEST_DIR/myproject" && git log --oneline feature -- 2>&1)
+    if ! echo "$feature_log" | grep -qF "feature snapshot"; then
+        fail "feature branch missing 'feature snapshot'"
+    fi
+    # Feature should also have the base snapshot (shared ancestor)
+    if ! echo "$feature_log" | grep -qF "base snapshot"; then
+        fail "feature branch missing shared 'base snapshot'"
+    fi
+
+    # Verify shared ancestor: "base snapshot" should have same SHA on both branches
+    local main_base feature_base
+    main_base=$(cd "$TEST_DIR/myproject" && git log --oneline main -- | grep "base snapshot" | head -1 | awk '{print $1}')
+    feature_base=$(cd "$TEST_DIR/myproject" && git log --oneline feature -- | grep "base snapshot" | head -1 | awk '{print $1}')
+    if [[ "$main_base" != "$feature_base" ]]; then
+        fail "shared ancestor 'base snapshot' has different SHAs on main ($main_base) vs feature ($feature_base)"
     fi
 
     # Incremental export (no new commits)
