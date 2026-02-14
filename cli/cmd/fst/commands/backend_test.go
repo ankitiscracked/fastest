@@ -351,10 +351,10 @@ func TestBackendAutoExport(t *testing.T) {
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
 	})
 
-	// Use the git backend's AfterSnapshot
+	// Use the git backend's Push
 	b := &GitBackend{}
-	if err := b.AfterSnapshot(projectRoot); err != nil {
-		t.Fatalf("AfterSnapshot: %v", err)
+	if err := b.Push(projectRoot); err != nil {
+		t.Fatalf("Push: %v", err)
 	}
 
 	// Verify new commit was created

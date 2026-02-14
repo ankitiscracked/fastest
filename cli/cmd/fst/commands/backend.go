@@ -101,18 +101,17 @@ func newBackendStatusCmd() *cobra.Command {
 	}
 }
 
-// newBackendPushCmd is a hidden command used by the auto-export subprocess.
 func newBackendPushCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:    "push",
-		Short:  "Push to backend (used internally)",
-		Hidden: true,
+		Use:   "push",
+		Short: "Push local snapshots to the backend",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBackendPush()
 		},
 	}
 	return cmd
 }
+
 
 // findProjectRootAndParent finds the project root and parent config from cwd.
 func findProjectRootAndParent() (string, *config.ParentConfig, error) {
@@ -156,15 +155,15 @@ type GitBackend struct{}
 
 func (b *GitBackend) Type() string { return "git" }
 
-func (b *GitBackend) AfterSnapshot(projectRoot string) error {
+func (b *GitBackend) Push(projectRoot string) error {
 	return RunExportGitAt(projectRoot, false, false)
 }
 
-func (b *GitBackend) Sync(projectRoot string) error {
+func (b *GitBackend) Pull(projectRoot string) error {
 	return backend.ErrNoRemote
 }
 
-func (b *GitBackend) Pull(projectRoot string) error {
+func (b *GitBackend) Sync(projectRoot string) error {
 	return backend.ErrNoRemote
 }
 
@@ -176,7 +175,7 @@ type GitHubBackend struct {
 
 func (b *GitHubBackend) Type() string { return "github" }
 
-func (b *GitHubBackend) AfterSnapshot(projectRoot string) error {
+func (b *GitHubBackend) Push(projectRoot string) error {
 	if err := RunExportGitAt(projectRoot, false, false); err != nil {
 		return err
 	}
@@ -453,7 +452,7 @@ func backendAutoExport(projectRoot string) {
 		return
 	}
 
-	cmd := exec.Command(fstBin, "backend", "push")
+	cmd := exec.Command(fstBin, "sync")
 	cmd.Dir = projectRoot
 	logPath := filepath.Join(projectRoot, ".fst", "backend-export.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
@@ -609,5 +608,6 @@ func runBackendPush() error {
 		return fmt.Errorf("no backend configured")
 	}
 
-	return b.AfterSnapshot(projectRoot)
+	return b.Push(projectRoot)
 }
+
