@@ -141,26 +141,7 @@ func runGitHubExport(repo string, initRepo bool, rebuild bool, remoteName string
 		}
 	}
 
-	// Push all workspace branches
-	meta, err := loadExportMetadataFromRepo(projectRoot)
-	if err != nil {
-		return fmt.Errorf("failed to load export metadata: %w", err)
-	}
-	if meta == nil {
-		return fmt.Errorf("missing export metadata in repo")
-	}
-	branches := collectExportBranches(meta)
-
-	for _, branch := range branches {
-		if err := runGitCommand(projectRoot, "push", remoteName, branch); err != nil {
-			return fmt.Errorf("failed to push branch '%s': %w", branch, err)
-		}
-	}
-	if err := runGitCommand(projectRoot, "push", remoteName, fstMetaRef); err != nil {
-		return fmt.Errorf("failed to push export metadata: %w", err)
-	}
-
-	return nil
+	return PushExportToRemote(projectRoot, remoteName)
 }
 
 func runGitHubImport(repo string, projectName string, rebuild bool, noGH bool) error {
@@ -294,6 +275,29 @@ func isGitHubHost(host string) bool {
 		return true
 	}
 	return strings.HasSuffix(host, ".github.com")
+}
+
+// PushExportToRemote pushes all exported workspace branches and metadata to the given remote.
+func PushExportToRemote(projectRoot string, remoteName string) error {
+	meta, err := loadExportMetadataFromRepo(projectRoot)
+	if err != nil {
+		return fmt.Errorf("failed to load export metadata: %w", err)
+	}
+	if meta == nil {
+		return fmt.Errorf("missing export metadata in repo")
+	}
+	branches := collectExportBranches(meta)
+
+	for _, branch := range branches {
+		if err := runGitCommand(projectRoot, "push", remoteName, branch); err != nil {
+			return fmt.Errorf("failed to push branch '%s': %w", branch, err)
+		}
+	}
+	if err := runGitCommand(projectRoot, "push", remoteName, fstMetaRef); err != nil {
+		return fmt.Errorf("failed to push export metadata: %w", err)
+	}
+
+	return nil
 }
 
 func loadExportMetadataFromRepo(repoRoot string) (*exportMeta, error) {

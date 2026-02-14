@@ -14,13 +14,29 @@ const ParentConfigFileName = "fst.json"
 
 var ErrParentNotFound = errors.New("parent config not found")
 
+// BackendConfig configures the storage backend for a project.
+type BackendConfig struct {
+	Type   string `json:"type"`             // "github", "git", "cloud"
+	Repo   string `json:"repo,omitempty"`   // "owner/repo" for github
+	Remote string `json:"remote,omitempty"` // git remote name, default "origin"
+}
+
 type ParentConfig struct {
-	ProjectID        string `json:"project_id"`
-	ProjectName      string `json:"project_name"`
-	CreatedAt        string `json:"created_at"`
-	BaseSnapshotID   string `json:"base_snapshot_id,omitempty"`
-	BaseWorkspaceID  string `json:"base_workspace_id,omitempty"`
-	MainWorkspaceID  string `json:"main_workspace_id,omitempty"`
+	ProjectID        string         `json:"project_id"`
+	ProjectName      string         `json:"project_name"`
+	CreatedAt        string         `json:"created_at"`
+	BaseSnapshotID   string         `json:"base_snapshot_id,omitempty"`
+	BaseWorkspaceID  string         `json:"base_workspace_id,omitempty"`
+	MainWorkspaceID  string         `json:"main_workspace_id,omitempty"`
+	Backend          *BackendConfig `json:"backend,omitempty"`
+}
+
+// BackendType returns the configured backend type, or empty string if none.
+func (p *ParentConfig) BackendType() string {
+	if p == nil || p.Backend == nil {
+		return ""
+	}
+	return p.Backend.Type
 }
 
 func LoadParentConfigAt(root string) (*ParentConfig, error) {

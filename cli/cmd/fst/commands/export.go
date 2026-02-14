@@ -97,21 +97,29 @@ func SaveGitMapping(configDir string, mapping *GitMapping) error {
 }
 
 func runExportGit(initRepo bool, rebuild bool) error {
-	// Find project root
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	// Try from cwd first, then from workspace root
-	projectRoot, parentCfg, err := config.FindParentRootFrom(cwd)
+	projectRoot, _, err := config.FindParentRootFrom(cwd)
 	if err != nil {
 		if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-			projectRoot, parentCfg, err = config.FindParentRootFrom(wsRoot)
+			projectRoot, _, err = config.FindParentRootFrom(wsRoot)
 		}
 		if err != nil {
 			return fmt.Errorf("not in a project (no fst.json found): %w", err)
 		}
+	}
+
+	return RunExportGitAt(projectRoot, initRepo, rebuild)
+}
+
+// RunExportGitAt exports all workspace snapshots to Git commits at the given project root.
+func RunExportGitAt(projectRoot string, initRepo bool, rebuild bool) error {
+	parentCfg, err := config.LoadParentConfigAt(projectRoot)
+	if err != nil {
+		return fmt.Errorf("failed to load project config: %w", err)
 	}
 
 	s := store.OpenAt(projectRoot)
@@ -150,6 +158,9 @@ func runExportGit(initRepo bool, rebuild bool) error {
 	indexPath := filepath.Join(tempDir, "index")
 	git := newGitEnv(projectRoot, tempDir, indexPath)
 	metaDir := filepath.Join(tempDir, "meta")
+	if err := os.MkdirAll(metaDir, 0755); err != nil {
+		return fmt.Errorf("failed to create metadata work directory: %w", err)
+	}
 	metaIndexPath := filepath.Join(tempDir, "meta-index")
 	metaGit := newGitEnv(projectRoot, metaDir, metaIndexPath)
 

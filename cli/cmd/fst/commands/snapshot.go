@@ -126,6 +126,13 @@ func runSnapshot(message string, agentMessage bool) error {
 	}
 	fmt.Println("  (local only - not synced to cloud)")
 
+	// Auto-export to backend if configured
+	if projectRoot, parentCfg, findErr := config.FindParentRootFrom(ws.Root()); findErr == nil {
+		if parentCfg.Backend != nil {
+			backendAutoExport(projectRoot)
+		}
+	}
+
 	return nil
 }
 

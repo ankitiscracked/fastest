@@ -11,6 +11,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/api"
+	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 )
@@ -80,6 +81,18 @@ Use --hard to replace local files with the remote snapshot.`,
 }
 
 func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMode, dryRun bool, dryRunSummary bool) error {
+	// Check for backend dispatch
+	if projectRoot, parentCfg, findErr := findProjectRootAndParent(); findErr == nil {
+		if b := BackendFromConfig(parentCfg.Backend); b != nil {
+			if err := b.Pull(projectRoot); err == backend.ErrNoRemote {
+				fmt.Println("Backend has no remote to pull from.")
+				return nil
+			} else {
+				return err
+			}
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
