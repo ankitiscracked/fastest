@@ -261,7 +261,13 @@ func importWorkspaceFromGit(git gitutil.Env, s *store.Store, target importTarget
 	}
 	defer os.RemoveAll(tempWorkDir)
 
-	importIndex := filepath.Join(tempWorkDir, "index")
+	tempIndexDir, err := os.MkdirTemp("", "fst-import-index-")
+	if err != nil {
+		return fmt.Errorf("failed to create temp index dir: %w", err)
+	}
+	defer os.RemoveAll(tempIndexDir)
+
+	importIndex := filepath.Join(tempIndexDir, "index")
 	importGit := gitutil.NewEnv(git.RepoRoot, tempWorkDir, importIndex)
 
 	commits, err := gitutil.RevList(importGit, target.Branch)

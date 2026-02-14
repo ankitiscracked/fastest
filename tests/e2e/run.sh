@@ -588,6 +588,231 @@ test_gc() {
     teardown_test
 }
 
+test_backend_set_git() {
+    setup_test
+
+    export GIT_AUTHOR_NAME="Test User"
+    export GIT_AUTHOR_EMAIL="test@example.com"
+    export GIT_COMMITTER_NAME="Test User"
+    export GIT_COMMITTER_EMAIL="test@example.com"
+
+    # Create project with a snapshot
+    run_fst project create myproject --no-snapshot
+    assert_exit_code 0
+    cd "$TEST_DIR/myproject/main"
+
+    echo "v1" > file.txt
+    run_fst snapshot -m "initial"
+    assert_exit_code 0
+
+    # Backend status before set → none
+    run_fst backend status
+    assert_exit_code 0
+    assert_contains "none"
+
+    # Set git backend
+    run_fst backend set git
+    assert_exit_code 0
+    assert_contains "Backend set to git"
+
+    # Backend status after set → git
+    run_fst backend status
+    assert_exit_code 0
+    assert_contains "git"
+
+    # Verify .git repo was created at project root
+    assert_file_exists "$TEST_DIR/myproject/.git/HEAD"
+
+    # Verify git branch has the commit
+    local git_log
+    git_log=$(cd "$TEST_DIR/myproject" && git log --oneline main -- 2>&1)
+    if ! echo "$git_log" | grep -qF "initial"; then
+        fail "main branch missing 'initial' commit after backend set"
+    fi
+
+    # Create a second snapshot — should trigger auto-export
+    echo "v2" > file.txt
+    run_fst snapshot -m "second snapshot"
+    assert_exit_code 0
+
+    # Give background sync a moment and then push manually to ensure export
+    run_fst backend push
+    assert_exit_code 0
+
+    # Verify git has the new commit
+    git_log=$(cd "$TEST_DIR/myproject" && git log --oneline main -- 2>&1)
+    if ! echo "$git_log" | grep -qF "second snapshot"; then
+        fail "main branch missing 'second snapshot' after push"
+    fi
+
+    # Turn backend off
+    run_fst backend off
+    assert_exit_code 0
+    assert_contains "Backend disabled"
+
+    # Backend status → none
+    run_fst backend status
+    assert_exit_code 0
+    assert_contains "none"
+
+    teardown_test
+}
+
+test_backend_sync_local() {
+    setup_test
+
+    export GIT_AUTHOR_NAME="Test User"
+    export GIT_AUTHOR_EMAIL="test@example.com"
+    export GIT_COMMITTER_NAME="Test User"
+    export GIT_COMMITTER_EMAIL="test@example.com"
+
+    # Create project, snapshot, set git backend
+    run_fst project create myproject --no-snapshot
+    assert_exit_code 0
+    cd "$TEST_DIR/myproject/main"
+
+    echo "v1" > file.txt
+    run_fst snapshot -m "base snapshot"
+    assert_exit_code 0
+    local SNAP1
+    SNAP1=$(extract_snapshot_id)
+
+    run_fst backend set git
+    assert_exit_code 0
+
+    # Add a commit directly to git (simulating external change)
+    # Use separate dirs for worktree and index to avoid corruption
+    local tmpwork tmpindex
+    tmpwork=$(mktemp -d)
+    tmpindex=$(mktemp -d)
+    local GIT_PLUMB="GIT_DIR=$TEST_DIR/myproject/.git GIT_WORK_TREE=$tmpwork GIT_INDEX_FILE=$tmpindex/index"
+
+    env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git checkout -f main -- . 2>/dev/null || true
+    echo "from external" > "$tmpwork/external.txt"
+    env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git add -A
+    local tree_sha parent_sha new_sha
+    tree_sha=$(env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git write-tree)
+    parent_sha=$(git -C "$TEST_DIR/myproject" rev-parse main)
+    new_sha=$(env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git commit-tree "$tree_sha" -p "$parent_sha" -m "external commit")
+    git -C "$TEST_DIR/myproject" update-ref refs/heads/main "$new_sha"
+    rm -rf "$tmpwork" "$tmpindex"
+
+    # Verify git has the new commit
+    local git_log
+    git_log=$(cd "$TEST_DIR/myproject" && git log --oneline main -- 2>&1)
+    if ! echo "$git_log" | grep -qF "external commit"; then
+        fail "main branch missing 'external commit'"
+    fi
+
+    # Run git import --rebuild to re-import all commits (including the external one)
+    cd "$TEST_DIR/myproject/main"
+    run_fst git import "$TEST_DIR/myproject" --rebuild
+    assert_exit_code 0
+
+    # Log should show the imported commit
+    run_fst log
+    assert_exit_code 0
+    assert_contains "external commit"
+
+    # The current snapshot should have changed from SNAP1 (rebuilt from scratch)
+    local current_snap
+    current_snap=$(read_config_field "$TEST_DIR/myproject/main/.fst/config.json" "current_snapshot_id")
+    if [[ "$current_snap" == "$SNAP1" ]]; then
+        fail "expected current snapshot to change after import"
+    fi
+
+    teardown_test
+}
+
+test_backend_export_import_roundtrip() {
+    setup_test
+
+    export GIT_AUTHOR_NAME="Test User"
+    export GIT_AUTHOR_EMAIL="test@example.com"
+    export GIT_COMMITTER_NAME="Test User"
+    export GIT_COMMITTER_EMAIL="test@example.com"
+
+    # Create project with multiple snapshots across two workspaces
+    run_fst project create myproject --no-snapshot
+    assert_exit_code 0
+    cd "$TEST_DIR/myproject/main"
+
+    echo "v1" > file.txt
+    run_fst snapshot -m "main first"
+    assert_exit_code 0
+
+    echo "v2" > file.txt
+    run_fst snapshot -m "main second"
+    assert_exit_code 0
+
+    run_fst workspace create feature
+    assert_exit_code 0
+
+    cd "$TEST_DIR/myproject/feature"
+    echo "feat" > feat.txt
+    run_fst snapshot -m "feature work"
+    assert_exit_code 0
+
+    # Export to git
+    run_fst git export --init
+    assert_exit_code 0
+    assert_contains "Exported"
+
+    # Verify both branches exist
+    local branches
+    branches=$(cd "$TEST_DIR/myproject" && git branch --list 2>&1)
+    if ! echo "$branches" | grep -q "main"; then
+        fail "missing main branch"
+    fi
+    if ! echo "$branches" | grep -q "feature"; then
+        fail "missing feature branch"
+    fi
+
+    # Add external commit to main using separate worktree and index dirs
+    local tmpwork tmpindex
+    tmpwork=$(mktemp -d)
+    tmpindex=$(mktemp -d)
+
+    env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git checkout -f main -- . 2>/dev/null || true
+    echo "roundtrip" > "$tmpwork/roundtrip.txt"
+    env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git add -A
+    local tree_sha parent_sha new_sha
+    tree_sha=$(env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git write-tree)
+    parent_sha=$(git -C "$TEST_DIR/myproject" rev-parse main)
+    new_sha=$(env GIT_DIR="$TEST_DIR/myproject/.git" GIT_WORK_TREE="$tmpwork" GIT_INDEX_FILE="$tmpindex/index" \
+        git commit-tree "$tree_sha" -p "$parent_sha" -m "roundtrip commit")
+    git -C "$TEST_DIR/myproject" update-ref refs/heads/main "$new_sha"
+    rm -rf "$tmpwork" "$tmpindex"
+
+    # Import with --rebuild to re-import all commits (including the external one)
+    cd "$TEST_DIR/myproject/main"
+    run_fst git import "$TEST_DIR/myproject" --rebuild
+    assert_exit_code 0
+    assert_contains "Imported"
+
+    # Log should show the imported commit
+    run_fst log
+    assert_exit_code 0
+    assert_contains "roundtrip commit"
+
+    # Verify parent chain: roundtrip commit should have main second as ancestor
+    assert_contains "main second"
+    assert_contains "main first"
+
+    # Re-export should include the imported snapshot (no new exports since it came from git)
+    run_fst git export
+    assert_exit_code 0
+
+    teardown_test
+}
+
 test_exit_codes() {
     setup_test
 
@@ -689,6 +914,9 @@ main() {
     run_test test_info_commands
     run_test test_git_export
     run_test test_gc
+    run_test test_backend_set_git
+    run_test test_backend_sync_local
+    run_test test_backend_export_import_roundtrip
     run_test test_exit_codes
 
     echo ""

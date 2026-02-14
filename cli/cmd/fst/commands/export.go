@@ -108,13 +108,22 @@ func RunExportGitAt(projectRoot string, initRepo bool, rebuild bool) error {
 	}
 	defer os.RemoveAll(tempDir)
 
-	indexPath := filepath.Join(tempDir, "index")
+	indexDir, err := os.MkdirTemp("", "fst-export-index-")
+	if err != nil {
+		return fmt.Errorf("failed to create temp index directory: %w", err)
+	}
+	defer os.RemoveAll(indexDir)
+
+	indexPath := filepath.Join(indexDir, "index")
 	git := gitutil.NewEnv(projectRoot, tempDir, indexPath)
-	metaDir := filepath.Join(tempDir, "meta")
-	if err := os.MkdirAll(metaDir, 0755); err != nil {
+
+	metaDir, err := os.MkdirTemp("", "fst-export-meta-")
+	if err != nil {
 		return fmt.Errorf("failed to create metadata work directory: %w", err)
 	}
-	metaIndexPath := filepath.Join(tempDir, "meta-index")
+	defer os.RemoveAll(metaDir)
+
+	metaIndexPath := filepath.Join(indexDir, "meta-index")
 	metaGit := gitutil.NewEnv(projectRoot, metaDir, metaIndexPath)
 
 	// Load or create mapping
@@ -290,6 +299,15 @@ func exportWorkspaceSnapshots(p exportWorkspaceParams) (int, error) {
 		lastCommitSHA = sha
 		newCommits++
 		fmt.Printf("  %s: exported -> %s\n", snap.ID[:12], sha[:8])
+	}
+
+	// Always ensure the branch ref points to the tip commit.
+	// This handles the case where all snapshots were already exported
+	// (e.g., shared with another workspace that was exported first).
+	if lastCommitSHA != "" {
+		if err := gitutil.UpdateBranchRef(p.git, p.branchName, lastCommitSHA); err != nil {
+			return 0, fmt.Errorf("failed to update branch ref: %w", err)
+		}
 	}
 
 	return newCommits, nil

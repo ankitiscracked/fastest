@@ -245,7 +245,13 @@ func IncrementalImportFromGit(projectRoot string) (*ImportResult, error) {
 	}
 	defer os.RemoveAll(workTempDir)
 
-	importIndex := filepath.Join(workTempDir, "index")
+	importIndexDir, err := os.MkdirTemp("", "fst-incr-index-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(importIndexDir)
+
+	importIndex := filepath.Join(importIndexDir, "index")
 	importGit := gitutil.NewEnv(projectRoot, workTempDir, importIndex)
 
 	for _, ws := range meta.Workspaces {
