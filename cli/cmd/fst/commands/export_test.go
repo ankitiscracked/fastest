@@ -276,6 +276,127 @@ func TestExportGitMultiWorkspace(t *testing.T) {
 	}
 }
 
+// TestExportGitSharedAncestorBranch verifies that when one workspace's
+// snapshots are a strict subset of another's (all "already exported"),
+// the branch ref is still created. This was a bug where workspaces whose
+// entire snapshot chain was shared with a previously-exported workspace
+// would have no branch created.
+func TestExportGitSharedAncestorBranch(t *testing.T) {
+	projectRoot := t.TempDir()
+
+	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+		ProjectID:   "proj-shared",
+		ProjectName: "shared",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("SaveParentConfigAt: %v", err)
+	}
+	s := store.OpenAt(projectRoot)
+	if err := s.EnsureDirs(); err != nil {
+		t.Fatalf("EnsureDirs: %v", err)
+	}
+
+	// Create ws-a with base + divergent snapshot
+	wsARoot := filepath.Join(projectRoot, "ws-a")
+	if err := os.MkdirAll(wsARoot, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := config.InitAt(wsARoot, "proj-shared", "ws-a-id", "ws-a", ""); err != nil {
+		t.Fatalf("InitAt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wsARoot, "base.txt"), []byte("base"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	restoreCwd := chdir(t, wsARoot)
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "base snapshot"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("base snapshot: %v", err)
+	}
+	restoreCwd()
+
+	// Get the base snapshot ID
+	aCfg, err := config.LoadAt(wsARoot)
+	if err != nil {
+		t.Fatalf("LoadAt ws-a: %v", err)
+	}
+	baseSnapshotID := aCfg.CurrentSnapshotID
+
+	// Add divergent file and create second snapshot on ws-a
+	if err := os.WriteFile(filepath.Join(wsARoot, "a-only.txt"), []byte("diverge"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	restoreCwd = chdir(t, wsARoot)
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"snapshot", "-m", "ws-a diverge"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ws-a diverge: %v", err)
+	}
+	restoreCwd()
+
+	// Create ws-b that only has the shared base snapshot (no divergent work)
+	wsBRoot := filepath.Join(projectRoot, "ws-b")
+	if err := os.MkdirAll(wsBRoot, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := config.InitAt(wsBRoot, "proj-shared", "ws-b-id", "ws-b", ""); err != nil {
+		t.Fatalf("InitAt: %v", err)
+	}
+	bCfg, err := config.LoadAt(wsBRoot)
+	if err != nil {
+		t.Fatalf("LoadAt ws-b: %v", err)
+	}
+	bCfg.CurrentSnapshotID = baseSnapshotID
+	bCfg.BaseSnapshotID = baseSnapshotID
+	if err := config.SaveAt(wsBRoot, bCfg); err != nil {
+		t.Fatalf("SaveAt ws-b: %v", err)
+	}
+	if err := s.RegisterWorkspace(store.WorkspaceInfo{
+		WorkspaceID:       "ws-b-id",
+		WorkspaceName:     "ws-b",
+		Path:              wsBRoot,
+		CurrentSnapshotID: baseSnapshotID,
+		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("RegisterWorkspace ws-b: %v", err)
+	}
+
+	// Export
+	restoreCwd = chdir(t, projectRoot)
+	defer restoreCwd()
+
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"git", "export", "--init"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	// ws-a should have 2 commits (base + diverge)
+	aCommits := nonEmptyLines(gitOutput(t, projectRoot, "log", "--oneline", "ws-a", "--"))
+	if len(aCommits) != 2 {
+		t.Fatalf("expected 2 commits on ws-a, got %d: %v", len(aCommits), aCommits)
+	}
+
+	// ws-b should exist as a branch with 1 commit (the shared base)
+	// This is the key assertion: ws-b's only snapshot was "already exported"
+	// by ws-a, but the branch should still be created.
+	bCommits := nonEmptyLines(gitOutput(t, projectRoot, "log", "--oneline", "ws-b", "--"))
+	if len(bCommits) != 1 {
+		t.Fatalf("expected 1 commit on ws-b, got %d: %v", len(bCommits), bCommits)
+	}
+
+	// The ws-b branch tip should be the same as ws-a's base commit
+	aTip := nonEmptyLines(gitOutput(t, projectRoot, "log", "--format=%H", "ws-a", "--"))
+	bTip := nonEmptyLines(gitOutput(t, projectRoot, "log", "--format=%H", "ws-b", "--"))
+	// ws-a's oldest commit (last in list) is the base
+	wsABase := aTip[len(aTip)-1]
+	// ws-b should point to that same commit
+	if bTip[0] != wsABase {
+		t.Fatalf("ws-b tip (%s) should equal ws-a base (%s)", bTip[0], wsABase)
+	}
+}
+
 func TestExportGitIncremental(t *testing.T) {
 	projectRoot, wsARoot, _ := setupExportProject(t,
 		map[string]string{"a.txt": "one"},
