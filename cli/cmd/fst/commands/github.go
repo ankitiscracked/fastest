@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
 )
 
@@ -278,6 +279,7 @@ func isGitHubHost(host string) bool {
 }
 
 // PushExportToRemote pushes all exported workspace branches and metadata to the given remote.
+// Returns backend.ErrPushRejected if a push is rejected due to non-fast-forward.
 func PushExportToRemote(projectRoot string, remoteName string) error {
 	meta, err := loadExportMetadataFromRepo(projectRoot)
 	if err != nil {
@@ -289,15 +291,43 @@ func PushExportToRemote(projectRoot string, remoteName string) error {
 	branches := collectExportBranches(meta)
 
 	for _, branch := range branches {
-		if err := runGitCommand(projectRoot, "push", remoteName, branch); err != nil {
-			return fmt.Errorf("failed to push branch '%s': %w", branch, err)
+		if err := runGitPush(projectRoot, remoteName, branch); err != nil {
+			return err
 		}
 	}
-	if err := runGitCommand(projectRoot, "push", remoteName, fstMetaRef); err != nil {
-		return fmt.Errorf("failed to push export metadata: %w", err)
+	if err := runGitPush(projectRoot, remoteName, fstMetaRef); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+// runGitPush pushes a single refspec and returns backend.ErrPushRejected for
+// non-fast-forward rejections, distinguishing them from auth/network errors.
+func runGitPush(repoDir, remoteName, refspec string) error {
+	cmd := exec.Command("git", "-C", repoDir, "push", remoteName, refspec)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	msg := string(output)
+	if isPushRejected(msg) {
+		return fmt.Errorf("push rejected for '%s': %w", refspec, backend.ErrPushRejected)
+	}
+	trimmed := strings.TrimSpace(msg)
+	if trimmed == "" {
+		trimmed = err.Error()
+	}
+	return fmt.Errorf("failed to push '%s': %s", refspec, trimmed)
+}
+
+// isPushRejected checks if git push output indicates a non-fast-forward rejection.
+func isPushRejected(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "[rejected]") ||
+		strings.Contains(lower, "non-fast-forward") ||
+		strings.Contains(lower, "fetch first") ||
+		strings.Contains(lower, "were rejected")
 }
 
 func loadExportMetadataFromRepo(repoRoot string) (*exportMeta, error) {

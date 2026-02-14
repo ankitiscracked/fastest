@@ -84,12 +84,10 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 			}
 			defer lock.Release()
 
-			if err := b.Sync(projectRoot); err == backend.ErrNoRemote {
-				fmt.Println("Backend has no remote to sync with.")
-				return nil
-			} else {
-				return err
+			opts := &backend.SyncOptions{
+				OnDivergence: buildOnDivergence(mode),
 			}
+			return b.Sync(projectRoot, opts)
 		}
 	}
 

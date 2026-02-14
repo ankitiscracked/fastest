@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,8 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/manifest"
 	"github.com/anthropics/fastest/cli/internal/store"
 	"github.com/anthropics/fastest/cli/internal/workspace"
 )
@@ -113,7 +116,6 @@ func newBackendPushCmd() *cobra.Command {
 	return cmd
 }
 
-
 // findProjectRootAndParent finds the project root and parent config from cwd.
 func findProjectRootAndParent() (string, *config.ParentConfig, error) {
 	cwd, err := os.Getwd()
@@ -164,8 +166,8 @@ func (b *GitBackend) Pull(projectRoot string) error {
 	return backend.ErrNoRemote
 }
 
-func (b *GitBackend) Sync(projectRoot string) error {
-	return backend.ErrNoRemote
+func (b *GitBackend) Sync(projectRoot string, opts *backend.SyncOptions) error {
+	return b.Push(projectRoot)
 }
 
 // GitHubBackend exports snapshots to git and syncs with a GitHub remote.
@@ -183,7 +185,7 @@ func (b *GitHubBackend) Push(projectRoot string) error {
 	return PushExportToRemote(projectRoot, b.Remote)
 }
 
-func (b *GitHubBackend) Sync(projectRoot string) error {
+func (b *GitHubBackend) Sync(projectRoot string, opts *backend.SyncOptions) error {
 	// Export any new local snapshots
 	if err := RunExportGitAt(projectRoot, false, false); err != nil {
 		return err
@@ -195,7 +197,13 @@ func (b *GitHubBackend) Sync(projectRoot string) error {
 		return nil
 	}
 
-	// Push was rejected — fetch, import, re-export, push
+	// Only fall back to fetch+import if push was rejected (non-fast-forward).
+	// Auth errors, network errors, etc. should be surfaced directly.
+	if !errors.Is(pushErr, backend.ErrPushRejected) {
+		return pushErr
+	}
+
+	// Push was rejected — fetch, import, merge diverged, re-export, push
 	fmt.Println("Push rejected, fetching remote changes...")
 	if err := fetchFromRemote(projectRoot, b.Remote); err != nil {
 		return fmt.Errorf("failed to fetch from remote: %w", err)
@@ -205,11 +213,41 @@ func (b *GitHubBackend) Sync(projectRoot string) error {
 		return fmt.Errorf("failed to fast-forward branches: %w", err)
 	}
 
-	if err := IncrementalImportFromGit(projectRoot); err != nil {
+	result, err := IncrementalImportFromGit(projectRoot)
+	if err != nil {
 		return fmt.Errorf("failed to import remote changes: %w", err)
 	}
 
-	// Re-export with the new imported snapshots as parents
+	// Handle diverged workspaces
+	for _, div := range result.Diverged {
+		if opts == nil || opts.OnDivergence == nil {
+			return fmt.Errorf("workspace '%s' has diverged from remote; run 'fst sync' interactively to resolve", div.WorkspaceName)
+		}
+		mergedID, mergeErr := opts.OnDivergence(div)
+		if mergeErr != nil {
+			return fmt.Errorf("failed to merge diverged workspace '%s': %w", div.WorkspaceName, mergeErr)
+		}
+		// Update workspace config with merged snapshot
+		wsCfg, loadErr := config.LoadAt(div.WorkspaceRoot)
+		if loadErr != nil {
+			return fmt.Errorf("failed to load workspace config for '%s': %w", div.WorkspaceName, loadErr)
+		}
+		wsCfg.CurrentSnapshotID = mergedID
+		if saveErr := config.SaveAt(div.WorkspaceRoot, wsCfg); saveErr != nil {
+			return fmt.Errorf("failed to save workspace config for '%s': %w", div.WorkspaceName, saveErr)
+		}
+		s := store.OpenAt(projectRoot)
+		_ = s.RegisterWorkspace(store.WorkspaceInfo{
+			WorkspaceID:       wsCfg.WorkspaceID,
+			WorkspaceName:     wsCfg.WorkspaceName,
+			Path:              div.WorkspaceRoot,
+			CurrentSnapshotID: mergedID,
+			BaseSnapshotID:    wsCfg.BaseSnapshotID,
+			CreatedAt:         time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	// Re-export with the new imported/merged snapshots as parents
 	if err := RunExportGitAt(projectRoot, false, false); err != nil {
 		return err
 	}
@@ -226,7 +264,8 @@ func (b *GitHubBackend) Pull(projectRoot string) error {
 		return fmt.Errorf("failed to fast-forward branches: %w", err)
 	}
 
-	return IncrementalImportFromGit(projectRoot)
+	_, err := IncrementalImportFromGit(projectRoot)
+	return err
 }
 
 // fetchFromRemote fetches all branches and fst metadata from the remote.
@@ -237,7 +276,9 @@ func fetchFromRemote(projectRoot, remoteName string) error {
 	return runGitCommand(projectRoot, "fetch", remoteName, "refs/fst/*:refs/fst/*")
 }
 
-// fastForwardBranches updates local branch refs to match remote tracking branches.
+// fastForwardBranches updates local branch refs to match remote tracking branches
+// only when the remote is strictly ahead (fast-forward). If branches have diverged,
+// the branch is left unchanged — the subsequent import + merge will handle it.
 func fastForwardBranches(projectRoot, remoteName string) error {
 	tempDir, err := os.MkdirTemp("", "fst-ff-")
 	if err != nil {
@@ -269,18 +310,56 @@ func fastForwardBranches(projectRoot, remoteName string) error {
 		if remoteSHA == "" {
 			continue
 		}
-		// Update local branch ref to remote
-		_ = updateGitBranchRef(git, ws.Branch, remoteSHA)
+
+		localSHA, err := gitRefSHA(git, "refs/heads/"+ws.Branch)
+		if err != nil {
+			// Local branch doesn't exist yet — create it at remote
+			_ = updateGitBranchRef(git, ws.Branch, remoteSHA)
+			continue
+		}
+
+		if localSHA == remoteSHA {
+			continue // already in sync
+		}
+
+		// Check if local is ancestor of remote (remote is ahead → fast-forward)
+		if isAncestor(git, localSHA, remoteSHA) {
+			_ = updateGitBranchRef(git, ws.Branch, remoteSHA)
+			continue
+		}
+
+		// Check if remote is ancestor of local (local is ahead → nothing to do)
+		if isAncestor(git, remoteSHA, localSHA) {
+			continue
+		}
+
+		// Branches have diverged — skip; import + merge will handle this
+		fmt.Printf("  Branch %s has diverged from remote, will reconcile during sync\n", ws.Branch)
 	}
 	return nil
 }
 
+// isAncestor returns true if ancestorSHA is an ancestor of descendantSHA.
+func isAncestor(git gitEnv, ancestorSHA, descendantSHA string) bool {
+	cmd := git.command("merge-base", "--is-ancestor", ancestorSHA, descendantSHA)
+	return cmd.Run() == nil
+}
+
+// ImportResult contains the outcome of an incremental import.
+type ImportResult struct {
+	NewSnapshots int
+	Diverged     []backend.DivergenceInfo
+}
+
 // IncrementalImportFromGit imports new git commits that aren't yet mapped to snapshots.
-func IncrementalImportFromGit(projectRoot string) error {
+// Returns divergence info for workspaces where the local head has drifted.
+func IncrementalImportFromGit(projectRoot string) (*ImportResult, error) {
+	result := &ImportResult{}
+
 	configDir := filepath.Join(projectRoot, ".fst")
 	mapping, err := LoadGitMapping(configDir)
 	if err != nil {
-		return fmt.Errorf("failed to load git mapping: %w", err)
+		return nil, fmt.Errorf("failed to load git mapping: %w", err)
 	}
 
 	// Build reverse map: commit SHA → snapshot ID
@@ -289,9 +368,15 @@ func IncrementalImportFromGit(projectRoot string) error {
 		commitToSnapshot[commitSHA] = snapID
 	}
 
+	// Keep a snapshot of the original map to detect which commits were already known
+	originalCommitToSnapshot := make(map[string]string, len(commitToSnapshot))
+	for k, v := range commitToSnapshot {
+		originalCommitToSnapshot[k] = v
+	}
+
 	tempDir, err := os.MkdirTemp("", "fst-incr-import-")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -300,29 +385,27 @@ func IncrementalImportFromGit(projectRoot string) error {
 
 	meta, err := loadExportMetadata(git)
 	if err != nil {
-		return fmt.Errorf("failed to load export metadata: %w", err)
+		return nil, fmt.Errorf("failed to load export metadata: %w", err)
 	}
 	if meta == nil {
-		return fmt.Errorf("no export metadata found")
+		return nil, fmt.Errorf("no export metadata found")
 	}
 
 	parentCfg, err := config.LoadParentConfigAt(projectRoot)
 	if err != nil {
-		return fmt.Errorf("failed to load project config: %w", err)
+		return nil, fmt.Errorf("failed to load project config: %w", err)
 	}
 
 	s := store.OpenAt(projectRoot)
 
 	workTempDir, err := os.MkdirTemp("", "fst-incr-worktree-")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer os.RemoveAll(workTempDir)
 
 	importIndex := filepath.Join(workTempDir, "index")
 	importGit := newGitEnv(projectRoot, workTempDir, importIndex)
-
-	totalNew := 0
 
 	for _, ws := range meta.Workspaces {
 		if ws.Branch == "" {
@@ -331,7 +414,7 @@ func IncrementalImportFromGit(projectRoot string) error {
 
 		commits, err := gitRevList(importGit, ws.Branch)
 		if err != nil {
-			return fmt.Errorf("failed to list commits for branch %s: %w", ws.Branch, err)
+			return nil, fmt.Errorf("failed to list commits for branch %s: %w", ws.Branch, err)
 		}
 
 		// Filter to only new commits
@@ -357,16 +440,16 @@ func IncrementalImportFromGit(projectRoot string) error {
 		wsRoot := filepath.Join(projectRoot, wsName)
 		wsCfg, err := ensureWorkspaceForImport(wsRoot, parentCfg.ProjectID, ws.WorkspaceID, wsName, s)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		for _, commit := range newCommits {
 			info, err := readGitCommitInfo(importGit, commit)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if err := gitCheckoutTree(importGit, commit); err != nil {
-				return err
+				return nil, err
 			}
 
 			// Resolve parent snapshots from commit parents
@@ -384,46 +467,81 @@ func IncrementalImportFromGit(projectRoot string) error {
 
 			snapshotID, err := createImportedSnapshot(s, workTempDir, wsCfg, parentSnapshots, info.Subject, info.AuthorDate, info.AuthorName, info.AuthorEmail, agentName)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			// Update both maps
 			commitToSnapshot[commit] = snapshotID
 			mapping.Snapshots[snapshotID] = commit
-			totalNew++
+			result.NewSnapshots++
 		}
 
-		// Update workspace head to branch tip
+		// Update workspace head to branch tip, but only if the current head
+		// is still what we expect (no local drift since last sync).
 		tipCommit := commits[len(commits)-1]
-		if tipSnapID, ok := commitToSnapshot[tipCommit]; ok {
-			wsCfg.CurrentSnapshotID = tipSnapID
-			if err := config.SaveAt(wsRoot, wsCfg); err != nil {
-				return fmt.Errorf("failed to save workspace config: %w", err)
+		tipSnapID, ok := commitToSnapshot[tipCommit]
+		if !ok {
+			continue
+		}
+
+		// Reload config to get the freshest head
+		freshCfg, loadErr := config.LoadAt(wsRoot)
+		if loadErr != nil {
+			freshCfg = wsCfg
+		}
+		currentHead := freshCfg.CurrentSnapshotID
+
+		// Find the previous tip (the last commit we already knew about)
+		previousTipSnap := ""
+		for i := len(commits) - 1; i >= 0; i-- {
+			snap, known := commitToSnapshot[commits[i]]
+			if known && snap != "" {
+				if _, wasKnown := originalCommitToSnapshot[commits[i]]; wasKnown {
+					previousTipSnap = snap
+					break
+				}
 			}
-			// Update registry
+		}
+
+		// Only update if head hasn't drifted (matches previous tip or is empty)
+		if currentHead == "" || currentHead == previousTipSnap || currentHead == tipSnapID {
+			freshCfg.CurrentSnapshotID = tipSnapID
+			if err := config.SaveAt(wsRoot, freshCfg); err != nil {
+				return nil, fmt.Errorf("failed to save workspace config: %w", err)
+			}
 			_ = s.RegisterWorkspace(store.WorkspaceInfo{
-				WorkspaceID:       wsCfg.WorkspaceID,
-				WorkspaceName:     wsCfg.WorkspaceName,
+				WorkspaceID:       freshCfg.WorkspaceID,
+				WorkspaceName:     freshCfg.WorkspaceName,
 				Path:              wsRoot,
 				CurrentSnapshotID: tipSnapID,
-				BaseSnapshotID:    wsCfg.BaseSnapshotID,
+				BaseSnapshotID:    freshCfg.BaseSnapshotID,
 				CreatedAt:         time.Now().UTC().Format(time.RFC3339),
+			})
+		} else {
+			// Local head has diverged — report for merge
+			result.Diverged = append(result.Diverged, backend.DivergenceInfo{
+				ProjectRoot:   projectRoot,
+				WorkspaceName: wsName,
+				WorkspaceRoot: wsRoot,
+				LocalHead:     currentHead,
+				RemoteHead:    tipSnapID,
+				MergeBase:     previousTipSnap,
 			})
 		}
 	}
 
 	// Save updated mapping
 	if err := SaveGitMapping(configDir, mapping); err != nil {
-		return fmt.Errorf("failed to save git mapping: %w", err)
+		return nil, fmt.Errorf("failed to save git mapping: %w", err)
 	}
 
-	if totalNew > 0 {
-		fmt.Printf("Imported %d new snapshots\n", totalNew)
+	if result.NewSnapshots > 0 {
+		fmt.Printf("Imported %d new snapshots\n", result.NewSnapshots)
 	} else {
 		fmt.Println("Already up to date")
 	}
 
-	return nil
+	return result, nil
 }
 
 // ensureWorkspaceForImport finds or creates a workspace directory and config.
@@ -448,7 +566,13 @@ func ensureWorkspaceForImport(wsRoot, projectID, workspaceID, wsName string, s *
 
 // backendAutoExport spawns a background subprocess to sync with the backend.
 // Skips silently if another backend operation is already running.
+// Prints a warning if the previous background sync failed.
 func backendAutoExport(projectRoot string) {
+	logPath := filepath.Join(projectRoot, ".fst", "backend-export.log")
+
+	// Check if the previous background sync failed
+	checkPreviousSyncLog(logPath)
+
 	// Try to acquire lock non-blocking to check if another operation is running.
 	// We release it immediately — the subprocess will acquire its own lock.
 	lock, err := workspace.TryAcquireBackendLock(projectRoot)
@@ -468,7 +592,6 @@ func backendAutoExport(projectRoot string) {
 
 	cmd := exec.Command(fstBin, "sync")
 	cmd.Dir = projectRoot
-	logPath := filepath.Join(projectRoot, ".fst", "backend-export.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err == nil {
 		cmd.Stdout = logFile
@@ -477,6 +600,131 @@ func backendAutoExport(projectRoot string) {
 	_ = cmd.Start()
 	if logFile != nil {
 		logFile.Close()
+	}
+}
+
+// checkPreviousSyncLog reads the previous background sync log and prints a
+// warning if it contains error indicators.
+func checkPreviousSyncLog(logPath string) {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return // no previous log
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return
+	}
+	lower := strings.ToLower(content)
+	if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "failed") {
+		fmt.Println("Warning: last background sync had errors (see .fst/backend-export.log)")
+	}
+}
+
+// buildOnDivergence creates an OnDivergence callback that uses the existing
+// merge infrastructure to reconcile diverged workspace heads.
+func buildOnDivergence(mode ConflictMode) func(backend.DivergenceInfo) (string, error) {
+	return func(div backend.DivergenceInfo) (string, error) {
+		s := store.OpenAt(div.ProjectRoot)
+
+		// Load manifests
+		var baseManifest *manifest.Manifest
+		if div.MergeBase != "" {
+			var err error
+			baseManifest, err = loadManifestByID(div.ProjectRoot, div.MergeBase)
+			if err != nil {
+				baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
+			}
+		} else {
+			baseManifest = &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
+		}
+
+		currentManifest, err := manifest.GenerateWithCache(div.WorkspaceRoot, config.GetStatCachePath(div.WorkspaceRoot))
+		if err != nil {
+			return "", fmt.Errorf("failed to scan local files: %w", err)
+		}
+
+		remoteManifest, err := loadManifestByID(div.ProjectRoot, div.RemoteHead)
+		if err != nil {
+			return "", fmt.Errorf("failed to load remote manifest: %w", err)
+		}
+
+		// Materialize remote snapshot to temp dir
+		tempDir, err := os.MkdirTemp("", "fst-backend-merge-*")
+		if err != nil {
+			return "", fmt.Errorf("failed to create temp dir: %w", err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		if err := restoreFilesFromManifest(tempDir, s, remoteManifest); err != nil {
+			return "", fmt.Errorf("failed to materialize remote snapshot: %w", err)
+		}
+
+		sourceManifest, err := manifest.Generate(tempDir, false)
+		if err != nil {
+			return "", fmt.Errorf("failed to scan remote files: %w", err)
+		}
+
+		mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest)
+		fmt.Printf("Merging diverged workspace '%s':\n", div.WorkspaceName)
+		fmt.Printf("  Apply from remote:  %d files\n", len(mergeActions.toApply))
+		fmt.Printf("  Conflicts:          %d files\n", len(mergeActions.conflicts))
+		fmt.Printf("  Already in sync:    %d files\n", len(mergeActions.inSync))
+
+		// Apply non-conflicting changes
+		for _, action := range mergeActions.toApply {
+			if err := applyChange(div.WorkspaceRoot, tempDir, action); err != nil {
+				return "", err
+			}
+		}
+
+		// Handle conflicts
+		if len(mergeActions.conflicts) > 0 {
+			switch mode {
+			case ConflictModeAgent:
+				preferredAgent, err := agent.GetPreferredAgent()
+				if err != nil {
+					return "", err
+				}
+				for _, conflict := range mergeActions.conflicts {
+					if err := resolveConflictWithAgent(div.WorkspaceRoot, tempDir, conflict, preferredAgent, baseManifest); err != nil {
+						return "", err
+					}
+				}
+			case ConflictModeManual:
+				for _, conflict := range mergeActions.conflicts {
+					if err := createConflictMarkers(div.WorkspaceRoot, tempDir, conflict); err != nil {
+						return "", err
+					}
+				}
+				fmt.Println("Conflicts written with markers. Resolve them, then run 'fst snapshot'.")
+			case ConflictModeTheirs:
+				for _, conflict := range mergeActions.conflicts {
+					if err := applyChange(div.WorkspaceRoot, tempDir, conflict); err != nil {
+						return "", err
+					}
+				}
+			case ConflictModeOurs:
+				// Keep local version; nothing to do
+			}
+		}
+
+		// Create merge snapshot with both parents
+		mergeParents := normalizeMergeParents(div.LocalHead, div.RemoteHead)
+		if err := config.WritePendingMergeParentsAt(div.ProjectRoot, mergeParents); err != nil {
+			fmt.Printf("Warning: Could not record merge parents: %v\n", err)
+		}
+
+		if err := runSnapshot("Backend sync merge", false); err != nil {
+			return "", fmt.Errorf("failed to create merge snapshot: %w", err)
+		}
+
+		// Read back the snapshot ID that was just created
+		wsCfg, err := config.LoadAt(div.WorkspaceRoot)
+		if err != nil {
+			return "", fmt.Errorf("failed to read merged snapshot ID: %w", err)
+		}
+
+		return wsCfg.CurrentSnapshotID, nil
 	}
 }
 
@@ -642,4 +890,3 @@ func runBackendPush() error {
 
 	return b.Push(projectRoot)
 }
-
