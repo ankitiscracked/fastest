@@ -14,6 +14,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
 func init() {
@@ -84,6 +85,12 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 	// Check for backend dispatch
 	if projectRoot, parentCfg, findErr := findProjectRootAndParent(); findErr == nil {
 		if b := BackendFromConfig(parentCfg.Backend); b != nil {
+			lock, lockErr := workspace.AcquireBackendLock(projectRoot)
+			if lockErr != nil {
+				return lockErr
+			}
+			defer lock.Release()
+
 			if err := b.Pull(projectRoot); err == backend.ErrNoRemote {
 				fmt.Println("Backend has no remote to pull from.")
 				return nil

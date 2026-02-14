@@ -11,6 +11,7 @@ const (
 	lockDirName       = ".fst"
 	workspaceLockFile = "lock"
 	gcLockFile        = "gc.lock"
+	backendLockFile   = "backend.lock"
 )
 
 // LockFile represents a held file lock (flock-based).
@@ -80,6 +81,30 @@ func AcquireGCLock(projectRoot string) (*LockFile, error) {
 	lock, err := acquireFlock(path, syscall.LOCK_EX)
 	if err != nil {
 		return nil, fmt.Errorf("could not acquire GC lock at %s (workspace operations may be running): %w", projectRoot, err)
+	}
+	return lock, nil
+}
+
+// AcquireBackendLock acquires an exclusive lock for backend operations.
+// This prevents concurrent backend operations (export, push, sync, pull)
+// from corrupting the git repo or git-map.json.
+func AcquireBackendLock(projectRoot string) (*LockFile, error) {
+	path := filepath.Join(projectRoot, lockDirName, backendLockFile)
+	lock, err := acquireFlock(path, syscall.LOCK_EX)
+	if err != nil {
+		return nil, fmt.Errorf("could not acquire backend lock (another backend operation may be running): %w", err)
+	}
+	return lock, nil
+}
+
+// TryAcquireBackendLock attempts to acquire the backend lock without blocking.
+// Returns nil, nil if the lock is already held by another process.
+func TryAcquireBackendLock(projectRoot string) (*LockFile, error) {
+	path := filepath.Join(projectRoot, lockDirName, backendLockFile)
+	lock, err := acquireFlock(path, syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
+		// EWOULDBLOCK means another process holds the lock
+		return nil, nil
 	}
 	return lock, nil
 }

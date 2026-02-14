@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
 func init() {
@@ -445,8 +446,21 @@ func ensureWorkspaceForImport(wsRoot, projectID, workspaceID, wsName string, s *
 	return config.LoadAt(wsRoot)
 }
 
-// backendAutoExport spawns a background subprocess to push to the backend.
+// backendAutoExport spawns a background subprocess to sync with the backend.
+// Skips silently if another backend operation is already running.
 func backendAutoExport(projectRoot string) {
+	// Try to acquire lock non-blocking to check if another operation is running.
+	// We release it immediately — the subprocess will acquire its own lock.
+	lock, err := workspace.TryAcquireBackendLock(projectRoot)
+	if err != nil {
+		return
+	}
+	if lock == nil {
+		// Another backend operation is running, skip
+		return
+	}
+	lock.Release()
+
 	fstBin, err := os.Executable()
 	if err != nil {
 		return
@@ -471,6 +485,12 @@ func runBackendSetGitHub(repo string, createRepo, privateRepo bool, remoteName s
 	if err != nil {
 		return err
 	}
+
+	lock, err := workspace.AcquireBackendLock(projectRoot)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
 	slug, remoteURL, err := parseGitHubRepo(repo)
 	if err != nil {
@@ -543,6 +563,12 @@ func runBackendSetGit() error {
 		return err
 	}
 
+	lock, err := workspace.AcquireBackendLock(projectRoot)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+
 	// Export to git
 	if err := RunExportGitAt(projectRoot, true, false); err != nil {
 		return err
@@ -602,6 +628,12 @@ func runBackendPush() error {
 	if err != nil {
 		return err
 	}
+
+	lock, err := workspace.AcquireBackendLock(projectRoot)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
 	b := BackendFromConfig(parentCfg.Backend)
 	if b == nil {

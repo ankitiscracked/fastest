@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/workspace"
 )
 
 func init() {
@@ -77,6 +78,12 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 	// Check for backend dispatch
 	if projectRoot, parentCfg, findErr := findProjectRootAndParent(); findErr == nil {
 		if b := BackendFromConfig(parentCfg.Backend); b != nil {
+			lock, lockErr := workspace.AcquireBackendLock(projectRoot)
+			if lockErr != nil {
+				return lockErr
+			}
+			defer lock.Release()
+
 			if err := b.Sync(projectRoot); err == backend.ErrNoRemote {
 				fmt.Println("Backend has no remote to sync with.")
 				return nil
