@@ -156,7 +156,7 @@ func ShowFileAtRef(g Env, ref, path string) ([]byte, error) {
 	content, err := g.Output("show", ref+":"+path)
 	if err != nil {
 		msg := err.Error()
-		if strings.Contains(msg, "Path") ||
+		if strings.Contains(msg, "path") || strings.Contains(msg, "Path") ||
 			strings.Contains(msg, "not a valid object name") ||
 			strings.Contains(msg, "invalid object name") ||
 			strings.Contains(msg, "unknown revision") ||
