@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/gitstore"
 	"github.com/anthropics/fastest/cli/internal/store"
 )
 
@@ -217,7 +218,7 @@ func TestExportGitSingleWorkspace(t *testing.T) {
 	}
 
 	// Verify mapping exists with 2 entries
-	mapping, err := LoadGitMapping(filepath.Join(projectRoot, ".fst"))
+	mapping, err := gitstore.LoadGitMapping(filepath.Join(projectRoot, ".fst"))
 	if err != nil {
 		t.Fatalf("LoadGitMapping: %v", err)
 	}
@@ -266,7 +267,7 @@ func TestExportGitMultiWorkspace(t *testing.T) {
 	}
 
 	// Verify mapping has entries for all snapshots (base + a changes + b changes = 3)
-	mapping, err := LoadGitMapping(filepath.Join(projectRoot, ".fst"))
+	mapping, err := gitstore.LoadGitMapping(filepath.Join(projectRoot, ".fst"))
 	if err != nil {
 		t.Fatalf("LoadGitMapping: %v", err)
 	}
@@ -290,7 +291,7 @@ func TestExportGitIncremental(t *testing.T) {
 	restoreCwd()
 
 	// Record mapping after first export
-	mapping1, err := LoadGitMapping(filepath.Join(projectRoot, ".fst"))
+	mapping1, err := gitstore.LoadGitMapping(filepath.Join(projectRoot, ".fst"))
 	if err != nil {
 		t.Fatalf("LoadGitMapping: %v", err)
 	}
@@ -332,7 +333,7 @@ func TestExportGitIncremental(t *testing.T) {
 	}
 
 	// Mapping should have one more entry
-	mapping2, err := LoadGitMapping(filepath.Join(projectRoot, ".fst"))
+	mapping2, err := gitstore.LoadGitMapping(filepath.Join(projectRoot, ".fst"))
 	if err != nil {
 		t.Fatalf("LoadGitMapping: %v", err)
 	}
@@ -364,7 +365,7 @@ func TestExportGitRebuild(t *testing.T) {
 		t.Fatalf("first export: %v", err)
 	}
 
-	mapping1, err := LoadGitMapping(filepath.Join(projectRoot, ".fst"))
+	mapping1, err := gitstore.LoadGitMapping(filepath.Join(projectRoot, ".fst"))
 	if err != nil {
 		t.Fatalf("LoadGitMapping: %v", err)
 	}
@@ -376,7 +377,7 @@ func TestExportGitRebuild(t *testing.T) {
 		t.Fatalf("rebuild export: %v", err)
 	}
 
-	mapping2, err := LoadGitMapping(filepath.Join(projectRoot, ".fst"))
+	mapping2, err := gitstore.LoadGitMapping(filepath.Join(projectRoot, ".fst"))
 	if err != nil {
 		t.Fatalf("LoadGitMapping: %v", err)
 	}
@@ -468,7 +469,7 @@ func TestBuildSnapshotDAG(t *testing.T) {
 		}
 	}
 
-	dag, err := buildSnapshotDAG(s, idC)
+	dag, err := gitstore.BuildSnapshotDAG(s, idC)
 	if err != nil {
 		t.Fatalf("buildSnapshotDAG: %v", err)
 	}
@@ -492,7 +493,7 @@ func TestGitMappingRoundTrip(t *testing.T) {
 	configDir := t.TempDir()
 
 	// Loading non-existent file returns empty mapping
-	m, err := LoadGitMapping(configDir)
+	m, err := gitstore.LoadGitMapping(configDir)
 	if err != nil {
 		t.Fatalf("LoadGitMapping empty: %v", err)
 	}
@@ -505,11 +506,11 @@ func TestGitMappingRoundTrip(t *testing.T) {
 	m.Snapshots["snap-1"] = "abc123"
 	m.Snapshots["snap-2"] = "def456"
 
-	if err := SaveGitMapping(configDir, m); err != nil {
+	if err := gitstore.SaveGitMapping(configDir, m); err != nil {
 		t.Fatalf("SaveGitMapping: %v", err)
 	}
 
-	loaded, err := LoadGitMapping(configDir)
+	loaded, err := gitstore.LoadGitMapping(configDir)
 	if err != nil {
 		t.Fatalf("LoadGitMapping: %v", err)
 	}
@@ -531,7 +532,7 @@ func TestCommitMetaFromSnapshot(t *testing.T) {
 		AuthorEmail: "john@example.com",
 		CreatedAt:   "2024-01-01T00:00:00Z",
 	}
-	meta := commitMetaFromSnapshot(snap)
+	meta := gitstore.CommitMetaFromSnapshot(snap)
 	if meta == nil {
 		t.Fatalf("expected non-nil meta")
 	}
@@ -553,7 +554,7 @@ func TestCommitMetaFromSnapshot(t *testing.T) {
 		Agent:     "Claude Code",
 		CreatedAt: "2024-01-01T00:00:00Z",
 	}
-	meta2 := commitMetaFromSnapshot(snap2)
+	meta2 := gitstore.CommitMetaFromSnapshot(snap2)
 	if meta2 == nil {
 		t.Fatalf("expected non-nil meta for agent")
 	}
@@ -566,7 +567,7 @@ func TestCommitMetaFromSnapshot(t *testing.T) {
 
 	// Empty snapshot — no useful metadata
 	snap3 := &store.SnapshotMeta{}
-	meta3 := commitMetaFromSnapshot(snap3)
+	meta3 := gitstore.CommitMetaFromSnapshot(snap3)
 	if meta3 != nil {
 		t.Fatalf("expected nil meta for empty snapshot")
 	}

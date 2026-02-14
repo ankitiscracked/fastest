@@ -1,13 +1,36 @@
 package backend
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/anthropics/fastest/cli/internal/config"
+)
 
 // ErrNoRemote is returned when a backend has no remote to sync with.
 var ErrNoRemote = errors.New("backend has no remote")
 
-// ErrPushRejected is returned when a git push is rejected (non-fast-forward).
-// This typically means the remote has new commits that need to be fetched first.
-var ErrPushRejected = errors.New("push rejected (non-fast-forward)")
+// ExportFunc exports local snapshots to git commits at the given project root.
+type ExportFunc func(projectRoot string, initRepo, rebuild bool) error
+
+// FromConfig creates a Backend from a BackendConfig.
+// exportGit is the function used to export snapshots to git (typically RunExportGitAt).
+func FromConfig(cfg *config.BackendConfig, exportGit ExportFunc) Backend {
+	if cfg == nil {
+		return nil
+	}
+	switch cfg.Type {
+	case "github":
+		remote := cfg.Remote
+		if remote == "" {
+			remote = "origin"
+		}
+		return &GitHubBackend{Repo: cfg.Repo, Remote: remote, ExportGit: exportGit}
+	case "git":
+		return &GitBackend{ExportGit: exportGit}
+	default:
+		return nil
+	}
+}
 
 // DivergenceInfo describes a workspace where local and remote heads have diverged.
 type DivergenceInfo struct {

@@ -10,7 +10,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/anthropics/fastest/cli/internal/gitstore"
+	"github.com/anthropics/fastest/cli/internal/gitutil"
 	"github.com/anthropics/fastest/cli/internal/store"
 )
 
@@ -70,9 +71,9 @@ func runImportGit(repoPath, projectName string, rebuild bool) error {
 	defer os.RemoveAll(tempRepoDir)
 
 	indexPath := filepath.Join(tempRepoDir, "index")
-	git := newGitEnv(repoRoot, tempRepoDir, indexPath)
+	git := gitutil.NewEnv(repoRoot, tempRepoDir, indexPath)
 
-	meta, err := loadExportMetadata(git)
+	meta, err := gitstore.LoadExportMetadata(git)
 	if err != nil {
 		return fmt.Errorf("failed to load fst export metadata: %w", err)
 	}
@@ -143,7 +144,7 @@ func runImportGit(repoPath, projectName string, rebuild bool) error {
 	return nil
 }
 
-func buildImportTargets(parentRoot string, parentCfg *config.ParentConfig, meta *exportMeta) ([]importTarget, error) {
+func buildImportTargets(parentRoot string, parentCfg *config.ParentConfig, meta *gitstore.ExportMeta) ([]importTarget, error) {
 	if parentCfg == nil {
 		return nil, fmt.Errorf("missing project configuration")
 	}
@@ -201,7 +202,7 @@ func existingWorkspaceConfig(root string) (bool, *config.ProjectConfig, error) {
 	return true, cfg, nil
 }
 
-func importWorkspaceFromGit(git gitEnv, s *store.Store, target importTarget, rebuild bool) error {
+func importWorkspaceFromGit(git gitutil.Env, s *store.Store, target importTarget, rebuild bool) error {
 	targetRoot := target.Root
 	if targetRoot == "" {
 		return fmt.Errorf("missing workspace path")
@@ -261,9 +262,9 @@ func importWorkspaceFromGit(git gitEnv, s *store.Store, target importTarget, reb
 	defer os.RemoveAll(tempWorkDir)
 
 	importIndex := filepath.Join(tempWorkDir, "index")
-	importGit := newGitEnv(git.repoRoot, tempWorkDir, importIndex)
+	importGit := gitutil.NewEnv(git.RepoRoot, tempWorkDir, importIndex)
 
-	commits, err := gitRevList(importGit, target.Branch)
+	commits, err := gitutil.RevList(importGit, target.Branch)
 	if err != nil {
 		return err
 	}
@@ -279,11 +280,11 @@ func importWorkspaceFromGit(git gitEnv, s *store.Store, target importTarget, reb
 	var lastSnapshot string
 
 	for _, commit := range commits {
-		info, err := readGitCommitInfo(importGit, commit)
+		info, err := gitutil.ReadCommitInfo(importGit, commit)
 		if err != nil {
 			return err
 		}
-		if err := gitCheckoutTree(importGit, commit); err != nil {
+		if err := gitutil.CheckoutTree(importGit, commit); err != nil {
 			return err
 		}
 
@@ -301,7 +302,7 @@ func importWorkspaceFromGit(git gitEnv, s *store.Store, target importTarget, reb
 			agentName = info.AuthorName
 		}
 
-		snapshotID, err := createImportedSnapshot(s, tempWorkDir, cfg, parentSnapshots, info.Subject, info.AuthorDate, info.AuthorName, info.AuthorEmail, agentName)
+		snapshotID, err := gitstore.CreateImportedSnapshot(s, tempWorkDir, cfg, parentSnapshots, info.Subject, info.AuthorDate, info.AuthorName, info.AuthorEmail, agentName)
 		if err != nil {
 			return err
 		}
@@ -336,106 +337,3 @@ func importWorkspaceFromGit(git gitEnv, s *store.Store, target importTarget, reb
 	return nil
 }
 
-type gitCommitInfo struct {
-	Parents     []string
-	Subject     string
-	AuthorName  string
-	AuthorEmail string
-	AuthorDate  string
-}
-
-func gitRevList(g gitEnv, ref string) ([]string, error) {
-	out, err := g.output("rev-list", "--topo-order", "--reverse", ref)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(out) == "" {
-		return nil, nil
-	}
-	lines := strings.Split(out, "\n")
-	return lines, nil
-}
-
-func readGitCommitInfo(g gitEnv, sha string) (gitCommitInfo, error) {
-	format := "%H%n%P%n%an%n%ae%n%ad%n%s"
-	out, err := g.output("show", "-s", "--format="+format, "--date=iso-strict", sha)
-	if err != nil {
-		return gitCommitInfo{}, err
-	}
-	lines := strings.Split(out, "\n")
-	if len(lines) < 6 {
-		return gitCommitInfo{}, fmt.Errorf("unexpected commit info for %s", sha)
-	}
-	parents := []string{}
-	if strings.TrimSpace(lines[1]) != "" {
-		parents = strings.Split(strings.TrimSpace(lines[1]), " ")
-	}
-	return gitCommitInfo{
-		Parents:     parents,
-		AuthorName:  lines[2],
-		AuthorEmail: lines[3],
-		AuthorDate:  lines[4],
-		Subject:     lines[5],
-	}, nil
-}
-
-func gitCheckoutTree(g gitEnv, commit string) error {
-	if err := g.run("clean", "-fdx"); err != nil {
-		return err
-	}
-	return g.run("checkout", "-f", commit, "--", ".")
-}
-
-func createImportedSnapshot(s *store.Store, sourceRoot string, cfg *config.ProjectConfig, parents []string, message, createdAt, authorName, authorEmail, agentName string) (string, error) {
-	if message == "" {
-		message = "Imported commit"
-	}
-
-	m, err := manifest.Generate(sourceRoot, false)
-	if err != nil {
-		return "", fmt.Errorf("failed to scan files: %w", err)
-	}
-
-	manifestHash, err := s.WriteManifest(m)
-	if err != nil {
-		return "", fmt.Errorf("failed to write manifest: %w", err)
-	}
-
-	if createdAt == "" {
-		createdAt = time.Now().UTC().Format(time.RFC3339)
-	}
-	snapshotID := store.ComputeSnapshotID(manifestHash, parents, authorName, authorEmail, createdAt)
-
-	// Cache blobs from source files
-	for _, f := range m.FileEntries() {
-		if s.BlobExists(f.Hash) {
-			continue
-		}
-		srcPath := filepath.Join(sourceRoot, f.Path)
-		content, err := os.ReadFile(srcPath)
-		if err != nil {
-			continue
-		}
-		_ = s.WriteBlob(f.Hash, content)
-	}
-
-	// Write snapshot metadata
-	if err := s.WriteSnapshotMeta(&store.SnapshotMeta{
-		ID:                snapshotID,
-		WorkspaceID:       cfg.WorkspaceID,
-		WorkspaceName:     cfg.WorkspaceName,
-		ManifestHash:      manifestHash,
-		ParentSnapshotIDs: parents,
-		AuthorName:        authorName,
-		AuthorEmail:       authorEmail,
-		Message:           message,
-		Agent:             agentName,
-		CreatedAt:         createdAt,
-		Files:             m.FileCount(),
-		Size:              m.TotalSize(),
-	}); err != nil {
-		return "", fmt.Errorf("failed to save snapshot metadata: %w", err)
-	}
-
-	return snapshotID, nil
-}

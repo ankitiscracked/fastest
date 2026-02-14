@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/gitstore"
+	"github.com/anthropics/fastest/cli/internal/gitutil"
 	"github.com/anthropics/fastest/cli/internal/store"
 )
 
@@ -30,7 +32,7 @@ func setupExportRepo(t *testing.T, projectID string, workspaces map[string][]com
 	runGit(t, repo, "config", "user.email", "test@example.com")
 
 	tempDir := t.TempDir()
-	git := newGitEnv(repo, tempDir, filepath.Join(tempDir, "index"))
+	git := gitutil.NewEnv(repo, tempDir, filepath.Join(tempDir, "index"))
 
 	// We need to create a shared initial commit so branches can share ancestry.
 	// Write a base file, commit on an orphan branch, then build workspace branches from there.
@@ -67,7 +69,7 @@ func setupExportRepo(t *testing.T, projectID string, workspaces map[string][]com
 
 		// Update export metadata for this workspace
 		wsID := wsName + "-id"
-		if err := updateExportMetadata(git, &config.ProjectConfig{
+		if err := gitstore.UpdateExportMetadata(git, &config.ProjectConfig{
 			ProjectID:     projectID,
 			WorkspaceID:   wsID,
 			WorkspaceName: wsName,
@@ -116,8 +118,8 @@ func TestImportGitCreatesProjectAndWorkspace(t *testing.T) {
 	runGit(t, repo, "branch", "-M", "main")
 
 	tempDir := t.TempDir()
-	git := newGitEnv(repo, tempDir, filepath.Join(tempDir, "index"))
-	if err := updateExportMetadata(git, &config.ProjectConfig{
+	git := gitutil.NewEnv(repo, tempDir, filepath.Join(tempDir, "index"))
+	if err := gitstore.UpdateExportMetadata(git, &config.ProjectConfig{
 		ProjectID:     "proj-123",
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "main",

@@ -6,13 +6,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/gitstore"
+	"github.com/anthropics/fastest/cli/internal/gitutil"
 )
 
 func init() {
@@ -132,17 +132,17 @@ func runGitHubExport(repo string, initRepo bool, rebuild bool, remoteName string
 			if !forceRemote {
 				return fmt.Errorf("remote '%s' already set to %s (use --force-remote to override)", remoteName, existingURL)
 			}
-			if err := runGitCommand(projectRoot, "remote", "set-url", remoteName, remoteURL); err != nil {
+			if err := gitutil.RunCommand(projectRoot, "remote", "set-url", remoteName, remoteURL); err != nil {
 				return fmt.Errorf("failed to update remote '%s': %w", remoteName, err)
 			}
 		}
 	} else {
-		if err := runGitCommand(projectRoot, "remote", "add", remoteName, remoteURL); err != nil {
+		if err := gitutil.RunCommand(projectRoot, "remote", "add", remoteName, remoteURL); err != nil {
 			return fmt.Errorf("failed to add remote '%s': %w", remoteName, err)
 		}
 	}
 
-	return PushExportToRemote(projectRoot, remoteName)
+	return gitstore.PushExportToRemote(projectRoot, remoteName)
 }
 
 func runGitHubImport(repo string, projectName string, rebuild bool, noGH bool) error {
@@ -163,12 +163,12 @@ func runGitHubImport(repo string, projectName string, rebuild bool, noGH bool) e
 			return fmt.Errorf("failed to clone via gh: %w", err)
 		}
 	} else {
-		if err := runGitCommand("", "clone", remoteURL, tempRepoDir); err != nil {
+		if err := gitutil.RunCommand("", "clone", remoteURL, tempRepoDir); err != nil {
 			return fmt.Errorf("failed to clone repo: %w", err)
 		}
 	}
 
-	if err := runGitCommand(tempRepoDir, "fetch", "origin", "refs/fst/*:refs/fst/*"); err != nil {
+	if err := gitutil.RunCommand(tempRepoDir, "fetch", "origin", "refs/fst/*:refs/fst/*"); err != nil {
 		return fmt.Errorf("failed to fetch export metadata refs: %w", err)
 	}
 
@@ -278,82 +278,3 @@ func isGitHubHost(host string) bool {
 	return strings.HasSuffix(host, ".github.com")
 }
 
-// PushExportToRemote pushes all exported workspace branches and metadata to the given remote.
-// Returns backend.ErrPushRejected if a push is rejected due to non-fast-forward.
-func PushExportToRemote(projectRoot string, remoteName string) error {
-	meta, err := loadExportMetadataFromRepo(projectRoot)
-	if err != nil {
-		return fmt.Errorf("failed to load export metadata: %w", err)
-	}
-	if meta == nil {
-		return fmt.Errorf("missing export metadata in repo")
-	}
-	branches := collectExportBranches(meta)
-
-	for _, branch := range branches {
-		if err := runGitPush(projectRoot, remoteName, branch); err != nil {
-			return err
-		}
-	}
-	if err := runGitPush(projectRoot, remoteName, fstMetaRef); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// runGitPush pushes a single refspec and returns backend.ErrPushRejected for
-// non-fast-forward rejections, distinguishing them from auth/network errors.
-func runGitPush(repoDir, remoteName, refspec string) error {
-	cmd := exec.Command("git", "-C", repoDir, "push", remoteName, refspec)
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	msg := string(output)
-	if isPushRejected(msg) {
-		return fmt.Errorf("push rejected for '%s': %w", refspec, backend.ErrPushRejected)
-	}
-	trimmed := strings.TrimSpace(msg)
-	if trimmed == "" {
-		trimmed = err.Error()
-	}
-	return fmt.Errorf("failed to push '%s': %s", refspec, trimmed)
-}
-
-// isPushRejected checks if git push output indicates a non-fast-forward rejection.
-func isPushRejected(output string) bool {
-	lower := strings.ToLower(output)
-	return strings.Contains(lower, "[rejected]") ||
-		strings.Contains(lower, "non-fast-forward") ||
-		strings.Contains(lower, "fetch first") ||
-		strings.Contains(lower, "were rejected")
-}
-
-func loadExportMetadataFromRepo(repoRoot string) (*exportMeta, error) {
-	tempDir, err := os.MkdirTemp("", "fst-export-meta-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tempDir)
-
-	indexPath := filepath.Join(tempDir, "index")
-	git := newGitEnv(repoRoot, tempDir, indexPath)
-	return loadExportMetadata(git)
-}
-
-func collectExportBranches(meta *exportMeta) []string {
-	branches := make([]string, 0, len(meta.Workspaces))
-	seen := make(map[string]struct{}, len(meta.Workspaces))
-	for _, ws := range meta.Workspaces {
-		if ws.Branch == "" {
-			continue
-		}
-		if _, ok := seen[ws.Branch]; ok {
-			continue
-		}
-		seen[ws.Branch] = struct{}{}
-		branches = append(branches, ws.Branch)
-	}
-	return branches
-}

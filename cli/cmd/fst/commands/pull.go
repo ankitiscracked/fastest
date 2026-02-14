@@ -84,7 +84,7 @@ Use --hard to replace local files with the remote snapshot.`,
 func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMode, dryRun bool, dryRunSummary bool) error {
 	// Check for backend dispatch
 	if projectRoot, parentCfg, findErr := findProjectRootAndParent(); findErr == nil {
-		if b := BackendFromConfig(parentCfg.Backend); b != nil {
+		if b := backend.FromConfig(parentCfg.Backend, RunExportGitAt); b != nil {
 			lock, lockErr := workspace.AcquireBackendLock(projectRoot)
 			if lockErr != nil {
 				return lockErr

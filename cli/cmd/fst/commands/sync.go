@@ -77,7 +77,7 @@ and creates a new snapshot on success.`,
 func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool, noSnapshot bool) error {
 	// Check for backend dispatch
 	if projectRoot, parentCfg, findErr := findProjectRootAndParent(); findErr == nil {
-		if b := BackendFromConfig(parentCfg.Backend); b != nil {
+		if b := backend.FromConfig(parentCfg.Backend, RunExportGitAt); b != nil {
 			lock, lockErr := workspace.AcquireBackendLock(projectRoot)
 			if lockErr != nil {
 				return lockErr

@@ -8,6 +8,8 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/gitstore"
+	"github.com/anthropics/fastest/cli/internal/gitutil"
 	"github.com/anthropics/fastest/cli/internal/store"
 )
 
@@ -79,12 +81,12 @@ func TestBackendConfigBackwardCompat(t *testing.T) {
 
 func TestBackendFromConfig(t *testing.T) {
 	// nil config → nil backend
-	if b := BackendFromConfig(nil); b != nil {
+	if b := backend.FromConfig(nil, RunExportGitAt); b != nil {
 		t.Fatalf("expected nil for nil config")
 	}
 
 	// github
-	b := BackendFromConfig(&config.BackendConfig{Type: "github", Repo: "owner/repo", Remote: "origin"})
+	b := backend.FromConfig(&config.BackendConfig{Type: "github", Repo: "owner/repo", Remote: "origin"}, RunExportGitAt)
 	if b == nil {
 		t.Fatalf("expected github backend")
 	}
@@ -93,7 +95,7 @@ func TestBackendFromConfig(t *testing.T) {
 	}
 
 	// git
-	b = BackendFromConfig(&config.BackendConfig{Type: "git"})
+	b = backend.FromConfig(&config.BackendConfig{Type: "git"}, RunExportGitAt)
 	if b == nil {
 		t.Fatalf("expected git backend")
 	}
@@ -102,14 +104,14 @@ func TestBackendFromConfig(t *testing.T) {
 	}
 
 	// unknown → nil
-	b = BackendFromConfig(&config.BackendConfig{Type: "unknown"})
+	b = backend.FromConfig(&config.BackendConfig{Type: "unknown"}, RunExportGitAt)
 	if b != nil {
 		t.Fatalf("expected nil for unknown type")
 	}
 
 	// github without remote → defaults to origin
-	ghb := BackendFromConfig(&config.BackendConfig{Type: "github", Repo: "owner/repo"})
-	gh, ok := ghb.(*GitHubBackend)
+	ghb := backend.FromConfig(&config.BackendConfig{Type: "github", Repo: "owner/repo"}, RunExportGitAt)
+	gh, ok := ghb.(*backend.GitHubBackend)
 	if !ok {
 		t.Fatalf("expected *GitHubBackend")
 	}
@@ -119,7 +121,7 @@ func TestBackendFromConfig(t *testing.T) {
 }
 
 func TestGitBackendNoRemote(t *testing.T) {
-	b := &GitBackend{}
+	b := &backend.GitBackend{ExportGit: RunExportGitAt}
 	// Pull returns ErrNoRemote since git backend has no remote
 	if err := b.Pull("/tmp/nonexistent"); err != backend.ErrNoRemote {
 		t.Fatalf("expected ErrNoRemote from Pull, got %v", err)
@@ -158,7 +160,7 @@ func TestBackendSetGit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAt: %v", err)
 	}
-	snapID, err := createImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
+	snapID, err := gitstore.CreateImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
 	if err != nil {
 		t.Fatalf("createImportedSnapshot: %v", err)
 	}
@@ -304,7 +306,7 @@ func TestBackendAutoExport(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	wsCfg, _ := config.LoadAt(wsRoot)
-	snapID, err := createImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
+	snapID, err := gitstore.CreateImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
 	if err != nil {
 		t.Fatalf("createImportedSnapshot: %v", err)
 	}
@@ -335,7 +337,7 @@ func TestBackendAutoExport(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wsRoot, "test.txt"), []byte("v2"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	snap2, err := createImportedSnapshot(s, wsRoot, wsCfg, []string{snapID}, "second", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
+	snap2, err := gitstore.CreateImportedSnapshot(s, wsRoot, wsCfg, []string{snapID}, "second", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
 	if err != nil {
 		t.Fatalf("createImportedSnapshot: %v", err)
 	}
@@ -351,7 +353,7 @@ func TestBackendAutoExport(t *testing.T) {
 	})
 
 	// Use the git backend's Push
-	b := &GitBackend{}
+	b := &backend.GitBackend{ExportGit: RunExportGitAt}
 	if err := b.Push(projectRoot); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
@@ -389,7 +391,7 @@ func TestIncrementalImport(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	wsCfg, _ := config.LoadAt(wsRoot)
-	snapID, _ := createImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
+	snapID, _ := gitstore.CreateImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
 	wsCfg.CurrentSnapshotID = snapID
 	wsCfg.BaseSnapshotID = snapID
 	_ = config.SaveAt(wsRoot, wsCfg)
@@ -417,36 +419,36 @@ func TestIncrementalImport(t *testing.T) {
 	if err := os.MkdirAll(addWorkDir, 0755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	addGit := newGitEnv(projectRoot, addWorkDir, addIndexPath)
+	addGit := gitutil.NewEnv(projectRoot, addWorkDir, addIndexPath)
 
 	// Checkout current tree, add a file, commit
-	if err := gitCheckoutTree(addGit, "main"); err != nil {
+	if err := gitutil.CheckoutTree(addGit, "main"); err != nil {
 		t.Fatalf("checkout: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(addWorkDir, "new.txt"), []byte("from remote"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := addGit.run("add", "-A"); err != nil {
+	if err := addGit.Run("add", "-A"); err != nil {
 		t.Fatalf("git add: %v", err)
 	}
-	treeSHA, err := getGitTreeSHA(addGit)
+	treeSHA, err := gitutil.TreeSHA(addGit)
 	if err != nil {
-		t.Fatalf("getGitTreeSHA: %v", err)
+		t.Fatalf("TreeSHA: %v", err)
 	}
-	parentSHA, err := gitRefSHA(addGit, "refs/heads/main")
+	parentSHA, err := gitutil.RefSHA(addGit, "refs/heads/main")
 	if err != nil {
-		t.Fatalf("gitRefSHA: %v", err)
+		t.Fatalf("RefSHA: %v", err)
 	}
-	newSHA, err := createGitCommitWithParents(addGit, treeSHA, "remote commit", []string{parentSHA}, nil)
+	newSHA, err := gitutil.CreateCommitWithParents(addGit, treeSHA, "remote commit", []string{parentSHA}, nil)
 	if err != nil {
-		t.Fatalf("createGitCommitWithParents: %v", err)
+		t.Fatalf("CreateCommitWithParents: %v", err)
 	}
-	if err := updateGitBranchRef(addGit, "main", newSHA); err != nil {
-		t.Fatalf("updateGitBranchRef: %v", err)
+	if err := gitutil.UpdateBranchRef(addGit, "main", newSHA); err != nil {
+		t.Fatalf("UpdateBranchRef: %v", err)
 	}
 
 	// Run incremental import
-	if _, err := IncrementalImportFromGit(projectRoot); err != nil {
+	if _, err := backend.IncrementalImportFromGit(projectRoot); err != nil {
 		t.Fatalf("IncrementalImportFromGit: %v", err)
 	}
 
@@ -495,7 +497,7 @@ func TestIncrementalImportSkipsKnown(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	wsCfg, _ := config.LoadAt(wsRoot)
-	snapID, _ := createImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
+	snapID, _ := gitstore.CreateImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
 	wsCfg.CurrentSnapshotID = snapID
 	wsCfg.BaseSnapshotID = snapID
 	_ = config.SaveAt(wsRoot, wsCfg)
@@ -516,7 +518,7 @@ func TestIncrementalImportSkipsKnown(t *testing.T) {
 	}
 
 	// Incremental import should find nothing new
-	if _, err := IncrementalImportFromGit(projectRoot); err != nil {
+	if _, err := backend.IncrementalImportFromGit(projectRoot); err != nil {
 		t.Fatalf("IncrementalImportFromGit: %v", err)
 	}
 
@@ -541,8 +543,8 @@ func TestIsPushRejected(t *testing.T) {
 		{"Everything up-to-date\n", false},
 	}
 	for _, tt := range tests {
-		if got := isPushRejected(tt.output); got != tt.expected {
-			t.Errorf("isPushRejected(%q) = %v, want %v", tt.output[:min(50, len(tt.output))], got, tt.expected)
+		if got := gitutil.IsPushRejected(tt.output); got != tt.expected {
+			t.Errorf("gitutil.IsPushRejected(%q) = %v, want %v", tt.output[:min(50, len(tt.output))], got, tt.expected)
 		}
 	}
 }
@@ -555,45 +557,45 @@ func TestIsAncestor(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	indexPath := filepath.Join(tmpDir, "index")
-	git := newGitEnv(projectRoot, tmpDir, indexPath)
+	git := gitutil.NewEnv(projectRoot, tmpDir, indexPath)
 
 	// Create initial commit
 	if err := os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("v1"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := git.run("add", "-A"); err != nil {
+	if err := git.Run("add", "-A"); err != nil {
 		t.Fatal(err)
 	}
-	tree1, _ := getGitTreeSHA(git)
-	sha1, err := createGitCommitWithParents(git, tree1, "first", nil, nil)
+	tree1, _ := gitutil.TreeSHA(git)
+	sha1, err := gitutil.CreateCommitWithParents(git, tree1, "first", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = updateGitBranchRef(git, "test", sha1)
+	_ = gitutil.UpdateBranchRef(git, "test", sha1)
 
 	// Create child commit
 	if err := os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("v2"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := git.run("add", "-A"); err != nil {
+	if err := git.Run("add", "-A"); err != nil {
 		t.Fatal(err)
 	}
-	tree2, _ := getGitTreeSHA(git)
-	sha2, err := createGitCommitWithParents(git, tree2, "second", []string{sha1}, nil)
+	tree2, _ := gitutil.TreeSHA(git)
+	sha2, err := gitutil.CreateCommitWithParents(git, tree2, "second", []string{sha1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// sha1 is ancestor of sha2
-	if !isAncestor(git, sha1, sha2) {
+	if !gitutil.IsAncestor(git, sha1, sha2) {
 		t.Fatalf("expected sha1 to be ancestor of sha2")
 	}
 	// sha2 is NOT ancestor of sha1
-	if isAncestor(git, sha2, sha1) {
+	if gitutil.IsAncestor(git, sha2, sha1) {
 		t.Fatalf("expected sha2 NOT to be ancestor of sha1")
 	}
 	// sha1 is ancestor of itself
-	if !isAncestor(git, sha1, sha1) {
+	if !gitutil.IsAncestor(git, sha1, sha1) {
 		t.Fatalf("expected sha1 to be ancestor of itself")
 	}
 }
@@ -631,7 +633,7 @@ func TestIncrementalImportDivergence(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	wsCfg, _ := config.LoadAt(wsRoot)
-	snapA, _ := createImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
+	snapA, _ := gitstore.CreateImportedSnapshot(s, wsRoot, wsCfg, nil, "initial", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
 	wsCfg.CurrentSnapshotID = snapA
 	wsCfg.BaseSnapshotID = snapA
 	_ = config.SaveAt(wsRoot, wsCfg)
@@ -656,7 +658,7 @@ func TestIncrementalImportDivergence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wsRoot, "test.txt"), []byte("local change"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	snapB, err := createImportedSnapshot(s, wsRoot, wsCfg, []string{snapA}, "local work", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
+	snapB, err := gitstore.CreateImportedSnapshot(s, wsRoot, wsCfg, []string{snapA}, "local work", time.Now().UTC().Format(time.RFC3339), "Test", "test@test.com", "")
 	if err != nil {
 		t.Fatalf("createImportedSnapshot: %v", err)
 	}
@@ -669,28 +671,28 @@ func TestIncrementalImportDivergence(t *testing.T) {
 	if err := os.MkdirAll(addWorkDir, 0755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	addGit := newGitEnv(projectRoot, addWorkDir, filepath.Join(addTempDir, "index"))
-	if err := gitCheckoutTree(addGit, "main"); err != nil {
+	addGit := gitutil.NewEnv(projectRoot, addWorkDir, filepath.Join(addTempDir, "index"))
+	if err := gitutil.CheckoutTree(addGit, "main"); err != nil {
 		t.Fatalf("checkout: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(addWorkDir, "remote.txt"), []byte("remote change"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := addGit.run("add", "-A"); err != nil {
+	if err := addGit.Run("add", "-A"); err != nil {
 		t.Fatalf("git add: %v", err)
 	}
-	treeSHA, _ := getGitTreeSHA(addGit)
-	parentSHA, _ := gitRefSHA(addGit, "refs/heads/main")
-	newSHA, err := createGitCommitWithParents(addGit, treeSHA, "remote commit", []string{parentSHA}, nil)
+	treeSHA, _ := gitutil.TreeSHA(addGit)
+	parentSHA, _ := gitutil.RefSHA(addGit, "refs/heads/main")
+	newSHA, err := gitutil.CreateCommitWithParents(addGit, treeSHA, "remote commit", []string{parentSHA}, nil)
 	if err != nil {
-		t.Fatalf("createGitCommitWithParents: %v", err)
+		t.Fatalf("CreateCommitWithParents: %v", err)
 	}
-	if err := updateGitBranchRef(addGit, "main", newSHA); err != nil {
-		t.Fatalf("updateGitBranchRef: %v", err)
+	if err := gitutil.UpdateBranchRef(addGit, "main", newSHA); err != nil {
+		t.Fatalf("UpdateBranchRef: %v", err)
 	}
 
 	// Step 4: Run incremental import
-	result, err := IncrementalImportFromGit(projectRoot)
+	result, err := backend.IncrementalImportFromGit(projectRoot)
 	if err != nil {
 		t.Fatalf("IncrementalImportFromGit: %v", err)
 	}
