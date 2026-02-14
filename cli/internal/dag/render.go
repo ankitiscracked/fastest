@@ -1,0 +1,207 @@
+package dag
+
+import (
+	"os"
+	"strings"
+)
+
+// MergeDiagramOpts configures the mini-diagram rendered after merge operations.
+type MergeDiagramOpts struct {
+	CurrentID    string // left head snapshot ID (will be truncated to 8 chars)
+	SourceID     string // right head snapshot ID (will be truncated to 8 chars)
+	MergeBaseID  string // common ancestor snapshot ID (may be empty)
+	MergedID     string // result snapshot ID (empty for dry-run)
+	CurrentLabel string // left column label (e.g. workspace name)
+	SourceLabel  string // right column label (e.g. source workspace or "remote")
+	Message      string // merge message (e.g. "Merged feature")
+}
+
+type glyphs struct {
+	vertical   rune
+	connLeft   rune
+	connRight  rune
+	horizontal rune
+	tee        rune
+}
+
+var (
+	unicodeGlyphs = glyphs{
+		vertical:   '│',
+		connLeft:   '╰',
+		connRight:  '╯',
+		horizontal: '─',
+		tee:        '┬',
+	}
+	asciiGlyphs = glyphs{
+		vertical:   '|',
+		connLeft:   '\\',
+		connRight:  '/',
+		horizontal: '-',
+		tee:        '+',
+	}
+)
+
+var unicodeOverride *bool
+
+// SetUnicode forces Unicode or ASCII mode. Pass true for Unicode, false for ASCII.
+func SetUnicode(v bool) { unicodeOverride = &v }
+
+// ResetUnicode clears the override and reverts to auto-detection.
+func ResetUnicode() { unicodeOverride = nil }
+
+func activeGlyphs() glyphs {
+	if unicodeOverride != nil {
+		if *unicodeOverride {
+			return unicodeGlyphs
+		}
+		return asciiGlyphs
+	}
+	if supportsUnicode() {
+		return unicodeGlyphs
+	}
+	return asciiGlyphs
+}
+
+func supportsUnicode() bool {
+	for _, env := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		val := strings.ToUpper(os.Getenv(env))
+		if val != "" {
+			return strings.Contains(val, "UTF-8") || strings.Contains(val, "UTF8")
+		}
+	}
+	// Windows Terminal supports Unicode
+	if os.Getenv("WT_SESSION") != "" {
+		return true
+	}
+	return false
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// RenderMergeDiagram returns a multi-line ASCII or Unicode diagram showing
+// a merge operation: two parent heads converging into a merged snapshot.
+func RenderMergeDiagram(opts MergeDiagramOpts) string {
+	g := activeGlyphs()
+
+	leftLabel := opts.CurrentLabel
+	rightLabel := opts.SourceLabel
+	leftID := shortID(opts.CurrentID)
+	rightID := shortID(opts.SourceID)
+
+	mergedID := shortID(opts.MergedID)
+	if mergedID == "" {
+		mergedID = "merge?"
+	}
+
+	const shortLen = 8
+	leftColW := max(len(leftLabel), shortLen)
+	rightColW := max(len(rightLabel), shortLen)
+
+	const pad = 4
+	const minGap = 8
+
+	leftCenter := pad + leftColW/2
+	rightCenter := leftCenter + leftColW/2 + minGap + rightColW/2
+	mergeCenter := (leftCenter + rightCenter) / 2
+	totalWidth := rightCenter + rightColW/2 + pad
+
+	var lines []string
+
+	// Labels
+	lines = append(lines, placeLine(totalWidth,
+		placement{leftLabel, leftCenter},
+		placement{rightLabel, rightCenter},
+	))
+
+	// Vertical connectors
+	lines = append(lines, placeGlyphs(totalWidth, g.vertical, leftCenter, rightCenter))
+
+	// Short IDs
+	lines = append(lines, placeLine(totalWidth,
+		placement{leftID, leftCenter},
+		placement{rightID, rightCenter},
+	))
+
+	// Merge connector: ╰────┬────╯
+	lines = append(lines, buildConnector(totalWidth, leftCenter, rightCenter, mergeCenter, g))
+
+	// Merged snapshot ID
+	lines = append(lines, placeLine(totalWidth, placement{mergedID, mergeCenter}))
+
+	// Message
+	if opts.Message != "" {
+		lines = append(lines, placeLine(totalWidth, placement{opts.Message, mergeCenter}))
+	}
+
+	// Base
+	if opts.MergeBaseID != "" {
+		baseText := "(base: " + shortID(opts.MergeBaseID) + ")"
+		lines = append(lines, placeLine(totalWidth, placement{baseText, mergeCenter}))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+type placement struct {
+	text   string
+	center int
+}
+
+// placeLine builds a line with one or more text strings centered at given positions.
+func placeLine(width int, items ...placement) string {
+	canvas := makeCanvas(width)
+	for _, item := range items {
+		placeText(canvas, item.text, item.center)
+	}
+	return strings.TrimRight(string(canvas), " ")
+}
+
+// placeGlyphs puts a single glyph at each position.
+func placeGlyphs(width int, g rune, positions ...int) string {
+	canvas := makeCanvas(width)
+	for _, pos := range positions {
+		if pos >= 0 && pos < len(canvas) {
+			canvas[pos] = g
+		}
+	}
+	return strings.TrimRight(string(canvas), " ")
+}
+
+// buildConnector renders the merge connector line: ╰────┬────╯
+func buildConnector(width, left, right, mid int, g glyphs) string {
+	canvas := makeCanvas(width)
+	canvas[left] = g.connLeft
+	canvas[right] = g.connRight
+	canvas[mid] = g.tee
+	for i := left + 1; i < mid; i++ {
+		canvas[i] = g.horizontal
+	}
+	for i := mid + 1; i < right; i++ {
+		canvas[i] = g.horizontal
+	}
+	return strings.TrimRight(string(canvas), " ")
+}
+
+func makeCanvas(width int) []rune {
+	canvas := make([]rune, width)
+	for i := range canvas {
+		canvas[i] = ' '
+	}
+	return canvas
+}
+
+func placeText(canvas []rune, text string, center int) {
+	runes := []rune(text)
+	start := center - len(runes)/2
+	for i, r := range runes {
+		pos := start + i
+		if pos >= 0 && pos < len(canvas) {
+			canvas[pos] = r
+		}
+	}
+}

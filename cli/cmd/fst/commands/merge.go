@@ -8,6 +8,7 @@ import (
 
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/conflicts"
+	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/store"
 	"github.com/anthropics/fastest/cli/internal/ui"
 	"github.com/anthropics/fastest/cli/internal/workspace"
@@ -190,6 +191,14 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 		}
 
 		fmt.Println()
+		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+			CurrentID:    currentSnapshotID,
+			SourceID:     sourceSnapshotID,
+			MergeBaseID:  plan.MergeBaseID,
+			CurrentLabel: ws.WorkspaceName(),
+			SourceLabel:  sourceInfo.WorkspaceName,
+		}))
+		fmt.Println()
 		fmt.Println("(Dry run - no changes made)")
 		fmt.Println()
 		fmt.Println("To merge:")
@@ -276,14 +285,17 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 	fmt.Println()
 
 	// Post-merge auto-snapshot (only if clean)
+	var mergedSnapshotID string
 	totalApplied := len(result.Applied) + len(result.AutoMerged)
 	if len(result.Conflicts) == 0 && len(result.Failed) == 0 && totalApplied > 0 {
-		_, err := ws.Snapshot(workspace.SnapshotOpts{
+		snapResult, err := ws.Snapshot(workspace.SnapshotOpts{
 			Message: fmt.Sprintf("Merged %s", sourceInfo.WorkspaceName),
 		})
 		if err != nil {
 			fmt.Printf("Warning: Could not create post-merge snapshot: %v\n", err)
 			fmt.Printf("Run 'fst snapshot -m \"Merged %s\"' to save.\n", sourceInfo.WorkspaceName)
+		} else {
+			mergedSnapshotID = snapResult.SnapshotID
 		}
 	}
 
@@ -299,6 +311,18 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 	if len(result.Failed) > 0 {
 		fmt.Printf("  Failed:       %d files\n", len(result.Failed))
 	}
+
+	// DAG diagram
+	fmt.Println()
+	fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+		CurrentID:    currentSnapshotID,
+		SourceID:     sourceSnapshotID,
+		MergeBaseID:  plan.MergeBaseID,
+		MergedID:     mergedSnapshotID,
+		CurrentLabel: ws.WorkspaceName(),
+		SourceLabel:  sourceInfo.WorkspaceName,
+		Message:      fmt.Sprintf("Merged %s", sourceInfo.WorkspaceName),
+	}))
 
 	if len(result.Conflicts) > 0 {
 		fmt.Println()

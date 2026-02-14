@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/gitstore"
 	"github.com/anthropics/fastest/cli/internal/gitutil"
 	"github.com/anthropics/fastest/cli/internal/manifest"
@@ -293,6 +294,17 @@ func buildOnDivergence(mode ConflictMode) func(backend.DivergenceInfo) (string, 
 		if err != nil {
 			return "", fmt.Errorf("failed to read merged snapshot ID: %w", err)
 		}
+
+		fmt.Println()
+		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+			CurrentID:    div.LocalHead,
+			SourceID:     div.RemoteHead,
+			MergeBaseID:  div.MergeBase,
+			MergedID:     wsCfg.CurrentSnapshotID,
+			CurrentLabel: "local",
+			SourceLabel:  "remote",
+			Message:      "Sync merge",
+		}))
 
 		return wsCfg.CurrentSnapshotID, nil
 	}
