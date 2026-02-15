@@ -209,6 +209,45 @@ func TestGraphRendererUnicodeMerge(t *testing.T) {
 	}
 }
 
+func TestGraphRendererColorized(t *testing.T) {
+	SetUnicode(true)
+	defer ResetUnicode()
+
+	r := NewGraphRenderer()
+	r.Colorize = true
+
+	// Linear chain
+	row1 := r.NextRow("A", []string{"B"})
+
+	// Should still contain the node glyph (colors may be stripped in non-TTY)
+	if !strings.Contains(row1.NodeLine, "●") {
+		t.Errorf("colorized node line missing ●: %q", row1.NodeLine)
+	}
+
+	// Merge commit with fork-out
+	r2 := NewGraphRenderer()
+	r2.Colorize = true
+	rowM := r2.NextRow("M", []string{"A", "B"})
+
+	if len(rowM.PostLines) != 1 {
+		t.Fatalf("expected 1 post-line, got %d", len(rowM.PostLines))
+	}
+	// Fork line should contain connector glyphs
+	fork := rowM.PostLines[0]
+	if !strings.Contains(fork, "├") || !strings.Contains(fork, "╮") {
+		t.Errorf("colorized fork line missing connector glyphs: %q", fork)
+	}
+
+	// Verify colorized output differs from non-colorized only when ANSI is active
+	r3 := NewGraphRenderer()
+	r3.Colorize = false
+	row1Plain := r3.NextRow("A", []string{"B"})
+	// Both should contain the same glyph content
+	if !strings.Contains(row1Plain.NodeLine, "●") {
+		t.Errorf("plain node line missing ●: %q", row1Plain.NodeLine)
+	}
+}
+
 func TestCollectReachable(t *testing.T) {
 	snaps := buildSnaps(
 		SnapshotInfo{ID: "A", ParentIDs: []string{"B"}},

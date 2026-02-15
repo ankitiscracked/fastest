@@ -209,6 +209,7 @@ func runLogGraph(snapshots []*logSnapshotMeta, cfg *config.ProjectConfig, limit 
 
 	// Render graph
 	renderer := dag.NewGraphRenderer()
+	renderer.Colorize = true
 
 	for _, snapInfo := range sorted {
 		snap := byID[snapInfo.ID]

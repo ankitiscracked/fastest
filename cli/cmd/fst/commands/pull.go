@@ -283,6 +283,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 			SourceLabel:   sourceLabel,
 			Message:       "Pull merge (dry run)",
 			ConflictCount: len(mergeActions.conflicts),
+			Colorize:      true,
 		}))
 		return nil
 	}
@@ -326,6 +327,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 				Message:       "Pull merge",
 				Pending:       true,
 				ConflictCount: len(mergeActions.conflicts),
+				Colorize:      true,
 			}))
 			return nil
 		case ConflictModeTheirs:

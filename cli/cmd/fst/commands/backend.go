@@ -307,6 +307,7 @@ func buildOnDivergence(mode ConflictMode) func(backend.DivergenceInfo) (string, 
 			Message:       "Sync merge",
 			Pending:       hasConflicts,
 			ConflictCount: len(mergeActions.conflicts),
+			Colorize:      true,
 		}))
 
 		return wsCfg.CurrentSnapshotID, nil

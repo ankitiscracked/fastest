@@ -197,6 +197,7 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 			MergeBaseID:  plan.MergeBaseID,
 			CurrentLabel: ws.WorkspaceName(),
 			SourceLabel:  sourceInfo.WorkspaceName,
+			Colorize:     true,
 		}))
 		fmt.Println()
 		fmt.Println("(Dry run - no changes made)")
@@ -324,6 +325,7 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 		Message:       fmt.Sprintf("Merged %s", sourceInfo.WorkspaceName),
 		Pending:       len(result.Conflicts) > 0,
 		ConflictCount: len(result.Conflicts),
+		Colorize:      true,
 	}))
 
 	if len(result.Conflicts) > 0 {

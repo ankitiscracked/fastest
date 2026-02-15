@@ -218,6 +218,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 			SourceLabel:   "remote",
 			Message:       "Sync merge (dry run)",
 			ConflictCount: len(mergeActions.conflicts),
+			Colorize:      true,
 		}))
 		return nil
 	}
@@ -257,6 +258,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 				Message:       "Sync merge",
 				Pending:       true,
 				ConflictCount: len(mergeActions.conflicts),
+				Colorize:      true,
 			}))
 			return nil
 		case ConflictModeTheirs:
@@ -295,6 +297,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 			CurrentLabel: "local",
 			SourceLabel:  "remote",
 			Message:      "Sync merge",
+			Colorize:     true,
 		}))
 	}
 

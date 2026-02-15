@@ -257,6 +257,59 @@ func TestRenderMergeDiagramPending(t *testing.T) {
 	}
 }
 
+func TestRenderMergeDiagramColored(t *testing.T) {
+	SetUnicode(true)
+	defer ResetUnicode()
+
+	out := RenderMergeDiagram(MergeDiagramOpts{
+		CurrentID:    "a1b2c3d4e5f6g7h8",
+		SourceID:     "i9j0k1l2m3n4o5p6",
+		MergeBaseID:  "q7r8s9t0u1v2w3x4",
+		MergedID:     "y5z6a7b8c9d0e1f2",
+		CurrentLabel: "my-workspace",
+		SourceLabel:  "feature",
+		Message:      "Merged feature",
+		Colorize:     true,
+	})
+
+	// All text content should be present (colors may be stripped in non-TTY)
+	for _, want := range []string{"my-workspace", "feature", "a1b2c3d4", "i9j0k1l2", "y5z6a7b8", "Merged feature", "(base: q7r8s9t0)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("colored diagram missing %q:\n%s", want, out)
+		}
+	}
+
+	lines := strings.Split(out, "\n")
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 lines, got %d:\n%s", len(lines), out)
+	}
+}
+
+func TestRenderMergeDiagramColoredPending(t *testing.T) {
+	SetUnicode(true)
+	defer ResetUnicode()
+
+	out := RenderMergeDiagram(MergeDiagramOpts{
+		CurrentID:     "a1b2c3d4e5f6g7h8",
+		SourceID:      "i9j0k1l2m3n4o5p6",
+		MergeBaseID:   "q7r8s9t0u1v2w3x4",
+		CurrentLabel:  "my-workspace",
+		SourceLabel:   "feature",
+		Message:       "Merged feature",
+		Pending:       true,
+		ConflictCount: 3,
+		Colorize:      true,
+	})
+
+	// Pending and conflict text should be present
+	if !strings.Contains(out, "(pending)") {
+		t.Errorf("colored pending diagram missing '(pending)':\n%s", out)
+	}
+	if !strings.Contains(out, "3 conflicts to resolve") {
+		t.Errorf("colored pending diagram missing conflict count:\n%s", out)
+	}
+}
+
 func TestShortID(t *testing.T) {
 	tests := []struct {
 		input string

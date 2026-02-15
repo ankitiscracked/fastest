@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 // MergeDiagramOpts configures the mini-diagram rendered after merge operations.
@@ -17,6 +19,7 @@ type MergeDiagramOpts struct {
 	Message       string // merge message (e.g. "Merged feature")
 	Pending       bool   // true when merge is incomplete (conflicts need resolution)
 	ConflictCount int    // number of conflicting files (shown when Pending is true)
+	Colorize      bool   // true to apply ANSI colors to diagram elements
 }
 
 type glyphs struct {
@@ -117,6 +120,18 @@ func RenderMergeDiagram(opts MergeDiagramOpts) string {
 	mergeCenter := (leftCenter + rightCenter) / 2
 	totalWidth := rightCenter + rightColW/2 + pad
 
+	if !opts.Colorize {
+		return renderMergePlain(opts, g, leftLabel, rightLabel, leftID, rightID, mergedID,
+			leftCenter, rightCenter, mergeCenter, totalWidth)
+	}
+	return renderMergeColored(opts, g, leftLabel, rightLabel, leftID, rightID, mergedID,
+		leftCenter, rightCenter, mergeCenter, totalWidth)
+}
+
+func renderMergePlain(opts MergeDiagramOpts, g glyphs,
+	leftLabel, rightLabel, leftID, rightID, mergedID string,
+	leftCenter, rightCenter, mergeCenter, totalWidth int) string {
+
 	var lines []string
 
 	// Labels
@@ -160,9 +175,114 @@ func RenderMergeDiagram(opts MergeDiagramOpts) string {
 	return strings.Join(lines, "\n")
 }
 
+func renderMergeColored(opts MergeDiagramOpts, g glyphs,
+	leftLabel, rightLabel, leftID, rightID, mergedID string,
+	leftCenter, rightCenter, mergeCenter, totalWidth int) string {
+
+	var lines []string
+
+	// Labels (green)
+	lines = append(lines, placeColoredLine(totalWidth,
+		coloredPlacement{ui.Green(leftLabel), len(leftLabel), leftCenter},
+		coloredPlacement{ui.Green(rightLabel), len(rightLabel), rightCenter},
+	))
+
+	// Vertical connectors (dim)
+	vertStr := string(g.vertical)
+	lines = append(lines, placeColoredLine(totalWidth,
+		coloredPlacement{ui.Dim(vertStr), 1, leftCenter},
+		coloredPlacement{ui.Dim(vertStr), 1, rightCenter},
+	))
+
+	// Short IDs (yellow)
+	lines = append(lines, placeColoredLine(totalWidth,
+		coloredPlacement{ui.Yellow(leftID), len(leftID), leftCenter},
+		coloredPlacement{ui.Yellow(rightID), len(rightID), rightCenter},
+	))
+
+	// Merge connector (dim)
+	connPlain := buildConnector(totalWidth, leftCenter, rightCenter, mergeCenter, g)
+	lines = append(lines, ui.Dim(connPlain))
+
+	// Merged snapshot ID
+	mergedDisplay := len(mergedID)
+	if opts.Pending {
+		mergedID = ui.Red(mergedID)
+	} else {
+		mergedID = ui.Yellow(mergedID)
+	}
+	lines = append(lines, placeColoredLine(totalWidth,
+		coloredPlacement{mergedID, mergedDisplay, mergeCenter},
+	))
+
+	// Message (bold)
+	if opts.Message != "" {
+		lines = append(lines, placeColoredLine(totalWidth,
+			coloredPlacement{ui.Bold(opts.Message), len(opts.Message), mergeCenter},
+		))
+	}
+
+	// Conflict info (red)
+	if opts.Pending && opts.ConflictCount > 0 {
+		conflictText := fmt.Sprintf("(%d conflicts to resolve)", opts.ConflictCount)
+		lines = append(lines, placeColoredLine(totalWidth,
+			coloredPlacement{ui.Red(conflictText), len(conflictText), mergeCenter},
+		))
+	}
+
+	// Base (dim)
+	if opts.MergeBaseID != "" {
+		baseText := "(base: " + shortID(opts.MergeBaseID) + ")"
+		lines = append(lines, placeColoredLine(totalWidth,
+			coloredPlacement{ui.Dim(baseText), len(baseText), mergeCenter},
+		))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 type placement struct {
 	text   string
 	center int
+}
+
+// coloredPlacement positions a possibly ANSI-colored string by its display width.
+type coloredPlacement struct {
+	text       string // may contain ANSI escape codes
+	displayLen int    // visible character count (without ANSI codes)
+	center     int    // target center column
+}
+
+// placeColoredLine builds a line by positioning colored text segments using
+// padding. Unlike placeLine, this handles ANSI escape codes correctly by
+// tracking display width separately from string length.
+func placeColoredLine(totalWidth int, items ...coloredPlacement) string {
+	// Sort items left to right by start position
+	type positioned struct {
+		text  string
+		start int
+		dispW int
+	}
+	parts := make([]positioned, len(items))
+	for i, item := range items {
+		parts[i] = positioned{
+			text:  item.text,
+			start: item.center - item.displayLen/2,
+			dispW: item.displayLen,
+		}
+	}
+
+	var sb strings.Builder
+	col := 0
+	for _, p := range parts {
+		if p.start > col {
+			sb.WriteString(strings.Repeat(" ", p.start-col))
+			col = p.start
+		}
+		sb.WriteString(p.text)
+		col += p.dispW
+	}
+	return sb.String()
 }
 
 // placeLine builds a line with one or more text strings centered at given positions.

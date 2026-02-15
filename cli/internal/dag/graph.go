@@ -3,6 +3,8 @@ package dag
 import (
 	"sort"
 	"strings"
+
+	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
 // SnapshotInfo is the minimal snapshot data needed for graph rendering.
@@ -25,8 +27,9 @@ type GraphRow struct {
 
 // GraphRenderer tracks column state and renders graph prefixes row by row.
 type GraphRenderer struct {
-	columns []string // each slot tracks the snapshot ID this column descends toward
-	g       glyphs
+	columns  []string // each slot tracks the snapshot ID this column descends toward
+	g        glyphs
+	Colorize bool // when true, apply ANSI colors to graph glyphs
 }
 
 // NewGraphRenderer creates a renderer using the active glyph set.
@@ -137,9 +140,9 @@ func (r *GraphRenderer) renderNodeLine(primaryCol int) string {
 	parts := make([]string, width)
 	for i := 0; i < width; i++ {
 		if i == primaryCol {
-			parts[i] = string(r.g.tee) // using ● for node; we'll define a node glyph
+			parts[i] = string(r.g.tee) // placeholder, replaced below
 		} else if i < len(r.columns) && r.columns[i] != "" {
-			parts[i] = string(r.g.vertical)
+			parts[i] = r.colorDim(string(r.g.vertical))
 		} else {
 			parts[i] = " "
 		}
@@ -147,9 +150,9 @@ func (r *GraphRenderer) renderNodeLine(primaryCol int) string {
 
 	// Replace the node marker with the proper glyph
 	if r.g.vertical == '│' {
-		parts[primaryCol] = "●"
+		parts[primaryCol] = r.colorYellow("●")
 	} else {
-		parts[primaryCol] = "*"
+		parts[primaryCol] = r.colorYellow("*")
 	}
 
 	return strings.TrimRight(strings.Join(parts, " "), " ")
@@ -168,7 +171,7 @@ func (r *GraphRenderer) renderMergeIn(primaryCol int, targetCols []int) string {
 	parts := make([]string, width)
 	for i := 0; i < width; i++ {
 		if i < len(r.columns) && r.columns[i] != "" {
-			parts[i] = string(r.g.vertical)
+			parts[i] = r.colorDim(string(r.g.vertical))
 		} else {
 			parts[i] = " "
 		}
@@ -179,25 +182,25 @@ func (r *GraphRenderer) renderMergeIn(primaryCol int, targetCols []int) string {
 	for _, col := range targetCols[1:] {
 		if col > primaryCol {
 			// Draw from col toward primary: replace chars between
-			parts[primaryCol] = string(r.g.vertical)
+			parts[primaryCol] = r.colorDim(string(r.g.vertical))
 			for i := primaryCol + 1; i < col; i++ {
-				parts[i] = string(r.g.horizontal)
+				parts[i] = r.colorDim(string(r.g.horizontal))
 			}
 			if r.g.vertical == '│' {
-				parts[col] = "╯"
+				parts[col] = r.colorDim("╯")
 			} else {
-				parts[col] = "/"
+				parts[col] = r.colorDim("/")
 			}
 		} else if col < primaryCol {
 			if r.g.vertical == '│' {
-				parts[col] = "╰"
+				parts[col] = r.colorDim("╰")
 			} else {
-				parts[col] = "\\"
+				parts[col] = r.colorDim("\\")
 			}
 			for i := col + 1; i < primaryCol; i++ {
-				parts[i] = string(r.g.horizontal)
+				parts[i] = r.colorDim(string(r.g.horizontal))
 			}
-			parts[primaryCol] = string(r.g.vertical)
+			parts[primaryCol] = r.colorDim(string(r.g.vertical))
 		}
 	}
 
@@ -217,7 +220,7 @@ func (r *GraphRenderer) renderForkOut(primaryCol int, newCols []int) string {
 	parts := make([]string, width)
 	for i := 0; i < width; i++ {
 		if i < len(r.columns) && r.columns[i] != "" {
-			parts[i] = string(r.g.vertical)
+			parts[i] = r.colorDim(string(r.g.vertical))
 		} else {
 			parts[i] = " "
 		}
@@ -227,36 +230,52 @@ func (r *GraphRenderer) renderForkOut(primaryCol int, newCols []int) string {
 	for _, col := range newCols {
 		if col > primaryCol {
 			if r.g.vertical == '│' {
-				parts[primaryCol] = "├"
+				parts[primaryCol] = r.colorDim("├")
 			} else {
-				parts[primaryCol] = "|"
+				parts[primaryCol] = r.colorDim("|")
 			}
 			for i := primaryCol + 1; i < col; i++ {
-				parts[i] = string(r.g.horizontal)
+				parts[i] = r.colorDim(string(r.g.horizontal))
 			}
 			if r.g.vertical == '│' {
-				parts[col] = "╮"
+				parts[col] = r.colorDim("╮")
 			} else {
-				parts[col] = "\\"
+				parts[col] = r.colorDim("\\")
 			}
 		} else if col < primaryCol {
 			if r.g.vertical == '│' {
-				parts[col] = "╭"
+				parts[col] = r.colorDim("╭")
 			} else {
-				parts[col] = "/"
+				parts[col] = r.colorDim("/")
 			}
 			for i := col + 1; i < primaryCol; i++ {
-				parts[i] = string(r.g.horizontal)
+				parts[i] = r.colorDim(string(r.g.horizontal))
 			}
 			if r.g.vertical == '│' {
-				parts[primaryCol] = "┤"
+				parts[primaryCol] = r.colorDim("┤")
 			} else {
-				parts[primaryCol] = "|"
+				parts[primaryCol] = r.colorDim("|")
 			}
 		}
 	}
 
 	return strings.TrimRight(strings.Join(parts, " "), " ")
+}
+
+// colorDim wraps s with dim color when Colorize is enabled.
+func (r *GraphRenderer) colorDim(s string) string {
+	if r.Colorize {
+		return ui.Dim(s)
+	}
+	return s
+}
+
+// colorYellow wraps s with yellow color when Colorize is enabled.
+func (r *GraphRenderer) colorYellow(s string) string {
+	if r.Colorize {
+		return ui.Yellow(s)
+	}
+	return s
 }
 
 // TopoSort performs a topological sort of snapshots (children before parents),

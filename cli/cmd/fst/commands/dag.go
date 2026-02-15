@@ -119,6 +119,7 @@ func runDag(limit int) error {
 
 	// Render graph
 	renderer := dag.NewGraphRenderer()
+	renderer.Colorize = true
 
 	for _, snapInfo := range sorted {
 		meta := allMetas[snapInfo.ID]
