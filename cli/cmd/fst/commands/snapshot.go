@@ -78,12 +78,12 @@ func runSnapshot(message string, agentMessage bool) error {
 
 	agentName := ""
 	if agentMessage {
-		preferredAgent, err := agent.GetPreferredAgent()
+		preferredAgent, err := deps.AgentGetPreferred()
 		if err != nil {
 			return err
 		}
 		fmt.Println("Generating message...")
-		summary, err := generateSnapshotSummary(ws.Root(), ws.Config(), preferredAgent)
+		summary, err := generateSnapshotSummary(ws.Root(), ws.Config(), preferredAgent, deps.AgentInvoke)
 		if err != nil {
 			return fmt.Errorf("failed to generate message: %w", err)
 		}
@@ -227,7 +227,7 @@ func CreateAutoSnapshot(message string) (string, error) {
 }
 
 // generateSnapshotSummary uses the coding agent to describe changes
-func generateSnapshotSummary(root string, cfg *config.ProjectConfig, preferredAgent *agent.Agent) (string, error) {
+func generateSnapshotSummary(root string, cfg *config.ProjectConfig, preferredAgent *agent.Agent, invoke agent.InvokeFunc) (string, error) {
 	if preferredAgent == nil {
 		return "", fmt.Errorf("no agent available")
 	}
@@ -268,7 +268,7 @@ func generateSnapshotSummary(root string, cfg *config.ProjectConfig, preferredAg
 	)
 
 	// Invoke agent for summary
-	summary, err := agent.InvokeSummary(preferredAgent, diffContext)
+	summary, err := agent.InvokeSummary(preferredAgent, diffContext, invoke)
 	if err != nil {
 		return "", err
 	}

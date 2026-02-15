@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
 	"github.com/anthropics/fastest/cli/internal/dag"
@@ -252,12 +251,12 @@ func buildOnDivergence(mode ConflictMode) func(backend.DivergenceInfo) (string, 
 		if len(mergeActions.conflicts) > 0 {
 			switch mode {
 			case ConflictModeAgent:
-				preferredAgent, err := agent.GetPreferredAgent()
+				preferredAgent, err := deps.AgentGetPreferred()
 				if err != nil {
 					return "", err
 				}
 				for _, conflict := range mergeActions.conflicts {
-					if err := resolveConflictWithAgent(div.WorkspaceRoot, tempDir, conflict, preferredAgent, baseManifest); err != nil {
+					if err := resolveConflictWithAgent(div.WorkspaceRoot, tempDir, conflict, preferredAgent, baseManifest, deps.AgentInvoke); err != nil {
 						return "", err
 					}
 				}

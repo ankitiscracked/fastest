@@ -99,7 +99,7 @@ func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, gene
 	// Generate LLM summary if requested and there are conflicts
 	var summaryText string
 	if generateSummary && report.TrueConflicts > 0 {
-		preferredAgent, err := agent.GetPreferredAgent()
+		preferredAgent, err := deps.AgentGetPreferred()
 		if err != nil {
 			fmt.Printf("Warning: %v\n", err)
 		} else {
@@ -109,7 +109,7 @@ func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, gene
 			conflictInfos := buildConflictInfos(report)
 			conflictContext := agent.BuildConflictContext(conflictInfos)
 
-			summaryText, err = agent.InvokeConflictSummary(preferredAgent, conflictContext)
+			summaryText, err = agent.InvokeConflictSummary(preferredAgent, conflictContext, deps.AgentInvoke)
 			if err != nil {
 				fmt.Printf("Warning: Failed to generate summary: %v\n", err)
 			}

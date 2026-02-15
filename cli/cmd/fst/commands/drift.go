@@ -204,7 +204,7 @@ func subtractConflicts(full, baseline *conflicts.Report) *conflictSummary {
 }
 
 func generateDriftSummary(ourName, theirName string, ourChanges, theirChanges *drift.Report, snapshotConflicts, dirtyConflicts *conflictSummary) string {
-	preferredAgent, err := agent.GetPreferredAgent()
+	preferredAgent, err := deps.AgentGetPreferred()
 	if err != nil {
 		fmt.Printf("Warning: %v\n", err)
 		return ""
@@ -237,7 +237,7 @@ func generateDriftSummary(ourName, theirName string, ourChanges, theirChanges *d
 		snapshotList, dirtyList,
 	)
 
-	summaryText, err := agent.InvokeDriftSummary(preferredAgent, context)
+	summaryText, err := agent.InvokeDriftSummary(preferredAgent, context, deps.AgentInvoke)
 	if err != nil {
 		fmt.Printf("Warning: Failed to generate summary: %v\n", err)
 		return ""

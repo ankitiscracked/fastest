@@ -191,7 +191,7 @@ func applyChange(currentRoot, sourceRoot string, action mergeAction) error {
 	return os.WriteFile(currentPath, content, mode)
 }
 
-func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction, ag *agent.Agent, baseManifest *manifest.Manifest) error {
+func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction, ag *agent.Agent, baseManifest *manifest.Manifest, invoke agent.InvokeFunc) error {
 	currentPath := filepath.Join(currentRoot, action.path)
 
 	currentContent, err := os.ReadFile(currentPath)
@@ -218,6 +218,7 @@ func resolveConflictWithAgent(currentRoot, sourceRoot string, action mergeAction
 		string(currentContent),
 		string(sourceContent),
 		action.path,
+		invoke,
 	)
 	if err != nil {
 		return err

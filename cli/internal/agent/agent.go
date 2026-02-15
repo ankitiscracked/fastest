@@ -288,8 +288,11 @@ func (m agentChoiceModel) View() string {
 	return b.String()
 }
 
+// InvokeFunc is the function signature for invoking an agent with a prompt.
+type InvokeFunc func(a *Agent, prompt string) (string, error)
+
 // InvokeSummary invokes an agent to generate a summary of changes
-func InvokeSummary(agent *Agent, diffContext string) (string, error) {
+func InvokeSummary(a *Agent, diffContext string, invoke InvokeFunc) (string, error) {
 	prompt := fmt.Sprintf(`Summarize these code changes in 1-2 concise sentences. Focus on WHAT changed and WHY it matters, not listing files.
 
 Changes:
@@ -297,11 +300,11 @@ Changes:
 
 Summary:`, diffContext)
 
-	return invokeAgent(agent, prompt)
+	return invoke(a, prompt)
 }
 
 // InvokeConflictSummary invokes an agent to summarize conflicts
-func InvokeConflictSummary(agent *Agent, conflictContext string) (string, error) {
+func InvokeConflictSummary(a *Agent, conflictContext string, invoke InvokeFunc) (string, error) {
 	prompt := fmt.Sprintf(`Summarize these git-style conflicts in 2-3 concise sentences. Describe what's conflicting and suggest resolution strategies.
 
 Conflicts:
@@ -309,11 +312,11 @@ Conflicts:
 
 Summary:`, conflictContext)
 
-	return invokeAgent(agent, prompt)
+	return invoke(a, prompt)
 }
 
 // InvokeDriftSummary generates a risk-focused summary of workspace drift
-func InvokeDriftSummary(agent *Agent, driftContext string) (string, error) {
+func InvokeDriftSummary(a *Agent, driftContext string, invoke InvokeFunc) (string, error) {
 	prompt := fmt.Sprintf(`Analyze the drift between two workspaces and assess the risk of merge pain.
 Focus on:
 1. How far the workspaces have drifted apart (scope and severity)
@@ -327,7 +330,7 @@ Drift data:
 
 Assessment:`, driftContext)
 
-	return invokeAgent(agent, prompt)
+	return invoke(a, prompt)
 }
 
 // FileConflictSummary represents aggregated conflict info for a single file
@@ -417,7 +420,7 @@ type MergeResult struct {
 }
 
 // InvokeMerge invokes an agent to merge conflicting files
-func InvokeMerge(agent *Agent, baseContent, currentContent, sourceContent, filename string) (*MergeResult, error) {
+func InvokeMerge(a *Agent, baseContent, currentContent, sourceContent, filename string, invoke InvokeFunc) (*MergeResult, error) {
 	prompt := fmt.Sprintf(`Merge these two versions of %s. Both diverged from a common base.
 
 === BASE VERSION (common ancestor) ===
@@ -440,7 +443,7 @@ Example format:
 ---MERGED CODE---
 <merged file content here>`, filename, baseContent, currentContent, sourceContent)
 
-	output, err := invokeAgent(agent, prompt)
+	output, err := invoke(a, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -490,8 +493,8 @@ func parseMergeOutput(output string) (*MergeResult, error) {
 	return result, nil
 }
 
-// invokeAgent runs the agent with a prompt and returns the response
-func invokeAgent(agent *Agent, prompt string) (string, error) {
+// Invoke runs the agent with a prompt and returns the response.
+func Invoke(agent *Agent, prompt string) (string, error) {
 	switch agent.Name {
 	case "claude":
 		return invokeClaude(prompt)
@@ -647,9 +650,9 @@ func parseAiderOutput(output string) string {
 }
 
 // InteractivePrompt sends a prompt and reads response interactively (for complex operations)
-func InteractivePrompt(agent *Agent, prompt string) (string, error) {
-	fmt.Printf("Invoking %s...\n", agent.Name)
-	return invokeAgent(agent, prompt)
+func InteractivePrompt(a *Agent, prompt string) (string, error) {
+	fmt.Printf("Invoking %s...\n", a.Name)
+	return Invoke(a, prompt)
 }
 
 // BuildDiffContext creates a context string from drift report for LLM summarization

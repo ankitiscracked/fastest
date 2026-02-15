@@ -259,10 +259,10 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 	if dryRun {
 		printCloudMergePlan(mergeActions)
 		if dryRunSummary && len(mergeActions.conflicts) > 0 {
-			preferredAgent, err := agent.GetPreferredAgent()
+			preferredAgent, err := deps.AgentGetPreferred()
 			if err == nil {
 				conflictContext := buildSyncConflictContext(mergeActions.conflicts)
-				summaryText, err := agent.InvokeConflictSummary(preferredAgent, conflictContext)
+				summaryText, err := agent.InvokeConflictSummary(preferredAgent, conflictContext, deps.AgentInvoke)
 				if err == nil && summaryText != "" {
 					fmt.Println()
 					fmt.Println("Summary:")
@@ -297,12 +297,12 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 	if len(mergeActions.conflicts) > 0 {
 		switch mode {
 		case ConflictModeAgent:
-			preferredAgent, err := agent.GetPreferredAgent()
+			preferredAgent, err := deps.AgentGetPreferred()
 			if err != nil {
 				return err
 			}
 			for _, conflict := range mergeActions.conflicts {
-				if err := resolveConflictWithAgent(root, tempDir, conflict, preferredAgent, baseManifest); err != nil {
+				if err := resolveConflictWithAgent(root, tempDir, conflict, preferredAgent, baseManifest, deps.AgentInvoke); err != nil {
 					return err
 				}
 			}

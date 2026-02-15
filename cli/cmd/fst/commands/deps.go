@@ -3,6 +3,7 @@ package commands
 import (
 	"time"
 
+	"github.com/anthropics/fastest/cli/internal/agent"
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/auth"
 	"github.com/anthropics/fastest/cli/internal/config"
@@ -19,18 +20,23 @@ type Deps struct {
 	OpenBrowser     func(string) error
 	Sleep           func(time.Duration)
 	Now             func() time.Time
+
+	AgentGetPreferred func() (*agent.Agent, error)
+	AgentInvoke       agent.InvokeFunc
 }
 
 var defaultDeps = Deps{
-	AuthGetToken:    auth.GetToken,
-	AuthSaveToken:   auth.SaveToken,
-	AuthClearToken:  auth.ClearToken,
-	AuthFormatError: auth.FormatKeyringError,
-	NewAPIClient:    newAPIClient,
-	UploadSnapshot:  uploadLatestSnapshotToCloud,
-	OpenBrowser:     openBrowser,
-	Sleep:           time.Sleep,
-	Now:             time.Now,
+	AuthGetToken:      auth.GetToken,
+	AuthSaveToken:     auth.SaveToken,
+	AuthClearToken:    auth.ClearToken,
+	AuthFormatError:   auth.FormatKeyringError,
+	NewAPIClient:      newAPIClient,
+	UploadSnapshot:    uploadLatestSnapshotToCloud,
+	OpenBrowser:       openBrowser,
+	Sleep:             time.Sleep,
+	Now:               time.Now,
+	AgentGetPreferred: agent.GetPreferredAgent,
+	AgentInvoke:       agent.Invoke,
 }
 
 var deps = defaultDeps
@@ -62,6 +68,12 @@ func normalizeDeps(d Deps) Deps {
 	}
 	if d.Now == nil {
 		d.Now = defaultDeps.Now
+	}
+	if d.AgentGetPreferred == nil {
+		d.AgentGetPreferred = defaultDeps.AgentGetPreferred
+	}
+	if d.AgentInvoke == nil {
+		d.AgentInvoke = defaultDeps.AgentInvoke
 	}
 	return d
 }

@@ -240,14 +240,15 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 		applyOpts.Mode = workspace.ConflictModeManual
 	case ConflictModeAgent:
 		applyOpts.Mode = workspace.ConflictModeManual // fallback if agent fails
-		preferredAgent, err := agent.GetPreferredAgent()
+		preferredAgent, err := deps.AgentGetPreferred()
 		if err != nil {
 			fmt.Printf("Warning: %v\n", err)
 			fmt.Println("Falling back to manual conflict markers...")
 		} else {
 			fmt.Printf("Using %s for conflict resolution...\n", preferredAgent.Name)
+			invokeFunc := deps.AgentInvoke
 			applyOpts.Resolver = func(path string, current, source, base []byte) ([]byte, error) {
-				result, err := agent.InvokeMerge(preferredAgent, string(base), string(current), string(source), path)
+				result, err := agent.InvokeMerge(preferredAgent, string(base), string(current), string(source), path, invokeFunc)
 				if err != nil {
 					return nil, err
 				}
@@ -417,14 +418,14 @@ func printConflictDetails(ws *workspace.Workspace, sourceInfo *store.WorkspaceIn
 	}
 
 	if agentSummary {
-		preferredAgent, err := agent.GetPreferredAgent()
+		preferredAgent, err := deps.AgentGetPreferred()
 		if err != nil {
 			fmt.Printf("\nWarning: %v\n", err)
 		} else {
 			fmt.Printf("\nGenerating summary with %s...\n", preferredAgent.Name)
 			conflictInfos := buildConflictInfosFromReport(conflictReport)
 			conflictContext := agent.BuildConflictContext(conflictInfos)
-			summaryText, err := agent.InvokeConflictSummary(preferredAgent, conflictContext)
+			summaryText, err := agent.InvokeConflictSummary(preferredAgent, conflictContext, deps.AgentInvoke)
 			if err != nil {
 				fmt.Printf("Warning: Failed to generate summary: %v\n", err)
 			} else {
