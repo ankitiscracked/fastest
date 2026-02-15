@@ -295,15 +295,18 @@ func buildOnDivergence(mode ConflictMode) func(backend.DivergenceInfo) (string, 
 			return "", fmt.Errorf("failed to read merged snapshot ID: %w", err)
 		}
 
+		hasConflicts := mode == ConflictModeManual && len(mergeActions.conflicts) > 0
 		fmt.Println()
 		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
-			CurrentID:    div.LocalHead,
-			SourceID:     div.RemoteHead,
-			MergeBaseID:  div.MergeBase,
-			MergedID:     wsCfg.CurrentSnapshotID,
-			CurrentLabel: "local",
-			SourceLabel:  "remote",
-			Message:      "Sync merge",
+			CurrentID:     div.LocalHead,
+			SourceID:      div.RemoteHead,
+			MergeBaseID:   div.MergeBase,
+			MergedID:      wsCfg.CurrentSnapshotID,
+			CurrentLabel:  "local",
+			SourceLabel:   "remote",
+			Message:       "Sync merge",
+			Pending:       hasConflicts,
+			ConflictCount: len(mergeActions.conflicts),
 		}))
 
 		return wsCfg.CurrentSnapshotID, nil

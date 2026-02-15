@@ -1,19 +1,22 @@
 package dag
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
 
 // MergeDiagramOpts configures the mini-diagram rendered after merge operations.
 type MergeDiagramOpts struct {
-	CurrentID    string // left head snapshot ID (will be truncated to 8 chars)
-	SourceID     string // right head snapshot ID (will be truncated to 8 chars)
-	MergeBaseID  string // common ancestor snapshot ID (may be empty)
-	MergedID     string // result snapshot ID (empty for dry-run)
-	CurrentLabel string // left column label (e.g. workspace name)
-	SourceLabel  string // right column label (e.g. source workspace or "remote")
-	Message      string // merge message (e.g. "Merged feature")
+	CurrentID     string // left head snapshot ID (will be truncated to 8 chars)
+	SourceID      string // right head snapshot ID (will be truncated to 8 chars)
+	MergeBaseID   string // common ancestor snapshot ID (may be empty)
+	MergedID      string // result snapshot ID (empty for dry-run or pending)
+	CurrentLabel  string // left column label (e.g. workspace name)
+	SourceLabel   string // right column label (e.g. source workspace or "remote")
+	Message       string // merge message (e.g. "Merged feature")
+	Pending       bool   // true when merge is incomplete (conflicts need resolution)
+	ConflictCount int    // number of conflicting files (shown when Pending is true)
 }
 
 type glyphs struct {
@@ -93,8 +96,12 @@ func RenderMergeDiagram(opts MergeDiagramOpts) string {
 	leftID := shortID(opts.CurrentID)
 	rightID := shortID(opts.SourceID)
 
-	mergedID := shortID(opts.MergedID)
-	if mergedID == "" {
+	var mergedID string
+	if opts.Pending {
+		mergedID = "(pending)"
+	} else if opts.MergedID != "" {
+		mergedID = shortID(opts.MergedID)
+	} else {
 		mergedID = "merge?"
 	}
 
@@ -136,6 +143,12 @@ func RenderMergeDiagram(opts MergeDiagramOpts) string {
 	// Message
 	if opts.Message != "" {
 		lines = append(lines, placeLine(totalWidth, placement{opts.Message, mergeCenter}))
+	}
+
+	// Conflict info for pending merges
+	if opts.Pending && opts.ConflictCount > 0 {
+		conflictText := fmt.Sprintf("(%d conflicts to resolve)", opts.ConflictCount)
+		lines = append(lines, placeLine(totalWidth, placement{conflictText, mergeCenter}))
 	}
 
 	// Base

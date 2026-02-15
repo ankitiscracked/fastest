@@ -211,6 +211,52 @@ func TestRenderMergeDiagramLongLabels(t *testing.T) {
 	}
 }
 
+func TestRenderMergeDiagramPending(t *testing.T) {
+	SetUnicode(true)
+	defer ResetUnicode()
+
+	out := RenderMergeDiagram(MergeDiagramOpts{
+		CurrentID:     "a1b2c3d4e5f6g7h8",
+		SourceID:      "i9j0k1l2m3n4o5p6",
+		MergeBaseID:   "q7r8s9t0u1v2w3x4",
+		CurrentLabel:  "my-workspace",
+		SourceLabel:   "feature",
+		Message:       "Merged feature",
+		Pending:       true,
+		ConflictCount: 3,
+	})
+
+	// Should show "(pending)" instead of a snapshot ID
+	if !strings.Contains(out, "(pending)") {
+		t.Errorf("pending diagram missing '(pending)':\n%s", out)
+	}
+
+	// Should show conflict count
+	if !strings.Contains(out, "3 conflicts to resolve") {
+		t.Errorf("pending diagram missing conflict count:\n%s", out)
+	}
+
+	// Should still show labels, IDs, connector, message, base
+	if !strings.Contains(out, "my-workspace") {
+		t.Errorf("pending diagram missing left label:\n%s", out)
+	}
+	if !strings.Contains(out, "feature") {
+		t.Errorf("pending diagram missing right label:\n%s", out)
+	}
+	if !strings.Contains(out, "Merged feature") {
+		t.Errorf("pending diagram missing message:\n%s", out)
+	}
+	if !strings.Contains(out, "(base: q7r8s9t0)") {
+		t.Errorf("pending diagram missing base:\n%s", out)
+	}
+
+	lines := strings.Split(out, "\n")
+	// labels, vertical, IDs, connector, (pending), message, conflicts, base = 8 lines
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 lines, got %d:\n%s", len(lines), out)
+	}
+}
+
 func TestShortID(t *testing.T) {
 	tests := []struct {
 		input string

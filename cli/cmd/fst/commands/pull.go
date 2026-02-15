@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 	"github.com/anthropics/fastest/cli/internal/workspace"
 )
@@ -229,7 +230,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 		return err
 	}
 
-	baseManifest, _, err := getSyncMergeBase(client, root, latestLocalID, snapshotID)
+	baseManifest, mergeBaseID, err := getSyncMergeBase(client, root, latestLocalID, snapshotID)
 	if err != nil {
 		return err
 	}
@@ -269,6 +270,20 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 				}
 			}
 		}
+		sourceLabel := workspaceName
+		if sourceLabel == "" {
+			sourceLabel = "remote"
+		}
+		fmt.Println()
+		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+			CurrentID:     latestLocalID,
+			SourceID:      snapshotID,
+			MergeBaseID:   mergeBaseID,
+			CurrentLabel:  "local",
+			SourceLabel:   sourceLabel,
+			Message:       "Pull merge (dry run)",
+			ConflictCount: len(mergeActions.conflicts),
+		}))
 		return nil
 	}
 
@@ -296,7 +311,22 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 					return err
 				}
 			}
+			sourceLabel := workspaceName
+			if sourceLabel == "" {
+				sourceLabel = "remote"
+			}
 			fmt.Println("Conflicts written with markers. Resolve them, then run 'fst snapshot'.")
+			fmt.Println()
+			fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+				CurrentID:     latestLocalID,
+				SourceID:      snapshotID,
+				MergeBaseID:   mergeBaseID,
+				CurrentLabel:  "local",
+				SourceLabel:   sourceLabel,
+				Message:       "Pull merge",
+				Pending:       true,
+				ConflictCount: len(mergeActions.conflicts),
+			}))
 			return nil
 		case ConflictModeTheirs:
 			for _, conflict := range mergeActions.conflicts {

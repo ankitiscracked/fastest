@@ -315,13 +315,15 @@ func runMerge(cmd *cobra.Command, sourceName string, mode ConflictMode, dryRun b
 	// DAG diagram
 	fmt.Println()
 	fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
-		CurrentID:    currentSnapshotID,
-		SourceID:     sourceSnapshotID,
-		MergeBaseID:  plan.MergeBaseID,
-		MergedID:     mergedSnapshotID,
-		CurrentLabel: ws.WorkspaceName(),
-		SourceLabel:  sourceInfo.WorkspaceName,
-		Message:      fmt.Sprintf("Merged %s", sourceInfo.WorkspaceName),
+		CurrentID:     currentSnapshotID,
+		SourceID:      sourceSnapshotID,
+		MergeBaseID:   plan.MergeBaseID,
+		MergedID:      mergedSnapshotID,
+		CurrentLabel:  ws.WorkspaceName(),
+		SourceLabel:   sourceInfo.WorkspaceName,
+		Message:       fmt.Sprintf("Merged %s", sourceInfo.WorkspaceName),
+		Pending:       len(result.Conflicts) > 0,
+		ConflictCount: len(result.Conflicts),
 	}))
 
 	if len(result.Conflicts) > 0 {

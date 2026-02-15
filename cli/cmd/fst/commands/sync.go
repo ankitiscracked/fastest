@@ -209,6 +209,16 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 				}
 			}
 		}
+		fmt.Println()
+		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+			CurrentID:     localHead,
+			SourceID:      remoteHead,
+			MergeBaseID:   mergeBaseID,
+			CurrentLabel:  "local",
+			SourceLabel:   "remote",
+			Message:       "Sync merge (dry run)",
+			ConflictCount: len(mergeActions.conflicts),
+		}))
 		return nil
 	}
 
@@ -237,6 +247,17 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 				}
 			}
 			fmt.Println("Conflicts written with markers. Resolve them, then run 'fst snapshot'.")
+			fmt.Println()
+			fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+				CurrentID:     localHead,
+				SourceID:      remoteHead,
+				MergeBaseID:   mergeBaseID,
+				CurrentLabel:  "local",
+				SourceLabel:   "remote",
+				Message:       "Sync merge",
+				Pending:       true,
+				ConflictCount: len(mergeActions.conflicts),
+			}))
 			return nil
 		case ConflictModeTheirs:
 			for _, conflict := range mergeActions.conflicts {
