@@ -42,7 +42,7 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst restore [files...]` | Restore files from a previous snapshot | `restore.go` |
 
 **`snapshot` flags:** `--message, -m`, `--agent-summary`, `--agent`
-**`log` flags:** `--limit, -n` (default 10), `--all, -a`
+**`log` flags:** `--limit, -n` (default 10), `--all, -a`, `--graph, -g`
 **`restore` flags:** `--to`, `--to-base`, `--dry-run`
 
 ## History Rewriting
@@ -68,6 +68,7 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst pull [workspace]` | Pull changes from another workspace | `pull.go` |
 | `fst sync` | Sync with the upstream workspace | `sync.go` |
 | `fst status` | Show workspace status with drift summary | `status.go` |
+| `fst dag` | Show project-wide snapshot DAG | `dag.go` |
 | `fst info` | Show workspace or project info (context-aware) | `info.go` |
 | `fst info workspaces` | `ws` | List all workspaces for the current project | `info.go` |
 | `fst info workspace [name\|id]` | | Show details for a specific workspace | `info.go` |
@@ -78,6 +79,7 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 **`diff` flags:** `--context, -C` (default 3), `--no-color`, `--names-only`
 **`pull` flags:** `--snapshot`, `--hard`, `--manual`, `--theirs`, `--ours`, `--dry-run`, `--agent-summary`
 **`sync` flags:** `--manual`, `--theirs`, `--ours`, `--files`, `--dry-run`, `--agent-summary`, `--no-snapshot`
+**`dag` flags:** `--limit, -n` (default 20)
 **`status` flags:** `--json`
 **`info` flags:** `--json`
 **`info workspace` flags:** `--json`

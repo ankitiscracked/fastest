@@ -18,11 +18,14 @@ Internal packages:
 | `auth` | `cli/internal/auth/` | OS keychain token storage via `go-keyring` |
 | `drift` | `cli/internal/drift/` | Drift computation between manifests |
 | `conflicts` | `cli/internal/conflicts/` | Line-level three-way conflict detection |
-| `dag` | `cli/internal/dag/` | Snapshot DAG traversal and merge-base (common ancestor) via BFS |
+| `dag` | `cli/internal/dag/` | DAG traversal, merge-base via BFS, graph rendering, merge diagrams |
 | `agent` | `cli/internal/agent/` | Local coding agent integration (Claude, Aider, etc.) |
 | `ignore` | `cli/internal/ignore/` | `.fstignore` pattern matching |
 | `store` | `cli/internal/store/` | Project-level workspace registry, atomic file I/O |
 | `workspace` | `cli/internal/workspace/` | Workspace lifecycle, locking, snapshot operations |
+| `gitutil` | `cli/internal/gitutil/` | Low-level git command execution helpers |
+| `gitstore` | `cli/internal/gitstore/` | Git-based blob/snapshot storage and export |
+| `backend` | `cli/internal/backend/` | Pluggable storage backend abstraction (git, GitHub) |
 
 ### API (`api/`)
 

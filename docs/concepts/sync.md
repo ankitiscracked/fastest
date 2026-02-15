@@ -42,9 +42,11 @@ Sync is a bidirectional operation for the same workspace's local and remote stat
 6. Create a merge snapshot with both local and remote heads as parents
 7. Upload the merged snapshot to the cloud
 
-The merge base finder for sync (`getSyncMergeBaseManifest`) differs from the local DAG walker: it walks the local snapshot chain in memory, then traverses the remote chain via `client.GetSnapshot` API calls until it finds an intersection.
+The merge base finder for sync (`getSyncMergeBase`) differs from the local DAG walker: it walks the local snapshot chain in memory, then traverses the remote chain via `client.GetSnapshot` API calls until it finds an intersection. It returns the base manifest, the merge base ID, and any error.
 
-Implementation: `cli/cmd/fst/commands/sync.go` (`runSync`, `getSyncMergeBaseManifest`).
+After a successful sync merge, a mini DAG diagram is printed showing the local and remote heads converging into the merged snapshot. When conflicts require manual resolution, the diagram shows `(pending)` with a conflict count. The `--dry-run` flag also displays a preview diagram.
+
+Implementation: `cli/cmd/fst/commands/sync.go` (`runSync`, `getSyncMergeBase`).
 
 ## Conflict Resolution
 

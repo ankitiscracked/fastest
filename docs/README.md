@@ -55,7 +55,7 @@ fst git import <repo-path>
 | `fst workspace init` | Initialize a workspace with `.fst/` directory |
 | `fst workspace create` | Create a new workspace under a project |
 | `fst snapshot` | Capture current state as an immutable snapshot |
-| `fst status` | Show workspace status and drift summary |
+| `fst status` | Show workspace status, drift summary, and merge indicator |
 | `fst drift` | Compare workspaces with DAG-based ancestor detection |
 | `fst merge` | Three-way merge from another workspace |
 | `fst diff` | Line-level content differences between workspaces |
@@ -65,7 +65,8 @@ fst git import <repo-path>
 | `fst pull` | Pull latest snapshot from cloud |
 | `fst login` / `fst logout` | Authenticate with Fastest cloud |
 | `fst whoami` | Show current user |
-| `fst log` | Show snapshot history |
+| `fst log` | Show snapshot history (`--graph` for DAG visualization) |
+| `fst dag` | Show project-wide snapshot DAG |
 | `fst info` | Show workspace or project details |
 | `fst info workspaces` | List all workspaces for a project |
 | `fst info workspace` | Show details for a specific workspace |
@@ -118,7 +119,7 @@ tests/e2e/     End-to-end bash workflow tests
 
 ### UX improvements
 
-- [ ] `status` -- no clean/dirty indicator, no upstream divergence info. Most-used command should surface more at a glance
+- [ ] `status` -- no clean/dirty indicator, no upstream divergence info. Now shows `[merge]` indicator on merge snapshots
 - [ ] Remove deprecated `conflicts` command (replaced by `merge --dry-run`)
 
 ### Cleanup

@@ -106,7 +106,9 @@ Options:
 
 `fst log` displays the snapshot chain starting from `current_snapshot_id`, walking backwards through `parent_snapshot_ids[0]`. Use `--all` to show all snapshots sorted by time regardless of chain membership. Output includes shortened IDs, relative timestamps, file counts, sizes, agent tags, and messages.
 
-Implementation: `cli/cmd/fst/commands/log.go` (`walkSnapshotChain`).
+Use `--graph` / `-g` to display a git-log-style DAG visualization alongside the log entries. This follows all parent links (not just first-parent), topologically sorts the results, and renders column-based graph lines showing merges and forks. The `fst dag` command provides a similar project-wide DAG view across all workspaces.
+
+Implementation: `cli/cmd/fst/commands/log.go` (`walkSnapshotChain`, `runLogGraph`), `cli/internal/dag/graph.go` (`GraphRenderer`, `TopoSort`).
 
 ### TODO
 

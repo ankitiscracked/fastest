@@ -113,6 +113,35 @@ Options:
 
 Implementation: `cli/cmd/fst/commands/diff.go` (`runDiff`).
 
+## DAG Diagrams
+
+After a merge completes, a mini DAG diagram is printed showing the two input heads converging into the merged snapshot:
+
+```
+  my-workspace      feature
+       │                │
+   a1b2c3d4        i9j0k1l2
+       ╰────────┬───────╯
+            y5z6a7b8
+         Merged feature
+       (base: q7r8s9t0)
+```
+
+When conflicts require manual resolution (`--manual`), the diagram shows a `(pending)` state with the conflict count instead of a merged snapshot ID:
+
+```
+  my-workspace      feature
+       │                │
+   a1b2c3d4        i9j0k1l2
+       ╰────────┬───────╯
+           (pending)
+         Merged feature
+    (3 conflicts to resolve)
+       (base: q7r8s9t0)
+```
+
+The `--dry-run` flag also shows a diagram with `merge?` as the merged snapshot placeholder. Diagrams use Unicode box-drawing characters when the terminal supports UTF-8, falling back to ASCII otherwise.
+
 ## Merge Safety
 
 - The merge aborts if uncommitted local changes overlap with files the merge would touch
