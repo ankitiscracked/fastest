@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,11 +58,20 @@ func runStatus(jsonOutput bool) error {
 	// Use workspace's current snapshot, not project-wide latest
 	latestSnapshotID := cfg.CurrentSnapshotID
 	latestSnapshotTime := ""
+	latestIsMerge := false
 	if latestSnapshotID != "" {
 		snapshotsDir, _ := config.GetSnapshotsDir()
 		metaPath := filepath.Join(snapshotsDir, latestSnapshotID+".meta.json")
 		if info, err := os.Stat(metaPath); err == nil {
 			latestSnapshotTime = formatTimeAgo(info.ModTime())
+		}
+		if data, readErr := os.ReadFile(metaPath); readErr == nil {
+			var meta struct {
+				ParentSnapshotIDs []string `json:"parent_snapshot_ids"`
+			}
+			if json.Unmarshal(data, &meta) == nil && len(meta.ParentSnapshotIDs) >= 2 {
+				latestIsMerge = true
+			}
 		}
 	}
 
@@ -87,13 +97,13 @@ func runStatus(jsonOutput bool) error {
 	}
 
 	if jsonOutput {
-		return printStatusJSON(cfg, root, driftReport, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime)
+		return printStatusJSON(cfg, root, driftReport, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime, latestIsMerge)
 	}
 
-	return printStatusHuman(cfg, root, driftReport, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime)
+	return printStatusHuman(cfg, root, driftReport, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime, latestIsMerge)
 }
 
-func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string) error {
+func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string, latestIsMerge bool) error {
 	fmt.Printf("Workspace: %s\n", ui.Bold(cfg.WorkspaceName))
 	fmt.Printf("ID:        %s\n", cfg.WorkspaceID)
 	fmt.Printf("Path:      %s\n", root)
@@ -115,6 +125,9 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 		fmt.Printf("Latest:    %s", shortSnapshotIDs[latestSnapshotID])
 		if latestSnapshotTime != "" {
 			fmt.Printf(" (%s)", latestSnapshotTime)
+		}
+		if latestIsMerge {
+			fmt.Printf(" %s", ui.Cyan("[merge]"))
 		}
 		fmt.Println()
 	}
@@ -155,7 +168,7 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 	return nil
 }
 
-func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string) error {
+func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string, latestIsMerge bool) error {
 	fmt.Println("{")
 	fmt.Printf("  \"workspace_name\": %q,\n", cfg.WorkspaceName)
 	fmt.Printf("  \"workspace_id\": %q,\n", cfg.WorkspaceID)
@@ -163,6 +176,7 @@ func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.
 	fmt.Printf("  \"mode\": %q,\n", cfg.Mode)
 	fmt.Printf("  \"latest_snapshot_id\": %q,\n", latestSnapshotID)
 	fmt.Printf("  \"latest_snapshot_time\": %q,\n", latestSnapshotTime)
+	fmt.Printf("  \"latest_is_merge\": %t,\n", latestIsMerge)
 	fmt.Printf("  \"base_snapshot_id\": %q,\n", cfg.BaseSnapshotID)
 	if upstreamName != "" {
 		fmt.Printf("  \"upstream\": %q,\n", upstreamName)

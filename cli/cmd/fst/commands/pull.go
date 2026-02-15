@@ -229,7 +229,7 @@ func runPull(workspaceName string, snapshotID string, hard bool, mode ConflictMo
 		return err
 	}
 
-	baseManifest, err := getSyncMergeBaseManifest(client, root, latestLocalID, snapshotID)
+	baseManifest, _, err := getSyncMergeBase(client, root, latestLocalID, snapshotID)
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/anthropics/fastest/cli/internal/api"
 	"github.com/anthropics/fastest/cli/internal/backend"
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/manifest"
 	"github.com/anthropics/fastest/cli/internal/workspace"
 )
@@ -154,7 +155,7 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		return err
 	}
 
-	baseManifest, err := getSyncMergeBaseManifest(client, root, localHead, remoteHead)
+	baseManifest, mergeBaseID, err := getSyncMergeBase(client, root, localHead, remoteHead)
 	if err != nil {
 		return err
 	}
@@ -261,6 +262,21 @@ func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary 
 		return err
 	}
 
+	// Show merge diagram
+	newCfg, _ := config.Load()
+	if newCfg != nil && newCfg.CurrentSnapshotID != "" {
+		fmt.Println()
+		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
+			CurrentID:    localHead,
+			SourceID:     remoteHead,
+			MergeBaseID:  mergeBaseID,
+			MergedID:     newCfg.CurrentSnapshotID,
+			CurrentLabel: "local",
+			SourceLabel:  "remote",
+			Message:      "Sync merge",
+		}))
+	}
+
 	return deps.UploadSnapshot(client, root, cfg)
 }
 
@@ -300,9 +316,10 @@ func filterMergeActions(actions *mergeActions, files []string) *mergeActions {
 	return filtered
 }
 
-func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead string) (*manifest.Manifest, error) {
+func getSyncMergeBase(client *api.Client, root, localHead, remoteHead string) (baseManifest *manifest.Manifest, mergeBaseID string, err error) {
+	empty := &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
 	if localHead == "" || remoteHead == "" {
-		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
+		return empty, "", nil
 	}
 
 	localAncestors := map[string]struct{}{}
@@ -312,22 +329,21 @@ func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead st
 			break
 		}
 		localAncestors[current] = struct{}{}
-		parent, err := config.SnapshotPrimaryParentIDAt(root, current)
-		if err != nil {
+		parent, parentErr := config.SnapshotPrimaryParentIDAt(root, current)
+		if parentErr != nil {
 			break
 		}
 		current = parent
 	}
 
-	mergeBaseID := ""
 	remoteCurrent := remoteHead
 	for remoteCurrent != "" {
 		if _, ok := localAncestors[remoteCurrent]; ok {
 			mergeBaseID = remoteCurrent
 			break
 		}
-		snap, err := client.GetSnapshot(remoteCurrent)
-		if err != nil {
+		snap, snapErr := client.GetSnapshot(remoteCurrent)
+		if snapErr != nil {
 			break
 		}
 		if len(snap.ParentSnapshotIDs) == 0 {
@@ -337,22 +353,26 @@ func getSyncMergeBaseManifest(client *api.Client, root, localHead, remoteHead st
 	}
 
 	if mergeBaseID == "" {
-		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
+		return empty, "", nil
 	}
 
-	if localManifest, err := loadManifestByID(root, mergeBaseID); err == nil {
-		return localManifest, nil
+	if localManifest, loadErr := loadManifestByID(root, mergeBaseID); loadErr == nil {
+		return localManifest, mergeBaseID, nil
 	}
 
-	baseSnap, err := client.GetSnapshot(mergeBaseID)
-	if err != nil {
-		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
+	baseSnap, snapErr := client.GetSnapshot(mergeBaseID)
+	if snapErr != nil {
+		return empty, mergeBaseID, nil
 	}
-	baseJSON, err := client.DownloadManifest(baseSnap.ManifestHash)
-	if err != nil {
-		return &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}, nil
+	baseJSON, dlErr := client.DownloadManifest(baseSnap.ManifestHash)
+	if dlErr != nil {
+		return empty, mergeBaseID, nil
 	}
-	return manifest.FromJSON(baseJSON)
+	m, parseErr := manifest.FromJSON(baseJSON)
+	if parseErr != nil {
+		return empty, mergeBaseID, parseErr
+	}
+	return m, mergeBaseID, nil
 }
 
 func buildSyncConflictContext(conflicts []mergeAction) string {

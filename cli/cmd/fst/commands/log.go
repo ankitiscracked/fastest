@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/anthropics/fastest/cli/internal/dag"
 	"github.com/anthropics/fastest/cli/internal/ui"
 )
 
@@ -22,6 +23,7 @@ func init() {
 func newLogCmd() *cobra.Command {
 	var limit int
 	var showAll bool
+	var showGraph bool
 
 	cmd := &cobra.Command{
 		Use:   "log",
@@ -29,14 +31,17 @@ func newLogCmd() *cobra.Command {
 		Long: `Display the history of snapshots for the current workspace.
 
 Shows snapshots in reverse chronological order, starting from the current base.
-Each entry shows the snapshot ID, timestamp, file count, and description.`,
+Each entry shows the snapshot ID, timestamp, file count, and description.
+
+Use --graph to see the DAG structure with merge and fork lines.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLog(limit, showAll)
+			return runLog(limit, showAll, showGraph)
 		},
 	}
 
 	cmd.Flags().IntVarP(&limit, "limit", "n", 10, "Maximum number of snapshots to show")
 	cmd.Flags().BoolVarP(&showAll, "all", "a", false, "Show all snapshots, not just the current chain")
+	cmd.Flags().BoolVarP(&showGraph, "graph", "g", false, "Show DAG graph alongside history")
 
 	return cmd
 }
@@ -57,7 +62,7 @@ type logSnapshotMeta struct {
 	Size              int64    `json:"size"`
 }
 
-func runLog(limit int, showAll bool) error {
+func runLog(limit int, showAll bool, showGraph bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
@@ -79,6 +84,10 @@ func runLog(limit int, showAll bool) error {
 		fmt.Println()
 		fmt.Println("Create one with: fst snapshot --set-base")
 		return nil
+	}
+
+	if showGraph {
+		return runLogGraph(snapshots, cfg, limit, showAll)
 	}
 
 	var toShow []*logSnapshotMeta
@@ -132,6 +141,154 @@ func runLog(limit int, showAll bool) error {
 	}
 
 	return nil
+}
+
+func runLogGraph(snapshots []*logSnapshotMeta, cfg *config.ProjectConfig, limit int, showAll bool) error {
+	// Build snapshot map for DAG operations
+	byID := make(map[string]*logSnapshotMeta, len(snapshots))
+	snapInfos := make(map[string]*dag.SnapshotInfo, len(snapshots))
+	for _, s := range snapshots {
+		byID[s.ID] = s
+		snapInfos[s.ID] = &dag.SnapshotInfo{
+			ID:        s.ID,
+			ParentIDs: s.ParentSnapshotIDs,
+			CreatedAt: s.CreatedAt,
+		}
+	}
+
+	// Determine heads
+	var heads []string
+	if showAll {
+		// Find all tips (snapshots not referenced as parent by anyone)
+		isParent := make(map[string]bool)
+		for _, s := range snapshots {
+			for _, pid := range s.ParentSnapshotIDs {
+				isParent[pid] = true
+			}
+		}
+		for _, s := range snapshots {
+			if !isParent[s.ID] {
+				heads = append(heads, s.ID)
+			}
+		}
+		if len(heads) == 0 {
+			heads = append(heads, cfg.CurrentSnapshotID)
+		}
+	} else {
+		heads = []string{cfg.CurrentSnapshotID}
+	}
+
+	// Collect reachable snapshots and topo sort
+	reachable := dag.CollectReachable(heads, snapInfos)
+	sorted := dag.TopoSort(heads, reachable)
+
+	if len(sorted) == 0 {
+		fmt.Println("No snapshots in graph.")
+		return nil
+	}
+
+	// Apply limit
+	if limit > 0 && len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+
+	// Build short IDs
+	ids := make([]string, 0, len(sorted))
+	for _, s := range sorted {
+		ids = append(ids, s.ID)
+	}
+	shortIDs := shortenIDs(ids, 12)
+
+	// Display header
+	if showAll {
+		fmt.Printf("Snapshot DAG (all workspaces):\n")
+	} else {
+		fmt.Printf("Snapshot DAG (from %s):\n", cfg.WorkspaceName)
+	}
+	fmt.Println()
+
+	// Render graph
+	renderer := dag.NewGraphRenderer()
+
+	for _, snapInfo := range sorted {
+		snap := byID[snapInfo.ID]
+		if snap == nil {
+			continue
+		}
+
+		row := renderer.NextRow(snapInfo.ID, snapInfo.ParentIDs)
+
+		// Print pre-lines (merge-in)
+		for _, line := range row.PreLines {
+			fmt.Println(line)
+		}
+
+		// Print node line with snapshot info
+		isCurrent := snap.ID == cfg.CurrentSnapshotID
+		displayGraphSnapshot(row.NodeLine, snap, isCurrent, shortIDs)
+
+		// Print post-lines (fork-out)
+		for _, line := range row.PostLines {
+			fmt.Println(line)
+		}
+	}
+
+	if limit > 0 && len(sorted) == limit {
+		fmt.Printf("  ... use -n to show more\n")
+	}
+
+	return nil
+}
+
+func displayGraphSnapshot(graphPrefix string, snap *logSnapshotMeta, isCurrent bool, shortIDs map[string]string) {
+	timeStr := formatSnapshotTime(snap.CreatedAt)
+	shortID := shortIDs[snap.ID]
+
+	agentTag := ""
+	if snap.Agent != "" {
+		agentTag = " " + ui.Cyan("["+snap.Agent+"]")
+	}
+
+	// Determine graph indent for continuation lines
+	graphIndent := strings.Repeat(" ", len([]rune(graphPrefix)))
+
+	// First line: graph prefix + snapshot info
+	fmt.Printf("%s  %s  %s  (%d files, %s)%s\n",
+		graphPrefix,
+		ui.Yellow(shortID),
+		ui.Dim(timeStr),
+		snap.Files,
+		formatBytes(snap.Size),
+		agentTag,
+	)
+
+	// Author (indented with graph continuation)
+	if snap.AuthorName != "" || snap.AuthorEmail != "" {
+		authorStr := snap.AuthorName
+		if snap.AuthorEmail != "" {
+			if authorStr != "" {
+				authorStr += " <" + snap.AuthorEmail + ">"
+			} else {
+				authorStr = snap.AuthorEmail
+			}
+		}
+		fmt.Printf("%s  %s\n", graphIndent, ui.Dim("Author: "+authorStr))
+	}
+
+	// Message (indented with graph continuation)
+	if snap.Message != "" {
+		msg := snap.Message
+		if len(msg) > 70 {
+			msg = msg[:67] + "..."
+		}
+		fmt.Printf("%s  %s\n", graphIndent, msg)
+	}
+
+	if isCurrent {
+		fmt.Printf("%s  %s\n", graphIndent, ui.Dim("(current)"))
+	}
+
+	fmt.Println()
 }
 
 func loadAllSnapshots(manifestDir string) ([]*logSnapshotMeta, error) {
