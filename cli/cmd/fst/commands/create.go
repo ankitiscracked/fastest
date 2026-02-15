@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/anthropics/fastest/cli/internal/config"
@@ -12,10 +13,24 @@ import (
 	"github.com/anthropics/fastest/cli/internal/store"
 )
 
-func init() {
-}
+type createBackend string
 
-func runCreate(args []string, fromWorkspace string) error {
+const (
+	createBackendAuto  createBackend = "auto"
+	createBackendClone createBackend = "clone"
+	createBackendCopy  createBackend = "copy"
+)
+
+var errCloneUnsupportedPlatform = errors.New("clone backend is not supported on this platform")
+
+var cloneFileFunc = cloneFile
+
+func runCreate(args []string, fromWorkspace, backendArg string) error {
+	backend, err := parseCreateBackend(backendArg)
+	if err != nil {
+		return err
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
@@ -102,11 +117,8 @@ func runCreate(args []string, fromWorkspace string) error {
 	}
 	workspaceName := args[0]
 
-	// Determine target directory
+	// Determine target directory (atomic mkdir to avoid TOCTOU race)
 	targetDir := filepath.Join(parentRoot, workspaceName)
-	if _, err := os.Stat(targetDir); err == nil {
-		return fmt.Errorf("target directory already exists: %s", targetDir)
-	}
 
 	fmt.Printf("Creating workspace '%s' from '%s'...\n", workspaceName, sourceWorkspaceCfg.WorkspaceName)
 
@@ -116,11 +128,17 @@ func runCreate(args []string, fromWorkspace string) error {
 		return fmt.Errorf("failed to load ignore patterns: %w", err)
 	}
 
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	if err := os.Mkdir(targetDir, 0755); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("target directory already exists: %s", targetDir)
+		}
 		return fmt.Errorf("failed to create workspace directory: %w", err)
 	}
 
+	fmt.Printf("Copying files...\n")
+
 	copied := 0
+	cloned := 0
 	err = filepath.Walk(sourceWorkspaceRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -143,14 +161,36 @@ func runCreate(args []string, fromWorkspace string) error {
 		}
 
 		targetPath := filepath.Join(targetDir, relPath)
+
+		// Handle symlinks: recreate the link rather than copying the target
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("failed to read symlink %s: %w", relPath, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return err
+			}
+			if err := os.Symlink(linkTarget, targetPath); err != nil {
+				return fmt.Errorf("failed to create symlink %s: %w", relPath, err)
+			}
+			copied++
+			return nil
+		}
+
 		if info.IsDir() {
 			return os.MkdirAll(targetPath, info.Mode())
 		}
 
-		if err := copyFile(path, targetPath, info.Mode()); err != nil {
+		usedClone, err := materializeWorkspaceFile(path, targetPath, info.Mode(), backend)
+		if err != nil {
 			return fmt.Errorf("failed to copy %s: %w", relPath, err)
 		}
-		copied++
+		if usedClone {
+			cloned++
+		} else {
+			copied++
+		}
 		return nil
 	})
 	if err != nil {
@@ -158,7 +198,7 @@ func runCreate(args []string, fromWorkspace string) error {
 		return fmt.Errorf("failed to copy files: %w", err)
 	}
 
-	fmt.Printf("Copied %d files.\n", copied)
+	fmt.Printf("Materialized %d files (cloned: %d, copied: %d).\n", copied+cloned, cloned, copied)
 
 	// Initialize .fst config in the new workspace
 	workspaceID := generateWorkspaceID()
@@ -282,4 +322,46 @@ func findSourceWorkspace(name, projectID, parentRoot string) (string, *config.Pr
 
 func defaultWorkspaceName(projectName string) string {
 	return fmt.Sprintf("%s-%s", projectName, randomSuffix(4))
+}
+
+func parseCreateBackend(value string) (createBackend, error) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch createBackend(v) {
+	case createBackendAuto:
+		return createBackendAuto, nil
+	case createBackendClone:
+		return createBackendClone, nil
+	case createBackendCopy:
+		return createBackendCopy, nil
+	default:
+		return "", fmt.Errorf("invalid backend %q (expected: auto, clone, copy)", value)
+	}
+}
+
+func materializeWorkspaceFile(src, dst string, mode os.FileMode, backend createBackend) (bool, error) {
+	if backend == createBackendCopy || !mode.IsRegular() {
+		return false, copyFile(src, dst, mode)
+	}
+
+	if err := cloneFileFunc(src, dst, mode); err == nil {
+		return true, nil
+	} else if backend == createBackendClone {
+		return false, err
+	}
+
+	// Best-effort fallback for auto mode when clone is unavailable.
+	_ = os.Remove(dst)
+	return false, copyFile(src, dst, mode)
+}
+
+func cloneFile(src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+
+	if err := cloneFileNative(src, dst); err != nil {
+		return err
+	}
+
+	return os.Chmod(dst, mode)
 }

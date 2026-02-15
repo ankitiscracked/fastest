@@ -31,6 +31,7 @@ Complete reference for all `fst` commands. Source: `cli/cmd/fst/commands/`.
 | `fst workspace clone <project\|snapshot>` | | Clone a project/snapshot from cloud | `clone.go` |
 
 **`workspace init` flags:** `--workspace, -w`, `--no-snapshot`, `--force`
+**`workspace create` flags:** `--from`, `--backend` (`auto`, `clone`, `copy`)
 **`workspace clone` flags:** `--to, -t`
 
 ## Snapshots

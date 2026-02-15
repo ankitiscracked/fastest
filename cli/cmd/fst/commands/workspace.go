@@ -51,6 +51,7 @@ func newWorkspaceInitCmd() *cobra.Command {
 
 func newWorkspaceCreateCmd() *cobra.Command {
 	var fromWorkspace string
+	var backend string
 
 	cmd := &cobra.Command{
 		Use:   "create <workspace-name>",
@@ -69,11 +70,12 @@ Examples:
   fst workspace create bugfix --from dev     # Fork from 'dev' workspace`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(args, fromWorkspace)
+			return runCreate(args, fromWorkspace, backend)
 		},
 	}
 
 	cmd.Flags().StringVar(&fromWorkspace, "from", "", "Source workspace to fork from (default: current or main)")
+	cmd.Flags().StringVar(&backend, "backend", "auto", "File materialization backend: auto, clone, copy")
 
 	return cmd
 }
