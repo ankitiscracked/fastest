@@ -30,7 +30,7 @@ func newInfoCmd() *cobra.Command {
 		Long: `Show info about the current workspace or project.
 
 Run inside a workspace to see workspace info.
-Run inside a project folder (fst.json) to see project info.
+Run inside a project folder to see project info.
 
 Subcommands:
   workspaces    List all workspaces for the current project

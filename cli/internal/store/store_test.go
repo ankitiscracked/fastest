@@ -35,7 +35,7 @@ func TestOpenAt(t *testing.T) {
 }
 
 func TestOpenFromWorkspaceStandalone(t *testing.T) {
-	// No fst.json above — standalone mode, uses workspace root as project root
+	// No project config above — standalone mode, uses workspace root as project root
 	root := t.TempDir()
 	s := OpenFromWorkspace(root)
 
@@ -45,10 +45,13 @@ func TestOpenFromWorkspaceStandalone(t *testing.T) {
 }
 
 func TestOpenFromWorkspaceWithProject(t *testing.T) {
-	// Create project root with fst.json
+	// Create project root with .fst/config.json (type "project")
 	projectRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectRoot, "fst.json"), []byte(`{"project_id":"p1","project_name":"test"}`), 0644); err != nil {
-		t.Fatalf("write fst.json: %v", err)
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".fst"), 0755); err != nil {
+		t.Fatalf("mkdir .fst: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".fst", "config.json"), []byte(`{"type":"project","project_id":"p1","project_name":"test"}`), 0644); err != nil {
+		t.Fatalf("write config.json: %v", err)
 	}
 
 	// Create workspace dir under project

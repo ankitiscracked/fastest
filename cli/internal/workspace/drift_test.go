@@ -16,8 +16,9 @@ func setupDriftWorkspaces(t *testing.T, ourFiles, theirFiles map[string]string) 
 
 	projectRoot := t.TempDir()
 
-	// Create project marker
-	os.WriteFile(filepath.Join(projectRoot, "fst.json"), []byte(`{"name":"test-project"}`), 0644)
+	// Create project config
+	os.MkdirAll(filepath.Join(projectRoot, ".fst"), 0755)
+	os.WriteFile(filepath.Join(projectRoot, ".fst", "config.json"), []byte(`{"type":"project","project_id":"proj-test","project_name":"test-project"}`), 0644)
 
 	// Create shared store directories
 	for _, d := range []string{".fst/snapshots", ".fst/manifests", ".fst/blobs", ".fst/workspaces"} {

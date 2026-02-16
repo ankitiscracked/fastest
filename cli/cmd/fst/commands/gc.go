@@ -29,7 +29,7 @@ A snapshot is reachable if it is an ancestor of any workspace's current or
 base snapshot. Unreachable snapshots are leftovers from history rewriting
 (drop, squash, rebase) and can be safely removed.
 
-Must be run from within a project folder (directory containing fst.json).`,
+Must be run from within a project folder.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGC(dryRun)
 		},
@@ -49,7 +49,7 @@ func runGC(dryRun bool) error {
 	projectRoot, _, err := config.FindParentRootFrom(cwd)
 	if err != nil {
 		if errors.Is(err, config.ErrParentNotFound) {
-			return fmt.Errorf("not in a project folder - run from a directory containing fst.json")
+			return fmt.Errorf("not in a project folder - run 'fst project init' first")
 		}
 		return err
 	}

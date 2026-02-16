@@ -31,7 +31,7 @@ func TestSaveLoadProjectAuthor(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ConfigDirName), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte("{}"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte(`{"type":"workspace"}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -64,7 +64,7 @@ func TestLoadAuthorProjectOverridesGlobal(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ConfigDirName), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte("{}"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte(`{"type":"workspace"}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestLoadAuthorFallsBackToGlobal(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ConfigDirName), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte("{}"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte(`{"type":"workspace"}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -155,7 +155,7 @@ func TestLoadAuthorReturnsEmptyWhenNotConfigured(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ConfigDirName), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte("{}"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ConfigDirName, ConfigFileName), []byte(`{"type":"workspace"}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

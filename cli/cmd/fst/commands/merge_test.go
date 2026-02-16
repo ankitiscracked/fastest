@@ -26,9 +26,12 @@ func setupProjectWithWorkspaces(t *testing.T, targetFiles, sourceFiles map[strin
 
 	projectRoot := t.TempDir()
 
-	// Create project marker
-	if err := os.WriteFile(filepath.Join(projectRoot, "fst.json"), []byte(`{"name":"test-project"}`), 0644); err != nil {
-		t.Fatalf("write fst.json: %v", err)
+	// Create project config
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".fst"), 0755); err != nil {
+		t.Fatalf("mkdir .fst: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".fst", "config.json"), []byte(`{"type":"project","project_id":"proj-test","project_name":"test-project"}`), 0644); err != nil {
+		t.Fatalf("write config.json: %v", err)
 	}
 
 	// Create shared store directories

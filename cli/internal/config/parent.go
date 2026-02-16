@@ -10,7 +10,10 @@ import (
 	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
-const ParentConfigFileName = "fst.json"
+const (
+	ConfigTypeProject   = "project"
+	ConfigTypeWorkspace = "workspace"
+)
 
 var ErrParentNotFound = errors.New("parent config not found")
 
@@ -22,6 +25,7 @@ type BackendConfig struct {
 }
 
 type ParentConfig struct {
+	Type             string         `json:"type"`
 	ProjectID        string         `json:"project_id"`
 	ProjectName      string         `json:"project_name"`
 	CreatedAt        string         `json:"created_at"`
@@ -40,7 +44,7 @@ func (p *ParentConfig) BackendType() string {
 }
 
 func LoadParentConfigAt(root string) (*ParentConfig, error) {
-	path := filepath.Join(root, ParentConfigFileName)
+	path := filepath.Join(root, ConfigDirName, ConfigFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -48,10 +52,13 @@ func LoadParentConfigAt(root string) (*ParentConfig, error) {
 
 	var cfg ParentConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse %s: %w", ParentConfigFileName, err)
+		return nil, fmt.Errorf("failed to parse .fst/config.json: %w", err)
+	}
+	if cfg.Type != ConfigTypeProject {
+		return nil, fmt.Errorf(".fst/config.json is not a project config (type=%q)", cfg.Type)
 	}
 	if cfg.ProjectID == "" || cfg.ProjectName == "" {
-		return nil, fmt.Errorf("%s missing project_id or project_name", ParentConfigFileName)
+		return nil, fmt.Errorf(".fst/config.json missing project_id or project_name")
 	}
 
 	return &cfg, nil
@@ -65,25 +72,42 @@ func SaveParentConfigAt(root string, cfg *ParentConfig) error {
 		return fmt.Errorf("parent config missing project_id or project_name")
 	}
 
-	if err := os.MkdirAll(root, 0755); err != nil {
-		return fmt.Errorf("failed to create parent directory: %w", err)
+	cfg.Type = ConfigTypeProject
+
+	configDir := filepath.Join(root, ConfigDirName)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal %s: %w", ParentConfigFileName, err)
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	path := filepath.Join(root, ParentConfigFileName)
+	path := filepath.Join(configDir, ConfigFileName)
 	return store.AtomicWriteFile(path, data, 0644)
 }
 
-// FindParentRootFrom walks up the tree to find a parent container with fst.json.
+// isProjectRoot checks if dir contains a .fst/config.json with type "project".
+func isProjectRoot(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, ConfigDirName, ConfigFileName))
+	if err != nil {
+		return false
+	}
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return false
+	}
+	return header.Type == ConfigTypeProject
+}
+
+// FindParentRootFrom walks up the tree to find a project root with .fst/config.json (type "project").
 func FindParentRootFrom(start string) (string, *ParentConfig, error) {
 	dir := start
 	for {
-		path := filepath.Join(dir, ParentConfigFileName)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		if isProjectRoot(dir) {
 			cfg, err := LoadParentConfigAt(dir)
 			if err != nil {
 				return "", nil, err

@@ -375,8 +375,12 @@ func setupForkedWorkspaces(t *testing.T, targetFiles, sourceFiles map[string]str
 
 	projectRoot := t.TempDir()
 
-	if err := os.WriteFile(filepath.Join(projectRoot, "fst.json"), []byte(`{"name":"test-project"}`), 0644); err != nil {
-		t.Fatalf("write fst.json: %v", err)
+	// Create project config
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".fst"), 0755); err != nil {
+		t.Fatalf("mkdir .fst: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".fst", "config.json"), []byte(`{"type":"project","project_id":"proj-test","project_name":"test-project"}`), 0644); err != nil {
+		t.Fatalf("write config.json: %v", err)
 	}
 	for _, d := range []string{".fst/snapshots", ".fst/manifests", ".fst/blobs", ".fst/workspaces"} {
 		if err := os.MkdirAll(filepath.Join(projectRoot, d), 0755); err != nil {

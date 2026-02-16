@@ -1,17 +1,17 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 )
 
 const (
-	configDirName    = ".fst"
+	configDirName  = ".fst"
 	snapshotsDirName = "snapshots"
 	manifestsDirName = "manifests"
 	blobsDirName     = "blobs"
-	parentConfigFile = "fst.json"
 )
 
 // Store provides typed access to the project-level shared store
@@ -25,7 +25,6 @@ type Store struct {
 }
 
 // OpenAt creates a Store rooted at the given project root directory.
-// The project root is the directory containing fst.json.
 func OpenAt(projectRoot string) *Store {
 	base := filepath.Join(projectRoot, configDirName)
 	return &Store{
@@ -37,8 +36,9 @@ func OpenAt(projectRoot string) *Store {
 }
 
 // OpenFromWorkspace creates a Store by walking up from a workspace root
-// to find the project root (fst.json). If no parent project is found,
-// the workspace root itself is treated as the project root (standalone mode).
+// to find the project root (.fst/config.json with type "project").
+// If no parent project is found, the workspace root itself is treated
+// as the project root (standalone mode).
 func OpenFromWorkspace(workspaceRoot string) *Store {
 	if projectRoot, err := findProjectRoot(workspaceRoot); err == nil {
 		return OpenAt(projectRoot)
@@ -69,12 +69,27 @@ func (s *Store) EnsureDirs() error {
 	return nil
 }
 
-// findProjectRoot walks up from start looking for fst.json (project root marker).
+// isProjectConfig checks if dir contains a .fst/config.json with type "project".
+func isProjectConfig(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, configDirName, "config.json"))
+	if err != nil {
+		return false
+	}
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return false
+	}
+	return header.Type == "project"
+}
+
+// findProjectRoot walks up from start looking for a project root
+// (.fst/config.json with type "project").
 func findProjectRoot(start string) (string, error) {
 	dir := start
 	for {
-		path := filepath.Join(dir, parentConfigFile)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		if isProjectConfig(dir) {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)

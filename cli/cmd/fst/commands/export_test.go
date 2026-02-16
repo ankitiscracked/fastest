@@ -16,7 +16,7 @@ import (
 // setupExportProject creates a project with two workspaces (ws-a, ws-b)
 // that share a common base snapshot. Each workspace then diverges with the
 // given file changes. Returns (projectRoot, wsARootRoot, wsBRoot).
-// Unlike setupForkedWorkspaces, this writes a proper fst.json with
+// Unlike setupForkedWorkspaces, this writes a proper project config with
 // project_id/project_name so FindParentRootFrom works.
 func setupExportProject(t *testing.T, aFiles, bFiles map[string]string) (string, string, string) {
 	t.Helper()
@@ -567,8 +567,11 @@ func TestExportGitSkipsEmptyWorkspace(t *testing.T) {
 
 func TestBuildSnapshotDAG(t *testing.T) {
 	projectRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectRoot, "fst.json"), []byte(`{"project_id":"p","project_name":"p"}`), 0644); err != nil {
-		t.Fatalf("write: %v", err)
+	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+		ProjectID:   "p",
+		ProjectName: "p",
+	}); err != nil {
+		t.Fatalf("SaveParentConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {

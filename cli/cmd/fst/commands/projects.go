@@ -54,7 +54,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	// Check for project folder (fst.json)
+	// Check for project folder
 	parentRoot, parentCfg, err := config.FindParentRootFrom(cwd)
 	if err != nil && !errors.Is(err, config.ErrParentNotFound) {
 		return err

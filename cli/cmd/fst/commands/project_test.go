@@ -46,8 +46,8 @@ func TestProjectCreateCreatesMainWorkspace(t *testing.T) {
 	projectPath := filepath.Join(root, "demo")
 	workspacePath := filepath.Join(projectPath, "main")
 
-	if _, err := os.Stat(filepath.Join(projectPath, "fst.json")); err != nil {
-		t.Fatalf("expected fst.json: %v", err)
+	if _, err := os.Stat(filepath.Join(projectPath, ".fst", "config.json")); err != nil {
+		t.Fatalf("expected project .fst/config.json: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspacePath, ".fst", "config.json")); err != nil {
 		t.Fatalf("expected workspace config: %v", err)

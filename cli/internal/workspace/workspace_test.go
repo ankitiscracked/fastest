@@ -8,7 +8,7 @@ import (
 	"github.com/ankitiscracked/fastest/cli/internal/config"
 )
 
-// setupTestWorkspace creates a standalone workspace (no parent fst.json)
+// setupTestWorkspace creates a standalone workspace (no parent project config)
 // with config.json and the given files in the working directory.
 func setupTestWorkspace(t *testing.T, files map[string]string) (string, *Workspace) {
 	t.Helper()

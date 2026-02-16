@@ -128,7 +128,7 @@ func findProjectRootAndParent() (string, *config.ParentConfig, error) {
 			projectRoot, parentCfg, err = config.FindParentRootFrom(wsRoot)
 		}
 		if err != nil {
-			return "", nil, fmt.Errorf("not in a project (no fst.json found): %w", err)
+			return "", nil, fmt.Errorf("not in a project: %w", err)
 		}
 	}
 	return projectRoot, parentCfg, nil

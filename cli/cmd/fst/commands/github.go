@@ -94,7 +94,7 @@ func runGitHubExport(repo string, initRepo bool, rebuild bool, remoteName string
 			projectRoot, _, err = config.FindParentRootFrom(wsRoot)
 		}
 		if err != nil {
-			return fmt.Errorf("not in a project (no fst.json found): %w", err)
+			return fmt.Errorf("not in a project: %w", err)
 		}
 	}
 

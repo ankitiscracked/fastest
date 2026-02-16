@@ -34,7 +34,7 @@ func newParentInitCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "init [project-name]",
-		Short: "Initialize a project folder (fst.json)",
+		Short: "Initialize a project folder",
 		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectName := ""

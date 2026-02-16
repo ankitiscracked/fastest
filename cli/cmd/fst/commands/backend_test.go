@@ -188,7 +188,7 @@ func TestBackendSetGit(t *testing.T) {
 		t.Fatalf("backend set git: %v", err)
 	}
 
-	// Verify fst.json has backend config
+	// Verify project config has backend config
 	parentCfg, err := config.LoadParentConfigAt(projectRoot)
 	if err != nil {
 		t.Fatalf("LoadParentConfigAt: %v", err)

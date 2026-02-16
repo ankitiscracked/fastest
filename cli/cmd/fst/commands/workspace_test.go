@@ -40,7 +40,7 @@ func TestWorkspaceCreateFromParent(t *testing.T) {
 	SetDeps(Deps{})
 	defer ResetDeps()
 
-	// Create a project folder with fst.json
+	// Create a project folder
 	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
 		ProjectID:   "proj-123",
 		ProjectName: "demo",
