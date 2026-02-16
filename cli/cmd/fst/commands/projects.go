@@ -55,11 +55,11 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	}
 
 	// Check for project folder
-	parentRoot, parentCfg, err := config.FindParentRootFrom(cwd)
-	if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+	parentRoot, parentCfg, err := config.FindProjectRootFrom(cwd)
+	if err != nil && !errors.Is(err, config.ErrProjectNotFound) {
 		return err
 	}
-	if errors.Is(err, config.ErrParentNotFound) {
+	if errors.Is(err, config.ErrProjectNotFound) {
 		return fmt.Errorf("no project folder found - run 'fst project init' first")
 	}
 	if err == nil {
@@ -164,7 +164,7 @@ func runInit(args []string, workspaceName string, noSnapshot bool, force bool) e
 	}
 
 	// Register workspace in project-level registry
-	if parentRoot, _, findErr := config.FindParentRootFrom(cwd); findErr == nil {
+	if parentRoot, _, findErr := config.FindProjectRootFrom(cwd); findErr == nil {
 		projectStore := store.OpenAt(parentRoot)
 		if regErr := projectStore.RegisterWorkspace(store.WorkspaceInfo{
 			WorkspaceID:    workspaceID,

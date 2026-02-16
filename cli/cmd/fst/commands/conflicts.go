@@ -70,7 +70,7 @@ func runConflicts(otherWorkspace string, showAll, includeDirty, jsonOutput, gene
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}

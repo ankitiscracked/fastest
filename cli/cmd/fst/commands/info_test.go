@@ -43,11 +43,11 @@ func TestInfoBareInProject(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-info-test",
 		ProjectName: "demo-project",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	restoreCwd := chdir(t, parent)
@@ -107,11 +107,11 @@ func TestInfoWorkspaces(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-ws-list",
 		ProjectName: "demo",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	// Create and register two workspaces
@@ -164,11 +164,11 @@ func TestInfoProject(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-info-proj",
 		ProjectName: "my-project",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	// Create a workspace so findProjectContext works
@@ -207,11 +207,11 @@ func TestInfoProjectJSON(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-json-proj",
 		ProjectName: "json-project",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	wsDir := filepath.Join(parent, "main")

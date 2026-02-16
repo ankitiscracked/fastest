@@ -143,7 +143,7 @@ func runLog(limit int, showAll bool, showGraph bool) error {
 	return nil
 }
 
-func runLogGraph(snapshots []*logSnapshotMeta, cfg *config.ProjectConfig, limit int, showAll bool) error {
+func runLogGraph(snapshots []*logSnapshotMeta, cfg *config.WorkspaceConfig, limit int, showAll bool) error {
 	// Build snapshot map for DAG operations
 	byID := make(map[string]*logSnapshotMeta, len(snapshots))
 	snapInfos := make(map[string]*dag.SnapshotInfo, len(snapshots))

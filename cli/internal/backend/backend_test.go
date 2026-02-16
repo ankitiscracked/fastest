@@ -125,12 +125,12 @@ func setupProjectWithExport(t *testing.T, projectID, wsName string) (string, str
 	t.Helper()
 
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   projectID,
 		ProjectName: "test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {

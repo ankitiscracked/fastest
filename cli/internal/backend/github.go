@@ -232,7 +232,7 @@ func IncrementalImportFromGit(projectRoot string) (*ImportResult, error) {
 		return nil, fmt.Errorf("no export metadata found")
 	}
 
-	parentCfg, err := config.LoadParentConfigAt(projectRoot)
+	parentCfg, err := config.LoadProjectConfigAt(projectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load project config: %w", err)
 	}
@@ -392,7 +392,7 @@ func IncrementalImportFromGit(projectRoot string) (*ImportResult, error) {
 }
 
 // ensureWorkspaceForImport finds or creates a workspace directory and config.
-func ensureWorkspaceForImport(wsRoot, projectID, workspaceID, wsName string) (*config.ProjectConfig, error) {
+func ensureWorkspaceForImport(wsRoot, projectID, workspaceID, wsName string) (*config.WorkspaceConfig, error) {
 	if _, err := os.Stat(filepath.Join(wsRoot, ".fst", "config.json")); err == nil {
 		// Workspace exists
 		return config.LoadAt(wsRoot)

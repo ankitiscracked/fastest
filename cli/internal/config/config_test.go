@@ -11,7 +11,7 @@ import (
 
 func TestSaveLoadAt(t *testing.T) {
 	root := t.TempDir()
-	cfg := &ProjectConfig{
+	cfg := &WorkspaceConfig{
 		ProjectID:         "proj-1",
 		WorkspaceID:       "ws-1",
 		WorkspaceName:     "main",
@@ -60,7 +60,7 @@ func TestInitAtCreatesStructure(t *testing.T) {
 	}
 }
 
-func TestFindProjectRoot(t *testing.T) {
+func TestFindWorkspaceRoot(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ConfigDirName), 0755); err != nil {
 		t.Fatalf("mkdir .fst: %v", err)
@@ -82,9 +82,9 @@ func TestFindProjectRoot(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	found, err := FindProjectRoot()
+	found, err := FindWorkspaceRoot()
 	if err != nil {
-		t.Fatalf("FindProjectRoot: %v", err)
+		t.Fatalf("FindWorkspaceRoot: %v", err)
 	}
 	foundEval, err := filepath.EvalSymlinks(found)
 	if err != nil {

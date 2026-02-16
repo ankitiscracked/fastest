@@ -41,11 +41,11 @@ func TestWorkspaceCreateFromParent(t *testing.T) {
 	defer ResetDeps()
 
 	// Create a project folder
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-123",
 		ProjectName: "demo",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	// Create a main workspace with a file and snapshot

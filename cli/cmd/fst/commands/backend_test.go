@@ -17,7 +17,7 @@ func TestBackendConfigRoundTrip(t *testing.T) {
 	root := t.TempDir()
 
 	// Save config with backend
-	cfg := &config.ParentConfig{
+	cfg := &config.ProjectConfig{
 		ProjectID:   "proj-123",
 		ProjectName: "test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -27,14 +27,14 @@ func TestBackendConfigRoundTrip(t *testing.T) {
 			Remote: "origin",
 		},
 	}
-	if err := config.SaveParentConfigAt(root, cfg); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+	if err := config.SaveProjectConfigAt(root, cfg); err != nil {
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	// Load and verify
-	loaded, err := config.LoadParentConfigAt(root)
+	loaded, err := config.LoadProjectConfigAt(root)
 	if err != nil {
-		t.Fatalf("LoadParentConfigAt: %v", err)
+		t.Fatalf("LoadProjectConfigAt: %v", err)
 	}
 	if loaded.Backend == nil {
 		t.Fatalf("expected backend config")
@@ -57,19 +57,19 @@ func TestBackendConfigBackwardCompat(t *testing.T) {
 	root := t.TempDir()
 
 	// Save config WITHOUT backend (simulates old config)
-	cfg := &config.ParentConfig{
+	cfg := &config.ProjectConfig{
 		ProjectID:   "proj-456",
 		ProjectName: "old-project",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := config.SaveParentConfigAt(root, cfg); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+	if err := config.SaveProjectConfigAt(root, cfg); err != nil {
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	// Load and verify backward compat
-	loaded, err := config.LoadParentConfigAt(root)
+	loaded, err := config.LoadProjectConfigAt(root)
 	if err != nil {
-		t.Fatalf("LoadParentConfigAt: %v", err)
+		t.Fatalf("LoadProjectConfigAt: %v", err)
 	}
 	if loaded.Backend != nil {
 		t.Fatalf("expected nil backend")
@@ -132,12 +132,12 @@ func TestGitBackendNoRemote(t *testing.T) {
 func TestBackendSetGit(t *testing.T) {
 	// Set up a project with a workspace and snapshot
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-git-test",
 		ProjectName: "git-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -189,9 +189,9 @@ func TestBackendSetGit(t *testing.T) {
 	}
 
 	// Verify project config has backend config
-	parentCfg, err := config.LoadParentConfigAt(projectRoot)
+	parentCfg, err := config.LoadProjectConfigAt(projectRoot)
 	if err != nil {
-		t.Fatalf("LoadParentConfigAt: %v", err)
+		t.Fatalf("LoadProjectConfigAt: %v", err)
 	}
 	if parentCfg.Backend == nil {
 		t.Fatalf("expected backend config")
@@ -214,7 +214,7 @@ func TestBackendSetGit(t *testing.T) {
 
 func TestBackendOff(t *testing.T) {
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-off-test",
 		ProjectName: "off-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -222,7 +222,7 @@ func TestBackendOff(t *testing.T) {
 			Type: "git",
 		},
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -238,9 +238,9 @@ func TestBackendOff(t *testing.T) {
 		t.Fatalf("backend off: %v", err)
 	}
 
-	parentCfg, err := config.LoadParentConfigAt(projectRoot)
+	parentCfg, err := config.LoadProjectConfigAt(projectRoot)
 	if err != nil {
-		t.Fatalf("LoadParentConfigAt: %v", err)
+		t.Fatalf("LoadProjectConfigAt: %v", err)
 	}
 	if parentCfg.Backend != nil {
 		t.Fatalf("expected nil backend after off")
@@ -249,7 +249,7 @@ func TestBackendOff(t *testing.T) {
 
 func TestBackendStatus(t *testing.T) {
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-status-test",
 		ProjectName: "status-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -259,7 +259,7 @@ func TestBackendStatus(t *testing.T) {
 			Remote: "origin",
 		},
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -279,7 +279,7 @@ func TestBackendStatus(t *testing.T) {
 func TestBackendAutoExport(t *testing.T) {
 	// Create a project with git backend and workspace
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-auto",
 		ProjectName: "auto-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -287,7 +287,7 @@ func TestBackendAutoExport(t *testing.T) {
 			Type: "git",
 		},
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -368,12 +368,12 @@ func TestBackendAutoExport(t *testing.T) {
 func TestIncrementalImport(t *testing.T) {
 	// Create a project and export to git
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-incr",
 		ProjectName: "incr-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -474,12 +474,12 @@ func TestIncrementalImport(t *testing.T) {
 func TestIncrementalImportSkipsKnown(t *testing.T) {
 	// Export and immediately try incremental import — should have no new snapshots
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-skip",
 		ProjectName: "skip-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -610,12 +610,12 @@ func TestIncrementalImportDivergence(t *testing.T) {
 	//      divergence info reports localHead=snap-B, remoteHead=snap-X, mergeBase=snap-A
 
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-div",
 		ProjectName: "div-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {

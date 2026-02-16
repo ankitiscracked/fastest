@@ -88,14 +88,14 @@ func runImportGit(repoPath, projectName string, rebuild bool) error {
 
 	// Find existing project or create new one
 	var parentRoot string
-	var parentCfg *config.ParentConfig
+	var parentCfg *config.ProjectConfig
 
 	// Try from workspace root first, then from cwd
-	if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-		parentRoot, parentCfg, _ = config.FindParentRootFrom(wsRoot)
+	if wsRoot, findErr := config.FindWorkspaceRoot(); findErr == nil {
+		parentRoot, parentCfg, _ = config.FindProjectRootFrom(wsRoot)
 	}
 	if parentCfg == nil {
-		if pr, pc, findErr := config.FindParentRootFrom(cwd); findErr == nil {
+		if pr, pc, findErr := config.FindProjectRootFrom(cwd); findErr == nil {
 			parentRoot = pr
 			parentCfg = pc
 		}
@@ -116,14 +116,14 @@ func runImportGit(repoPath, projectName string, rebuild bool) error {
 			return fmt.Errorf("target project directory already exists: %s", parentRoot)
 		}
 		projectID := generateProjectID()
-		if err := config.SaveParentConfigAt(parentRoot, &config.ParentConfig{
+		if err := config.SaveProjectConfigAt(parentRoot, &config.ProjectConfig{
 			ProjectID:   projectID,
 			ProjectName: projectName,
 			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
 			return fmt.Errorf("failed to create project: %w", err)
 		}
-		parentCfg = &config.ParentConfig{ProjectID: projectID, ProjectName: projectName}
+		parentCfg = &config.ProjectConfig{ProjectID: projectID, ProjectName: projectName}
 	}
 
 	targets, err := buildImportTargets(parentRoot, parentCfg, meta)
@@ -144,7 +144,7 @@ func runImportGit(repoPath, projectName string, rebuild bool) error {
 	return nil
 }
 
-func buildImportTargets(parentRoot string, parentCfg *config.ParentConfig, meta *gitstore.ExportMeta) ([]importTarget, error) {
+func buildImportTargets(parentRoot string, parentCfg *config.ProjectConfig, meta *gitstore.ExportMeta) ([]importTarget, error) {
 	if parentCfg == nil {
 		return nil, fmt.Errorf("missing project configuration")
 	}
@@ -185,7 +185,7 @@ func buildImportTargets(parentRoot string, parentCfg *config.ParentConfig, meta 
 	return targets, nil
 }
 
-func existingWorkspaceConfig(root string) (bool, *config.ProjectConfig, error) {
+func existingWorkspaceConfig(root string) (bool, *config.WorkspaceConfig, error) {
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil, nil

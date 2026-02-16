@@ -39,7 +39,7 @@ func LoadGlobalAuthor() (*Author, error) {
 
 // LoadProjectAuthor reads author from .fst/author.json in the current project
 func LoadProjectAuthor() (*Author, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func SaveGlobalAuthor(a *Author) error {
 
 // SaveProjectAuthor writes author to .fst/author.json in the current project
 func SaveProjectAuthor(a *Author) error {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return err
 	}

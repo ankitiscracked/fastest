@@ -15,7 +15,7 @@ const (
 	ConfigTypeWorkspace = "workspace"
 )
 
-var ErrParentNotFound = errors.New("parent config not found")
+var ErrProjectNotFound = errors.New("parent config not found")
 
 // BackendConfig configures the storage backend for a project.
 type BackendConfig struct {
@@ -24,7 +24,7 @@ type BackendConfig struct {
 	Remote string `json:"remote,omitempty"` // git remote name, default "origin"
 }
 
-type ParentConfig struct {
+type ProjectConfig struct {
 	Type             string         `json:"type"`
 	ProjectID        string         `json:"project_id"`
 	ProjectName      string         `json:"project_name"`
@@ -36,21 +36,21 @@ type ParentConfig struct {
 }
 
 // BackendType returns the configured backend type, or empty string if none.
-func (p *ParentConfig) BackendType() string {
+func (p *ProjectConfig) BackendType() string {
 	if p == nil || p.Backend == nil {
 		return ""
 	}
 	return p.Backend.Type
 }
 
-func LoadParentConfigAt(root string) (*ParentConfig, error) {
+func LoadProjectConfigAt(root string) (*ProjectConfig, error) {
 	path := filepath.Join(root, ConfigDirName, ConfigFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var cfg ParentConfig
+	var cfg ProjectConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse .fst/config.json: %w", err)
 	}
@@ -64,7 +64,7 @@ func LoadParentConfigAt(root string) (*ParentConfig, error) {
 	return &cfg, nil
 }
 
-func SaveParentConfigAt(root string, cfg *ParentConfig) error {
+func SaveProjectConfigAt(root string, cfg *ProjectConfig) error {
 	if cfg == nil {
 		return fmt.Errorf("parent config is nil")
 	}
@@ -103,12 +103,12 @@ func isProjectRoot(dir string) bool {
 	return header.Type == ConfigTypeProject
 }
 
-// FindParentRootFrom walks up the tree to find a project root with .fst/config.json (type "project").
-func FindParentRootFrom(start string) (string, *ParentConfig, error) {
+// FindProjectRootFrom walks up the tree to find a project root with .fst/config.json (type "project").
+func FindProjectRootFrom(start string) (string, *ProjectConfig, error) {
 	dir := start
 	for {
 		if isProjectRoot(dir) {
-			cfg, err := LoadParentConfigAt(dir)
+			cfg, err := LoadProjectConfigAt(dir)
 			if err != nil {
 				return "", nil, err
 			}
@@ -117,7 +117,7 @@ func FindParentRootFrom(start string) (string, *ParentConfig, error) {
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", nil, ErrParentNotFound
+			return "", nil, ErrProjectNotFound
 		}
 		dir = parent
 	}

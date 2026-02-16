@@ -116,16 +116,16 @@ func newBackendPushCmd() *cobra.Command {
 	return cmd
 }
 
-// findProjectRootAndParent finds the project root and parent config from cwd.
-func findProjectRootAndParent() (string, *config.ParentConfig, error) {
+// findProjectRootAndConfig finds the project root and parent config from cwd.
+func findProjectRootAndConfig() (string, *config.ProjectConfig, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get current directory: %w", err)
 	}
-	projectRoot, parentCfg, err := config.FindParentRootFrom(cwd)
+	projectRoot, parentCfg, err := config.FindProjectRootFrom(cwd)
 	if err != nil {
-		if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-			projectRoot, parentCfg, err = config.FindParentRootFrom(wsRoot)
+		if wsRoot, findErr := config.FindWorkspaceRoot(); findErr == nil {
+			projectRoot, parentCfg, err = config.FindProjectRootFrom(wsRoot)
 		}
 		if err != nil {
 			return "", nil, fmt.Errorf("not in a project: %w", err)
@@ -314,7 +314,7 @@ func buildOnDivergence(mode ConflictMode) func(backend.DivergenceInfo) (string, 
 }
 
 func runBackendSetGitHub(repo string, createRepo, privateRepo bool, remoteName string, forceRemote bool) error {
-	projectRoot, parentCfg, err := findProjectRootAndParent()
+	projectRoot, parentCfg, err := findProjectRootAndConfig()
 	if err != nil {
 		return err
 	}
@@ -381,7 +381,7 @@ func runBackendSetGitHub(repo string, createRepo, privateRepo bool, remoteName s
 		Repo:   slug,
 		Remote: remoteName,
 	}
-	if err := config.SaveParentConfigAt(projectRoot, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(projectRoot, parentCfg); err != nil {
 		return fmt.Errorf("failed to save backend config: %w", err)
 	}
 
@@ -391,7 +391,7 @@ func runBackendSetGitHub(repo string, createRepo, privateRepo bool, remoteName s
 }
 
 func runBackendSetGit() error {
-	projectRoot, parentCfg, err := findProjectRootAndParent()
+	projectRoot, parentCfg, err := findProjectRootAndConfig()
 	if err != nil {
 		return err
 	}
@@ -411,7 +411,7 @@ func runBackendSetGit() error {
 	parentCfg.Backend = &config.BackendConfig{
 		Type: "git",
 	}
-	if err := config.SaveParentConfigAt(projectRoot, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(projectRoot, parentCfg); err != nil {
 		return fmt.Errorf("failed to save backend config: %w", err)
 	}
 
@@ -421,13 +421,13 @@ func runBackendSetGit() error {
 }
 
 func runBackendOff() error {
-	projectRoot, parentCfg, err := findProjectRootAndParent()
+	projectRoot, parentCfg, err := findProjectRootAndConfig()
 	if err != nil {
 		return err
 	}
 
 	parentCfg.Backend = nil
-	if err := config.SaveParentConfigAt(projectRoot, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(projectRoot, parentCfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
@@ -436,7 +436,7 @@ func runBackendOff() error {
 }
 
 func runBackendStatus() error {
-	_, parentCfg, err := findProjectRootAndParent()
+	_, parentCfg, err := findProjectRootAndConfig()
 	if err != nil {
 		return err
 	}
@@ -457,7 +457,7 @@ func runBackendStatus() error {
 }
 
 func runBackendPush() error {
-	projectRoot, parentCfg, err := findProjectRootAndParent()
+	projectRoot, parentCfg, err := findProjectRootAndConfig()
 	if err != nil {
 		return err
 	}

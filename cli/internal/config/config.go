@@ -50,7 +50,7 @@ func GetGlobalConfigDir() (string, error) {
 // GetSnapshotsDir returns the snapshots directory for the current workspace.
 // If the workspace is under a project, returns the shared project-level directory.
 func GetSnapshotsDir() (string, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", err
 	}
@@ -64,7 +64,7 @@ func GetSnapshotsDir() (string, error) {
 // GetManifestsDir returns the manifests directory for the current workspace.
 // If the workspace is under a project, returns the shared project-level directory.
 func GetManifestsDir() (string, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", err
 	}
@@ -79,7 +79,7 @@ func GetManifestsDir() (string, error) {
 // If the workspace is under a project, returns the shared project-level directory.
 // For standalone workspaces, returns the workspace-local directory.
 func GetSnapshotsDirAt(root string) string {
-	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+	if projectRoot, _, err := FindProjectRootFrom(root); err == nil {
 		return filepath.Join(projectRoot, ConfigDirName, SnapshotsDirName)
 	}
 	return filepath.Join(root, ConfigDirName, SnapshotsDirName)
@@ -89,7 +89,7 @@ func GetSnapshotsDirAt(root string) string {
 // If the workspace is under a project, returns the shared project-level directory.
 // For standalone workspaces, returns the workspace-local directory.
 func GetManifestsDirAt(root string) string {
-	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+	if projectRoot, _, err := FindProjectRootFrom(root); err == nil {
 		return filepath.Join(projectRoot, ConfigDirName, ManifestsDirName)
 	}
 	return filepath.Join(root, ConfigDirName, ManifestsDirName)
@@ -98,7 +98,7 @@ func GetManifestsDirAt(root string) string {
 // GetBlobsDir returns the blobs directory for the current workspace.
 // If the workspace is under a project, returns the shared project-level directory.
 func GetBlobsDir() (string, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", err
 	}
@@ -113,7 +113,7 @@ func GetBlobsDir() (string, error) {
 // If the workspace is under a project, returns the shared project-level directory.
 // For standalone workspaces, returns the workspace-local directory.
 func GetBlobsDirAt(root string) string {
-	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+	if projectRoot, _, err := FindProjectRootFrom(root); err == nil {
 		return filepath.Join(projectRoot, ConfigDirName, BlobsDirName)
 	}
 	return filepath.Join(root, ConfigDirName, BlobsDirName)
@@ -143,7 +143,7 @@ type SnapshotMeta = store.SnapshotMeta
 
 // ManifestHashFromSnapshotID resolves a snapshot ID to its manifest hash using local metadata.
 func ManifestHashFromSnapshotID(snapshotID string) (string, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", err
 	}
@@ -164,7 +164,7 @@ func ResolveSnapshotIDAt(root, snapshotID string) (string, error) {
 
 // GetLatestSnapshotID returns the most recent snapshot ID for the current workspace
 func GetLatestSnapshotID() (string, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", err
 	}
@@ -185,9 +185,9 @@ func GetLatestSnapshotIDForWorkspaceAt(root string, workspaceID string) (string,
 	return s.GetLatestSnapshotIDForWorkspace(workspaceID)
 }
 
-// ProjectConfig represents the local project configuration stored in .fst/config.json
+// WorkspaceConfig represents the local project configuration stored in .fst/config.json
 // All workspaces are peers - there is no main/linked distinction
-type ProjectConfig struct {
+type WorkspaceConfig struct {
 	Type           string `json:"type"`
 	ProjectID      string `json:"project_id"`
 	WorkspaceID    string `json:"workspace_id,omitempty"`
@@ -215,8 +215,8 @@ func isWorkspaceRoot(dir string) bool {
 	return header.Type == ConfigTypeWorkspace
 }
 
-// FindProjectRoot walks up the directory tree to find a workspace root (.fst/config.json with type "workspace")
-func FindProjectRoot() (string, error) {
+// FindWorkspaceRoot walks up the directory tree to find a workspace root (.fst/config.json with type "workspace")
+func FindWorkspaceRoot() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -238,7 +238,7 @@ func FindProjectRoot() (string, error) {
 
 // GetConfigDir returns the .fst directory path for the current workspace
 func GetConfigDir() (string, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", err
 	}
@@ -246,8 +246,8 @@ func GetConfigDir() (string, error) {
 }
 
 // Load reads the project configuration from .fst/config.json
-func Load() (*ProjectConfig, error) {
-	root, err := FindProjectRoot()
+func Load() (*WorkspaceConfig, error) {
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +258,7 @@ func Load() (*ProjectConfig, error) {
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	var config ProjectConfig
+	var config WorkspaceConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
@@ -273,7 +273,7 @@ func Load() (*ProjectConfig, error) {
 	return &config, nil
 }
 
-func normalizeConfig(config *ProjectConfig) {
+func normalizeConfig(config *WorkspaceConfig) {
 	if config == nil {
 		return
 	}
@@ -289,14 +289,14 @@ func normalizeConfig(config *ProjectConfig) {
 }
 
 // LoadAt reads the project configuration from a specific workspace root
-func LoadAt(root string) (*ProjectConfig, error) {
+func LoadAt(root string) (*WorkspaceConfig, error) {
 	configPath := filepath.Join(root, ConfigDirName, ConfigFileName)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	var config ProjectConfig
+	var config WorkspaceConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
@@ -312,8 +312,8 @@ func LoadAt(root string) (*ProjectConfig, error) {
 }
 
 // Save writes the project configuration to .fst/config.json
-func Save(config *ProjectConfig) error {
-	root, err := FindProjectRoot()
+func Save(config *WorkspaceConfig) error {
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		// If no project root, try current directory
 		root, err = os.Getwd()
@@ -344,7 +344,7 @@ func Save(config *ProjectConfig) error {
 }
 
 // SaveAt writes the project configuration to a specific workspace root
-func SaveAt(root string, config *ProjectConfig) error {
+func SaveAt(root string, config *WorkspaceConfig) error {
 	configDir := filepath.Join(root, ConfigDirName)
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
@@ -391,7 +391,7 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 
 	// If under a project, ensure the shared store exists at the project level
 	// and skip creating workspace-local snapshot/manifest/blob dirs.
-	if projectRoot, _, err := FindParentRootFrom(root); err == nil {
+	if projectRoot, _, err := FindProjectRootFrom(root); err == nil {
 		sharedConfigDir := filepath.Join(projectRoot, ConfigDirName)
 		if err := os.MkdirAll(filepath.Join(sharedConfigDir, SnapshotsDirName), 0755); err != nil {
 			return fmt.Errorf("failed to create shared snapshots directory: %w", err)
@@ -426,7 +426,7 @@ func InitAt(root, projectID, workspaceID, workspaceName, baseSnapshotID string) 
 		}
 	}
 
-	config := &ProjectConfig{
+	config := &WorkspaceConfig{
 		Type:              ConfigTypeWorkspace,
 		ProjectID:         projectID,
 		WorkspaceID:       workspaceID,
@@ -493,7 +493,7 @@ func GetWorkspaceID() (string, error) {
 
 // IsInitialized checks if the current directory is a fst project
 func IsInitialized() bool {
-	_, err := FindProjectRoot()
+	_, err := FindWorkspaceRoot()
 	return err == nil
 }
 
@@ -510,7 +510,7 @@ func GetMachineID() string {
 // .fst/ directory to the project-level shared store. Files that already exist in
 // the shared store are skipped (content-addressed manifests naturally deduplicate).
 func MigrateToSharedStore(workspaceRoot string) error {
-	projectRoot, _, err := FindParentRootFrom(workspaceRoot)
+	projectRoot, _, err := FindProjectRootFrom(workspaceRoot)
 	if err != nil {
 		return err
 	}

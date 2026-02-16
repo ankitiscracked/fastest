@@ -50,7 +50,7 @@ func runStatus(jsonOutput bool) error {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
@@ -103,7 +103,7 @@ func runStatus(jsonOutput bool) error {
 	return printStatusHuman(cfg, root, driftReport, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime, latestIsMerge)
 }
 
-func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string, latestIsMerge bool) error {
+func printStatusHuman(cfg *config.WorkspaceConfig, root string, driftReport *drift.Report, upstreamID, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string, latestIsMerge bool) error {
 	fmt.Printf("Workspace: %s\n", ui.Bold(cfg.WorkspaceName))
 	fmt.Printf("ID:        %s\n", cfg.WorkspaceID)
 	fmt.Printf("Path:      %s\n", root)
@@ -168,7 +168,7 @@ func printStatusHuman(cfg *config.ProjectConfig, root string, driftReport *drift
 	return nil
 }
 
-func printStatusJSON(cfg *config.ProjectConfig, root string, driftReport *drift.Report, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string, latestIsMerge bool) error {
+func printStatusJSON(cfg *config.WorkspaceConfig, root string, driftReport *drift.Report, upstreamName, baseTime, latestSnapshotID, latestSnapshotTime string, latestIsMerge bool) error {
 	fmt.Println("{")
 	fmt.Printf("  \"workspace_name\": %q,\n", cfg.WorkspaceName)
 	fmt.Printf("  \"workspace_id\": %q,\n", cfg.WorkspaceID)

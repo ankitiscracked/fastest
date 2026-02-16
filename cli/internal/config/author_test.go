@@ -27,7 +27,7 @@ func TestSaveLoadGlobalAuthor(t *testing.T) {
 func TestSaveLoadProjectAuthor(t *testing.T) {
 	root := t.TempDir()
 
-	// Set up a workspace so FindProjectRoot works
+	// Set up a workspace so FindWorkspaceRoot works
 	if err := os.MkdirAll(filepath.Join(root, ConfigDirName), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

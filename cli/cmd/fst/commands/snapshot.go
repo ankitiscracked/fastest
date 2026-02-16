@@ -124,7 +124,7 @@ func runSnapshot(message string, agentMessage bool) error {
 	fmt.Println("  (local only - not synced to cloud)")
 
 	// Auto-export to backend if configured
-	if projectRoot, parentCfg, findErr := config.FindParentRootFrom(ws.Root()); findErr == nil {
+	if projectRoot, parentCfg, findErr := config.FindProjectRootFrom(ws.Root()); findErr == nil {
 		if parentCfg.Backend != nil {
 			backendAutoExport(projectRoot)
 		}
@@ -224,7 +224,7 @@ func CreateAutoSnapshot(message string) (string, error) {
 }
 
 // generateSnapshotSummary uses the coding agent to describe changes
-func generateSnapshotSummary(root string, cfg *config.ProjectConfig, preferredAgent *agent.Agent, invoke agent.InvokeFunc) (string, error) {
+func generateSnapshotSummary(root string, cfg *config.WorkspaceConfig, preferredAgent *agent.Agent, invoke agent.InvokeFunc) (string, error) {
 	if preferredAgent == nil {
 		return "", fmt.Errorf("no agent available")
 	}

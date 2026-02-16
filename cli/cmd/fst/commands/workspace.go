@@ -113,12 +113,12 @@ func runSetMain(workspaceName string) error {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
-	wsRoot, err := config.FindProjectRoot()
+	wsRoot, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory")
 	}
 
-	parentRoot, parentCfg, err := config.FindParentRootFrom(wsRoot)
+	parentRoot, parentCfg, err := config.FindProjectRootFrom(wsRoot)
 	if err != nil {
 		return fmt.Errorf("no project folder found - run 'fst project init' first")
 	}
@@ -140,7 +140,7 @@ func runSetMain(workspaceName string) error {
 	}
 
 	parentCfg.MainWorkspaceID = targetWorkspaceID
-	if err := config.SaveParentConfigAt(parentRoot, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(parentRoot, parentCfg); err != nil {
 		return fmt.Errorf("failed to store main workspace locally: %w", err)
 	}
 

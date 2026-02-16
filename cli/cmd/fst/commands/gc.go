@@ -46,9 +46,9 @@ func runGC(dryRun bool) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	projectRoot, _, err := config.FindParentRootFrom(cwd)
+	projectRoot, _, err := config.FindProjectRootFrom(cwd)
 	if err != nil {
-		if errors.Is(err, config.ErrParentNotFound) {
+		if errors.Is(err, config.ErrProjectNotFound) {
 			return fmt.Errorf("not in a project folder - run 'fst project init' first")
 		}
 		return err

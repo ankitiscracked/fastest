@@ -88,10 +88,10 @@ func runGitHubExport(repo string, initRepo bool, rebuild bool, remoteName string
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
-	projectRoot, _, err := config.FindParentRootFrom(cwd)
+	projectRoot, _, err := config.FindProjectRootFrom(cwd)
 	if err != nil {
-		if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-			projectRoot, _, err = config.FindParentRootFrom(wsRoot)
+		if wsRoot, findErr := config.FindWorkspaceRoot(); findErr == nil {
+			projectRoot, _, err = config.FindProjectRootFrom(wsRoot)
 		}
 		if err != nil {
 			return fmt.Errorf("not in a project: %w", err)

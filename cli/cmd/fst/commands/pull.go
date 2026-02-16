@@ -29,7 +29,7 @@ Requires a backend to be configured (see 'fst backend set').`,
 }
 
 func runPull() error {
-	projectRoot, parentCfg, err := findProjectRootAndParent()
+	projectRoot, parentCfg, err := findProjectRootAndConfig()
 	if err != nil {
 		return err
 	}

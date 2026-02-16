@@ -98,7 +98,7 @@ func TestExportMetadataRoundTrip(t *testing.T) {
 	}
 
 	// Update metadata
-	cfg := &config.ProjectConfig{
+	cfg := &config.WorkspaceConfig{
 		ProjectID:     "proj-1",
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "main",
@@ -130,7 +130,7 @@ func TestExportMetadataRoundTrip(t *testing.T) {
 	}
 
 	// Update with a second workspace
-	cfg2 := &config.ProjectConfig{
+	cfg2 := &config.WorkspaceConfig{
 		ProjectID:     "proj-1",
 		WorkspaceID:   "ws-2",
 		WorkspaceName: "feature",
@@ -157,7 +157,7 @@ func TestLoadExportMetadataFromRepo(t *testing.T) {
 	}
 
 	// Create metadata
-	cfg := &config.ProjectConfig{
+	cfg := &config.WorkspaceConfig{
 		ProjectID:     "proj-1",
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "main",

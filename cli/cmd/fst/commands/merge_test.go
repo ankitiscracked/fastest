@@ -54,7 +54,7 @@ func setupProjectWithWorkspaces(t *testing.T, targetFiles, sourceFiles map[strin
 		if err := os.MkdirAll(filepath.Join(ws.root, ".fst"), 0755); err != nil {
 			t.Fatalf("mkdir ws .fst: %v", err)
 		}
-		cfg := &config.ProjectConfig{
+		cfg := &config.WorkspaceConfig{
 			ProjectID:     "proj-1",
 			WorkspaceID:   ws.id,
 			WorkspaceName: ws.name,

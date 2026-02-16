@@ -17,19 +17,19 @@ import (
 // that share a common base snapshot. Each workspace then diverges with the
 // given file changes. Returns (projectRoot, wsARootRoot, wsBRoot).
 // Unlike setupForkedWorkspaces, this writes a proper project config with
-// project_id/project_name so FindParentRootFrom works.
+// project_id/project_name so FindProjectRootFrom works.
 func setupExportProject(t *testing.T, aFiles, bFiles map[string]string) (string, string, string) {
 	t.Helper()
 
 	projectRoot := t.TempDir()
 
 	// Write proper parent config
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-export-test",
 		ProjectName: "export-test",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	// Create shared store dirs
@@ -51,7 +51,7 @@ func setupExportProject(t *testing.T, aFiles, bFiles map[string]string) (string,
 		if err := os.MkdirAll(filepath.Join(ws.root, ".fst"), 0755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		cfg := &config.ProjectConfig{
+		cfg := &config.WorkspaceConfig{
 			ProjectID:     "proj-export-test",
 			WorkspaceID:   ws.id,
 			WorkspaceName: ws.name,
@@ -134,12 +134,12 @@ func TestExportGitRequiresProject(t *testing.T) {
 func TestExportGitSingleWorkspace(t *testing.T) {
 	projectRoot := t.TempDir()
 
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-single",
 		ProjectName: "single",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -284,12 +284,12 @@ func TestExportGitMultiWorkspace(t *testing.T) {
 func TestExportGitSharedAncestorBranch(t *testing.T) {
 	projectRoot := t.TempDir()
 
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-shared",
 		ProjectName: "shared",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -567,11 +567,11 @@ func TestExportGitSkipsEmptyWorkspace(t *testing.T) {
 
 func TestBuildSnapshotDAG(t *testing.T) {
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "p",
 		ProjectName: "p",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {

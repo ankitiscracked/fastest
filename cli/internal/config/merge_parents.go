@@ -14,7 +14,7 @@ type mergeParentsMeta struct {
 
 // ReadPendingMergeParents returns pending merge parent IDs for the current workspace.
 func ReadPendingMergeParents() ([]string, error) {
-	root, err := FindProjectRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		return nil, err
 	}

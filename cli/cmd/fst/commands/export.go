@@ -55,10 +55,10 @@ func runExportGit(initRepo bool, rebuild bool) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	projectRoot, _, err := config.FindParentRootFrom(cwd)
+	projectRoot, _, err := config.FindProjectRootFrom(cwd)
 	if err != nil {
-		if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-			projectRoot, _, err = config.FindParentRootFrom(wsRoot)
+		if wsRoot, findErr := config.FindWorkspaceRoot(); findErr == nil {
+			projectRoot, _, err = config.FindProjectRootFrom(wsRoot)
 		}
 		if err != nil {
 			return fmt.Errorf("not in a project: %w", err)
@@ -70,7 +70,7 @@ func runExportGit(initRepo bool, rebuild bool) error {
 
 // RunExportGitAt exports all workspace snapshots to Git commits at the given project root.
 func RunExportGitAt(projectRoot string, initRepo bool, rebuild bool) error {
-	parentCfg, err := config.LoadParentConfigAt(projectRoot)
+	parentCfg, err := config.LoadProjectConfigAt(projectRoot)
 	if err != nil {
 		return fmt.Errorf("failed to load project config: %w", err)
 	}
@@ -177,7 +177,7 @@ func RunExportGitAt(projectRoot string, initRepo bool, rebuild bool) error {
 		exportedWorkspaces++
 
 		// Update export metadata for this workspace
-		wsCfg := &config.ProjectConfig{
+		wsCfg := &config.WorkspaceConfig{
 			ProjectID:     parentCfg.ProjectID,
 			WorkspaceID:   ws.WorkspaceID,
 			WorkspaceName: ws.WorkspaceName,

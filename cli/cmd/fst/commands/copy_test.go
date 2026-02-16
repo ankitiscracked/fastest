@@ -36,11 +36,11 @@ func TestCreateRejectsWithoutProjectFolder(t *testing.T) {
 
 func TestCreateRejectsWhenNoSourceWorkspace(t *testing.T) {
 	parent := t.TempDir()
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-copy",
 		ProjectName: "demo",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	restoreCwd := chdir(t, parent)
@@ -72,11 +72,11 @@ func TestCreateRejectsTargetAlreadyExists(t *testing.T) {
 	SetDeps(Deps{})
 	defer ResetDeps()
 
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-copy",
 		ProjectName: "demo",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	// Create main workspace with snapshot
@@ -185,11 +185,11 @@ func setupProjectWithMain(t *testing.T, files map[string]string) (string, string
 
 	SetDeps(Deps{})
 
-	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(parent, &config.ProjectConfig{
 		ProjectID:   "proj-test",
 		ProjectName: "test-project",
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 
 	mainDir := filepath.Join(parent, "main")

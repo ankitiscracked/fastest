@@ -59,7 +59,7 @@ func runInfo(jsonOutput bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
-	parentRoot, parentCfg, err := config.FindParentRootFrom(cwd)
+	parentRoot, parentCfg, err := config.FindProjectRootFrom(cwd)
 	if err == nil && parentRoot == cwd {
 		return printProjectInfo(parentRoot, parentCfg, jsonOutput)
 	}
@@ -106,7 +106,7 @@ func runInfoWorkspaces() error {
 
 	// Get current workspace path for highlighting
 	currentPath := ""
-	if root, findErr := config.FindProjectRoot(); findErr == nil {
+	if root, findErr := config.FindWorkspaceRoot(); findErr == nil {
 		currentPath = root
 	}
 
@@ -264,16 +264,16 @@ func newInfoProjectCmd() *cobra.Command {
 
 // --- shared display functions ---
 
-func printWorkspaceInfo(cfg *config.ProjectConfig, jsonOutput bool) error {
-	root, err := config.FindProjectRoot()
+func printWorkspaceInfo(cfg *config.WorkspaceConfig, jsonOutput bool) error {
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return err
 	}
 	return printWorkspaceInfoAt(cfg, root, jsonOutput)
 }
 
-func printWorkspaceInfoAt(cfg *config.ProjectConfig, root string, jsonOutput bool) error {
-	parentRoot, parentCfg, _ := config.FindParentRootFrom(root)
+func printWorkspaceInfoAt(cfg *config.WorkspaceConfig, root string, jsonOutput bool) error {
+	parentRoot, parentCfg, _ := config.FindProjectRootFrom(root)
 	mainID, mainName := lookupMainWorkspace(cfg.ProjectID)
 	isMain := mainID != "" && mainID == cfg.WorkspaceID
 	snapshotsDir := config.GetSnapshotsDirAt(root)
@@ -368,7 +368,7 @@ func printWorkspaceInfoAt(cfg *config.ProjectConfig, root string, jsonOutput boo
 	return nil
 }
 
-func printProjectInfo(parentRoot string, parentCfg *config.ParentConfig, jsonOutput bool) error {
+func printProjectInfo(parentRoot string, parentCfg *config.ProjectConfig, jsonOutput bool) error {
 	if parentCfg == nil {
 		return fmt.Errorf("failed to load project config")
 	}
@@ -418,21 +418,21 @@ func printProjectInfo(parentRoot string, parentCfg *config.ParentConfig, jsonOut
 
 // --- helpers ---
 
-func findProjectContext() (string, *config.ParentConfig, error) {
+func findProjectContext() (string, *config.ProjectConfig, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get current directory: %w", err)
 	}
 
 	// Try from workspace first
-	if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-		if pr, pc, parentErr := config.FindParentRootFrom(wsRoot); parentErr == nil {
+	if wsRoot, findErr := config.FindWorkspaceRoot(); findErr == nil {
+		if pr, pc, parentErr := config.FindProjectRootFrom(wsRoot); parentErr == nil {
 			return pr, pc, nil
 		}
 	}
 
 	// Try from current directory (might be project root)
-	if pr, pc, parentErr := config.FindParentRootFrom(cwd); parentErr == nil {
+	if pr, pc, parentErr := config.FindProjectRootFrom(cwd); parentErr == nil {
 		return pr, pc, nil
 	}
 
@@ -448,11 +448,11 @@ func lookupMainWorkspace(projectID string) (string, string) {
 		return "", ""
 	}
 	var parentRoot string
-	var parentCfg *config.ParentConfig
-	if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-		parentRoot, parentCfg, _ = config.FindParentRootFrom(wsRoot)
+	var parentCfg *config.ProjectConfig
+	if wsRoot, findErr := config.FindWorkspaceRoot(); findErr == nil {
+		parentRoot, parentCfg, _ = config.FindProjectRootFrom(wsRoot)
 	} else {
-		parentRoot, parentCfg, _ = config.FindParentRootFrom(cwd)
+		parentRoot, parentCfg, _ = config.FindProjectRootFrom(cwd)
 	}
 	if parentCfg == nil || parentCfg.MainWorkspaceID == "" {
 		return "", ""

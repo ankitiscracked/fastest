@@ -69,7 +69,7 @@ func setupExportRepo(t *testing.T, projectID string, workspaces map[string][]com
 
 		// Update export metadata for this workspace
 		wsID := wsName + "-id"
-		if err := gitstore.UpdateExportMetadata(git, &config.ProjectConfig{
+		if err := gitstore.UpdateExportMetadata(git, &config.WorkspaceConfig{
 			ProjectID:     projectID,
 			WorkspaceID:   wsID,
 			WorkspaceName: wsName,
@@ -119,7 +119,7 @@ func TestImportGitCreatesProjectAndWorkspace(t *testing.T) {
 
 	tempDir := t.TempDir()
 	git := gitutil.NewEnv(repo, tempDir, filepath.Join(tempDir, "index"))
-	if err := gitstore.UpdateExportMetadata(git, &config.ProjectConfig{
+	if err := gitstore.UpdateExportMetadata(git, &config.WorkspaceConfig{
 		ProjectID:     "proj-123",
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "main",
@@ -232,12 +232,12 @@ func TestImportGitIntoExistingProject(t *testing.T) {
 
 	// Create an existing project
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-existing",
 		ProjectName: "existing",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {
@@ -326,12 +326,12 @@ func TestImportGitProjectIDMismatch(t *testing.T) {
 
 	// Create project with different ID
 	projectRoot := t.TempDir()
-	if err := config.SaveParentConfigAt(projectRoot, &config.ParentConfig{
+	if err := config.SaveProjectConfigAt(projectRoot, &config.ProjectConfig{
 		ProjectID:   "proj-BBB",
 		ProjectName: "mismatch",
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		t.Fatalf("SaveParentConfigAt: %v", err)
+		t.Fatalf("SaveProjectConfigAt: %v", err)
 	}
 	s := store.OpenAt(projectRoot)
 	if err := s.EnsureDirs(); err != nil {

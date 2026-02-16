@@ -87,7 +87,7 @@ type ExportWorkspaceMeta struct {
 
 // UpdateExportMetadata adds/updates workspace info in the export metadata
 // stored in refs/fst/meta.
-func UpdateExportMetadata(g gitutil.Env, cfg *config.ProjectConfig, branchName string) error {
+func UpdateExportMetadata(g gitutil.Env, cfg *config.WorkspaceConfig, branchName string) error {
 	if cfg == nil || cfg.WorkspaceID == "" {
 		return fmt.Errorf("missing workspace id for export metadata")
 	}
@@ -397,7 +397,7 @@ func BuildSnapshotDAG(s *store.Store, startID string) ([]*store.SnapshotMeta, er
 
 // CreateImportedSnapshot creates a snapshot from files in sourceRoot,
 // writing blobs and metadata to the store.
-func CreateImportedSnapshot(s *store.Store, sourceRoot string, cfg *config.ProjectConfig, parents []string, message, createdAt, authorName, authorEmail, agentName string) (string, error) {
+func CreateImportedSnapshot(s *store.Store, sourceRoot string, cfg *config.WorkspaceConfig, parents []string, message, createdAt, authorName, authorEmail, agentName string) (string, error) {
 	if message == "" {
 		message = "Imported commit"
 	}

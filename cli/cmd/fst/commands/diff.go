@@ -76,7 +76,7 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
 
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
@@ -92,7 +92,7 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 		}
 
 		// Look up upstream workspace path from project-level registry
-		parentRoot, _, parentErr := config.FindParentRootFrom(root)
+		parentRoot, _, parentErr := config.FindProjectRootFrom(root)
 		if parentErr != nil {
 			return fmt.Errorf("no project folder found - specify a workspace path")
 		}
@@ -136,7 +136,7 @@ func runDiff(cmd *cobra.Command, target string, files []string, contextLines int
 			}
 		} else {
 			// Treat as workspace name - look up in project-level registry
-			parentRoot, _, parentErr := config.FindParentRootFrom(root)
+			parentRoot, _, parentErr := config.FindProjectRootFrom(root)
 			if parentErr != nil {
 				return fmt.Errorf("no project folder found - specify a workspace path")
 			}

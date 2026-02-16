@@ -192,11 +192,11 @@ func loadAllWorkspaces(currentProjectID string) []workspaceItem {
 	}
 
 	var parentRoot string
-	var parentCfg *config.ParentConfig
-	if wsRoot, findErr := config.FindProjectRoot(); findErr == nil {
-		parentRoot, parentCfg, _ = config.FindParentRootFrom(wsRoot)
+	var parentCfg *config.ProjectConfig
+	if wsRoot, findErr := config.FindWorkspaceRoot(); findErr == nil {
+		parentRoot, parentCfg, _ = config.FindProjectRootFrom(wsRoot)
 	} else {
-		parentRoot, parentCfg, _ = config.FindParentRootFrom(cwd)
+		parentRoot, parentCfg, _ = config.FindProjectRootFrom(cwd)
 	}
 	if parentRoot == "" {
 		return items

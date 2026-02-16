@@ -89,7 +89,7 @@ func newRebaseCmd() *cobra.Command {
 }
 
 func runEdit(snapshotID, message string) error {
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
@@ -113,7 +113,7 @@ func runDrop(snapshotID string) error {
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
@@ -185,7 +185,7 @@ func runSquash(fromArg, toArg, message string) error {
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
@@ -273,7 +273,7 @@ func runRebase(fromArg, toArg, ontoArg string) error {
 	if err != nil {
 		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
 	}
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}

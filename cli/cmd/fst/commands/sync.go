@@ -63,7 +63,7 @@ and creates a new snapshot on success.`,
 }
 
 func runSync(mode ConflictMode) error {
-	projectRoot, parentCfg, err := findProjectRootAndParent()
+	projectRoot, parentCfg, err := findProjectRootAndConfig()
 	if err != nil {
 		return err
 	}

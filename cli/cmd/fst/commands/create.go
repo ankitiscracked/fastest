@@ -38,21 +38,21 @@ func runCreate(args []string, fromWorkspace, backendArg string) error {
 
 	// Determine project root and whether we're inside a workspace
 	var parentRoot string
-	var parentCfg *config.ParentConfig
+	var parentCfg *config.ProjectConfig
 	var sourceWorkspaceRoot string
-	var sourceWorkspaceCfg *config.ProjectConfig
+	var sourceWorkspaceCfg *config.WorkspaceConfig
 	var projectID string
 
-	wsRoot, _ := config.FindProjectRoot()
+	wsRoot, _ := config.FindWorkspaceRoot()
 	inWorkspace := wsRoot != ""
 
 	if inWorkspace {
 		// We're inside a workspace — find the project root above it
-		parentRoot, parentCfg, err = config.FindParentRootFrom(wsRoot)
-		if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+		parentRoot, parentCfg, err = config.FindProjectRootFrom(wsRoot)
+		if err != nil && !errors.Is(err, config.ErrProjectNotFound) {
 			return err
 		}
-		if errors.Is(err, config.ErrParentNotFound) {
+		if errors.Is(err, config.ErrProjectNotFound) {
 			return fmt.Errorf("no project folder found above workspace - run 'fst project init' first")
 		}
 		projectID = parentCfg.ProjectID
@@ -67,11 +67,11 @@ func runCreate(args []string, fromWorkspace, backendArg string) error {
 		}
 	} else {
 		// Not inside a workspace — must be at project root
-		parentRoot, parentCfg, err = config.FindParentRootFrom(cwd)
-		if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+		parentRoot, parentCfg, err = config.FindProjectRootFrom(cwd)
+		if err != nil && !errors.Is(err, config.ErrProjectNotFound) {
 			return err
 		}
-		if errors.Is(err, config.ErrParentNotFound) {
+		if errors.Is(err, config.ErrProjectNotFound) {
 			return fmt.Errorf("no project folder found - run 'fst project init' first")
 		}
 		if cwd != parentRoot {
@@ -273,7 +273,7 @@ func runCreate(args []string, fromWorkspace, backendArg string) error {
 }
 
 // resolveMainWorkspaceName finds the main workspace name for the project.
-func resolveMainWorkspaceName(parentRoot string, parentCfg *config.ParentConfig) string {
+func resolveMainWorkspaceName(parentRoot string, parentCfg *config.ProjectConfig) string {
 	// Try to find main workspace from project-level registry
 	s := store.OpenAt(parentRoot)
 	workspaces, err := s.ListWorkspaces()
@@ -306,7 +306,7 @@ func resolveMainWorkspaceName(parentRoot string, parentCfg *config.ParentConfig)
 }
 
 // findSourceWorkspace finds a workspace by name and returns its root and config.
-func findSourceWorkspace(name, projectID, parentRoot string) (string, *config.ProjectConfig, error) {
+func findSourceWorkspace(name, projectID, parentRoot string) (string, *config.WorkspaceConfig, error) {
 	// Try project-level registry first
 	s := store.OpenAt(parentRoot)
 	wsInfo, err := s.FindWorkspaceByName(name)

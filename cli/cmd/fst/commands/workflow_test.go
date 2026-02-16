@@ -401,7 +401,7 @@ func setupForkedWorkspaces(t *testing.T, targetFiles, sourceFiles map[string]str
 		if err := os.MkdirAll(filepath.Join(ws.root, ".fst"), 0755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		cfg := &config.ProjectConfig{
+		cfg := &config.WorkspaceConfig{
 			ProjectID:     "proj-1",
 			WorkspaceID:   ws.id,
 			WorkspaceName: ws.name,
@@ -484,7 +484,7 @@ func setupWorkspace(t *testing.T, name string, files map[string]string) string {
 			t.Fatalf("write file: %v", err)
 		}
 	}
-	cfg := &config.ProjectConfig{
+	cfg := &config.WorkspaceConfig{
 		ProjectID:     "proj-1",
 		WorkspaceID:   name + "-id",
 		WorkspaceName: name,

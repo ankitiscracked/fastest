@@ -79,19 +79,19 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if parentRoot, _, err := config.FindParentRootFrom(cwd); err == nil {
+	if parentRoot, _, err := config.FindProjectRootFrom(cwd); err == nil {
 		if parentRoot == cwd {
 			return fmt.Errorf("already in a project folder at %s\nUse 'fst workspace create' to add workspaces", parentRoot)
 		}
 		return fmt.Errorf("already inside a project folder at %s\nUse 'fst workspace create' to add workspaces", parentRoot)
-	} else if err != nil && !errors.Is(err, config.ErrParentNotFound) {
+	} else if err != nil && !errors.Is(err, config.ErrProjectNotFound) {
 		return err
 	}
 
 	var workspaceRoot string
-	var workspaceCfg *config.ProjectConfig
+	var workspaceCfg *config.WorkspaceConfig
 	var defaultWorkspaceName string
-	if root, err := config.FindProjectRoot(); err == nil {
+	if root, err := config.FindWorkspaceRoot(); err == nil {
 		workspaceRoot = root
 		defaultWorkspaceName = filepath.Base(root)
 		cfg, err := config.LoadAt(root)
@@ -147,12 +147,12 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 	workspaceRoot = filepath.Join(parentPath, workspaceName)
 
 	// Save parent config FIRST so InitAt/snapshot creation uses shared store
-	parentCfg := &config.ParentConfig{
+	parentCfg := &config.ProjectConfig{
 		ProjectID:   projectID,
 		ProjectName: projectName,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := config.SaveParentConfigAt(parentPath, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(parentPath, parentCfg); err != nil {
 		return err
 	}
 
@@ -197,7 +197,7 @@ func runParentInit(projectName, projectID string, keepWorkspaceName bool, force 
 	parentCfg.BaseSnapshotID = baseSnapshotID
 	parentCfg.BaseWorkspaceID = workspaceID
 	parentCfg.MainWorkspaceID = workspaceID
-	if err := config.SaveParentConfigAt(parentPath, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(parentPath, parentCfg); err != nil {
 		return err
 	}
 
@@ -250,12 +250,12 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 	}
 
 	// Save parent config FIRST so InitAt can find parent and use shared store
-	parentCfg := &config.ParentConfig{
+	parentCfg := &config.ProjectConfig{
 		ProjectID:   projectID,
 		ProjectName: projectName,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := config.SaveParentConfigAt(projectPath, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(projectPath, parentCfg); err != nil {
 		return err
 	}
 
@@ -287,7 +287,7 @@ func runProjectCreate(projectName, targetPath string, noSnapshot, force bool) er
 	parentCfg.BaseSnapshotID = snapshotID
 	parentCfg.BaseWorkspaceID = workspaceID
 	parentCfg.MainWorkspaceID = workspaceID
-	if err := config.SaveParentConfigAt(projectPath, parentCfg); err != nil {
+	if err := config.SaveProjectConfigAt(projectPath, parentCfg); err != nil {
 		fmt.Printf("Warning: Could not update parent config: %v\n", err)
 	}
 

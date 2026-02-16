@@ -17,7 +17,7 @@ import (
 // project store. Use Open or OpenAt to create one.
 type Workspace struct {
 	root        string                // workspace root directory
-	cfg         *config.ProjectConfig // workspace config (.fst/config.json)
+	cfg         *config.WorkspaceConfig // workspace config (.fst/config.json)
 	store       *store.Store          // project-level shared store
 	wsLock      *LockFile             // exclusive workspace lock
 	projectLock *LockFile             // shared project lock (prevents GC)
@@ -25,7 +25,7 @@ type Workspace struct {
 
 // Open loads the workspace rooted at the current working directory.
 func Open() (*Workspace, error) {
-	root, err := config.FindProjectRoot()
+	root, err := config.FindWorkspaceRoot()
 	if err != nil {
 		return nil, fmt.Errorf("not in a workspace directory: %w", err)
 	}
@@ -36,7 +36,7 @@ func Open() (*Workspace, error) {
 func OpenAt(root string) (*Workspace, error) {
 	// Acquire shared project lock first (prevents GC from running)
 	var projectLock *LockFile
-	if projectRoot, _, err := config.FindParentRootFrom(root); err == nil {
+	if projectRoot, _, err := config.FindProjectRootFrom(root); err == nil {
 		projectLock, err = AcquireProjectSharedLock(projectRoot)
 		if err != nil {
 			return nil, err
@@ -100,7 +100,7 @@ func (ws *Workspace) Root() string { return ws.root }
 
 // Config returns the workspace configuration. The returned pointer should
 // not be modified directly — use workspace methods to mutate state.
-func (ws *Workspace) Config() *config.ProjectConfig { return ws.cfg }
+func (ws *Workspace) Config() *config.WorkspaceConfig { return ws.cfg }
 
 // Store returns the project-level shared store.
 func (ws *Workspace) Store() *store.Store { return ws.store }
