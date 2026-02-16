@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
 )
 
 // setupTestWorkspace creates a standalone workspace (no parent fst.json)

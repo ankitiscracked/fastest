@@ -3,7 +3,7 @@ package backend
 import (
 	"errors"
 
-	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
 )
 
 // ErrNoRemote is returned when a backend has no remote to sync with.

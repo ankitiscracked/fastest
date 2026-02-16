@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anthropics/fastest/cli/internal/agent"
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/ankitiscracked/fastest/cli/internal/agent"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/manifest"
 )
 
 // mergeAction represents a single file merge action for cloud sync/pull.

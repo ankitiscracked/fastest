@@ -11,10 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/store"
-	"github.com/anthropics/fastest/cli/internal/ui"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/drift"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/ui"
 )
 
 func init() {

@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
 )
 
 func init() {

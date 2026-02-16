@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 // setupMergeTest creates a workspace with divergent snapshots for merge testing.

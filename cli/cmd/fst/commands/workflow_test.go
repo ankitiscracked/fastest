@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
 )
 
 func TestSnapshotCreatesLocalArtifacts(t *testing.T) {
@@ -22,9 +22,7 @@ func TestSnapshotCreatesLocalArtifacts(t *testing.T) {
 	cacheDir := filepath.Join(root, "cache")
 	setenv(t, "XDG_CACHE_HOME", cacheDir)
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	defer ResetDeps()
 
 	cmd := NewRootCmd()
@@ -320,9 +318,7 @@ func TestRestoreOverwritesDirtyFiles(t *testing.T) {
 	cacheDir := filepath.Join(root, "cache")
 	setenv(t, "XDG_CACHE_HOME", cacheDir)
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	defer ResetDeps()
 
 	// Create initial snapshot

@@ -2,18 +2,12 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/agent"
-	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/backend"
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/dag"
-	"github.com/anthropics/fastest/cli/internal/manifest"
-	"github.com/anthropics/fastest/cli/internal/workspace"
+	"github.com/ankitiscracked/fastest/cli/internal/backend"
+	"github.com/ankitiscracked/fastest/cli/internal/workspace"
 )
 
 func init() {
@@ -24,16 +18,13 @@ func newSyncCmd() *cobra.Command {
 	var manual bool
 	var theirs bool
 	var ours bool
-	var files []string
-	var dryRun bool
-	var dryRunSummary bool
-	var noSnapshot bool
 
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Sync local and remote for this workspace",
 		Long: `Sync local and remote changes for the current workspace.
 
+Requires a backend to be configured (see 'fst backend set').
 If the local and remote heads diverged, this performs a three-way merge
 and creates a new snapshot on success.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -60,248 +51,38 @@ and creates a new snapshot on success.`,
 				mode = ConflictModeOurs
 			}
 
-			return runSync(mode, files, dryRun, dryRunSummary, noSnapshot)
+			return runSync(mode)
 		},
 	}
 
 	cmd.Flags().BoolVar(&manual, "manual", false, "Create conflict markers for manual resolution")
 	cmd.Flags().BoolVar(&theirs, "theirs", false, "Take remote version for conflicts")
 	cmd.Flags().BoolVar(&ours, "ours", false, "Keep local version for conflicts")
-	cmd.Flags().StringSliceVar(&files, "files", nil, "Only sync specific files")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview sync with line-level conflict details")
-	cmd.Flags().BoolVar(&dryRunSummary, "agent-summary", false, "Generate LLM summary of conflicts (with --dry-run)")
-	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "Skip auto-snapshot before sync")
 
 	return cmd
 }
 
-func runSync(mode ConflictMode, cherryPick []string, dryRun bool, dryRunSummary bool, noSnapshot bool) error {
-	// Check for backend dispatch
-	if projectRoot, parentCfg, findErr := findProjectRootAndParent(); findErr == nil {
-		if b := backend.FromConfig(parentCfg.Backend, RunExportGitAt); b != nil {
-			lock, lockErr := workspace.AcquireBackendLock(projectRoot)
-			if lockErr != nil {
-				return lockErr
-			}
-			defer lock.Release()
-
-			opts := &backend.SyncOptions{
-				OnDivergence: buildOnDivergence(mode),
-			}
-			return b.Sync(projectRoot, opts)
-		}
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("not in a workspace directory - run 'fst workspace init' first")
-	}
-
-	root, err := config.FindProjectRoot()
-	if err != nil {
-		return fmt.Errorf("failed to find project root: %w", err)
-	}
-
-	token, err := deps.AuthGetToken()
-	if err != nil {
-		return deps.AuthFormatError(err)
-	}
-	if token == "" {
-		return fmt.Errorf("not logged in - run 'fst login' first")
-	}
-
-	client := deps.NewAPIClient(token, cfg)
-	ws, err := client.GetWorkspace(cfg.WorkspaceID)
-	if err != nil {
-		return fmt.Errorf("failed to fetch workspace: %w", err)
-	}
-	if ws.CurrentSnapshotID == nil || *ws.CurrentSnapshotID == "" {
-		return fmt.Errorf("workspace has no remote snapshot")
-	}
-	remoteHead := *ws.CurrentSnapshotID
-
-	localHead := cfg.CurrentSnapshotID
-	if localHead == "" {
-		localHead, _ = config.GetLatestSnapshotID()
-	}
-
-	if localHead != "" && localHead == remoteHead {
-		fmt.Println("✓ Already in sync.")
-		return nil
-	}
-
-	remoteSnapshot, err := client.GetSnapshot(remoteHead)
+func runSync(mode ConflictMode) error {
+	projectRoot, parentCfg, err := findProjectRootAndParent()
 	if err != nil {
 		return err
 	}
 
-	manifestJSON, err := client.DownloadManifest(remoteSnapshot.ManifestHash)
-	if err != nil {
-		return fmt.Errorf("failed to download manifest: %w", err)
+	b := backend.FromConfig(parentCfg.Backend, RunExportGitAt)
+	if b == nil {
+		return fmt.Errorf("no backend configured - run 'fst backend set' first")
 	}
 
-	remoteManifest, err := manifest.FromJSON(manifestJSON)
-	if err != nil {
-		return fmt.Errorf("failed to parse remote manifest: %w", err)
-	}
-
-	tempDir, err := os.MkdirTemp("", "fst-sync-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	if err := materializeSnapshot(client, tempDir, remoteManifest); err != nil {
-		return err
-	}
-
-	baseManifest, mergeBaseID, err := getSyncMergeBase(client, root, localHead, remoteHead)
+	lock, err := workspace.AcquireBackendLock(projectRoot)
 	if err != nil {
 		return err
 	}
+	defer lock.Release()
 
-	currentManifest, err := manifest.GenerateWithCache(root, config.GetStatCachePath(root))
-	if err != nil {
-		return fmt.Errorf("failed to scan local files: %w", err)
+	opts := &backend.SyncOptions{
+		OnDivergence: buildOnDivergence(mode),
 	}
-
-	sourceManifest, err := manifest.Generate(tempDir, false)
-	if err != nil {
-		return fmt.Errorf("failed to scan remote files: %w", err)
-	}
-
-	mergeActions := computeMergeActions(baseManifest, currentManifest, sourceManifest)
-	mergeActions = filterMergeActions(mergeActions, cherryPick)
-	fmt.Println("Merge plan:")
-	fmt.Printf("  Apply from remote:  %d files\n", len(mergeActions.toApply))
-	fmt.Printf("  Conflicts:          %d files\n", len(mergeActions.conflicts))
-	fmt.Printf("  Already in sync:    %d files\n", len(mergeActions.inSync))
-	if len(mergeActions.skipped) > 0 {
-		fmt.Printf("  Skipped (filter):   %d files\n", len(mergeActions.skipped))
-	}
-
-	if len(mergeActions.toApply) == 0 && len(mergeActions.conflicts) == 0 {
-		fmt.Println("✓ Nothing to sync - already aligned")
-		return nil
-	}
-
-	if !dryRun && !noSnapshot {
-		snapshotID, err := CreateAutoSnapshot("Before sync")
-		if err != nil {
-			return fmt.Errorf("failed to create pre-sync snapshot (use --no-snapshot to skip): %w", err)
-		}
-		if snapshotID != "" {
-			fmt.Printf("Created snapshot %s (use 'fst restore' to undo sync)\n", snapshotID)
-		}
-	}
-
-	if dryRun {
-		printCloudMergePlan(mergeActions)
-		if dryRunSummary && len(mergeActions.conflicts) > 0 {
-			preferredAgent, err := deps.AgentGetPreferred()
-			if err == nil {
-				conflictContext := buildSyncConflictContext(mergeActions.conflicts)
-				summaryText, err := agent.InvokeConflictSummary(preferredAgent, conflictContext, deps.AgentInvoke)
-				if err == nil && summaryText != "" {
-					fmt.Println()
-					fmt.Println("Summary:")
-					fmt.Println(summaryText)
-				}
-			}
-		}
-		fmt.Println()
-		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
-			CurrentID:     localHead,
-			SourceID:      remoteHead,
-			MergeBaseID:   mergeBaseID,
-			CurrentLabel:  "local",
-			SourceLabel:   "remote",
-			Message:       "Sync merge (dry run)",
-			ConflictCount: len(mergeActions.conflicts),
-			Colorize:      true,
-		}))
-		return nil
-	}
-
-	for _, action := range mergeActions.toApply {
-		if err := applyChange(root, tempDir, action); err != nil {
-			return err
-		}
-	}
-
-	if len(mergeActions.conflicts) > 0 {
-		switch mode {
-		case ConflictModeAgent:
-			preferredAgent, err := deps.AgentGetPreferred()
-			if err != nil {
-				return err
-			}
-			for _, conflict := range mergeActions.conflicts {
-				if err := resolveConflictWithAgent(root, tempDir, conflict, preferredAgent, baseManifest, deps.AgentInvoke); err != nil {
-					return err
-				}
-			}
-		case ConflictModeManual:
-			for _, conflict := range mergeActions.conflicts {
-				if err := createConflictMarkers(root, tempDir, conflict); err != nil {
-					return err
-				}
-			}
-			fmt.Println("Conflicts written with markers. Resolve them, then run 'fst snapshot'.")
-			fmt.Println()
-			fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
-				CurrentID:     localHead,
-				SourceID:      remoteHead,
-				MergeBaseID:   mergeBaseID,
-				CurrentLabel:  "local",
-				SourceLabel:   "remote",
-				Message:       "Sync merge",
-				Pending:       true,
-				ConflictCount: len(mergeActions.conflicts),
-				Colorize:      true,
-			}))
-			return nil
-		case ConflictModeTheirs:
-			for _, conflict := range mergeActions.conflicts {
-				if err := applyChange(root, tempDir, conflict); err != nil {
-					return err
-				}
-			}
-		case ConflictModeOurs:
-			// Keep local version; nothing to do
-		}
-	}
-
-	if !dryRun {
-		mergeParents := normalizeMergeParents(localHead, remoteHead)
-		if len(mergeParents) >= 2 {
-			if err := config.WritePendingMergeParentsAt(root, mergeParents); err != nil {
-				fmt.Printf("Warning: Could not record merge parents: %v\n", err)
-			}
-		}
-	}
-
-	if err := runSnapshot("Sync merge", false); err != nil {
-		return err
-	}
-
-	// Show merge diagram
-	newCfg, _ := config.Load()
-	if newCfg != nil && newCfg.CurrentSnapshotID != "" {
-		fmt.Println()
-		fmt.Println(dag.RenderMergeDiagram(dag.MergeDiagramOpts{
-			CurrentID:    localHead,
-			SourceID:     remoteHead,
-			MergeBaseID:  mergeBaseID,
-			MergedID:     newCfg.CurrentSnapshotID,
-			CurrentLabel: "local",
-			SourceLabel:  "remote",
-			Message:      "Sync merge",
-			Colorize:     true,
-		}))
-	}
-
-	return deps.UploadSnapshot(client, root, cfg)
+	return b.Sync(projectRoot, opts)
 }
 
 func filterMergeActions(actions *mergeActions, files []string) *mergeActions {
@@ -338,65 +119,6 @@ func filterMergeActions(actions *mergeActions, files []string) *mergeActions {
 	}
 
 	return filtered
-}
-
-func getSyncMergeBase(client *api.Client, root, localHead, remoteHead string) (baseManifest *manifest.Manifest, mergeBaseID string, err error) {
-	empty := &manifest.Manifest{Version: "1", Files: []manifest.FileEntry{}}
-	if localHead == "" || remoteHead == "" {
-		return empty, "", nil
-	}
-
-	localAncestors := map[string]struct{}{}
-	current := localHead
-	for current != "" {
-		if _, ok := localAncestors[current]; ok {
-			break
-		}
-		localAncestors[current] = struct{}{}
-		parent, parentErr := config.SnapshotPrimaryParentIDAt(root, current)
-		if parentErr != nil {
-			break
-		}
-		current = parent
-	}
-
-	remoteCurrent := remoteHead
-	for remoteCurrent != "" {
-		if _, ok := localAncestors[remoteCurrent]; ok {
-			mergeBaseID = remoteCurrent
-			break
-		}
-		snap, snapErr := client.GetSnapshot(remoteCurrent)
-		if snapErr != nil {
-			break
-		}
-		if len(snap.ParentSnapshotIDs) == 0 {
-			break
-		}
-		remoteCurrent = snap.ParentSnapshotIDs[0]
-	}
-
-	if mergeBaseID == "" {
-		return empty, "", nil
-	}
-
-	if localManifest, loadErr := loadManifestByID(root, mergeBaseID); loadErr == nil {
-		return localManifest, mergeBaseID, nil
-	}
-
-	baseSnap, snapErr := client.GetSnapshot(mergeBaseID)
-	if snapErr != nil {
-		return empty, mergeBaseID, nil
-	}
-	baseJSON, dlErr := client.DownloadManifest(baseSnap.ManifestHash)
-	if dlErr != nil {
-		return empty, mergeBaseID, nil
-	}
-	m, parseErr := manifest.FromJSON(baseJSON)
-	if parseErr != nil {
-		return empty, mergeBaseID, parseErr
-	}
-	return m, mergeBaseID, nil
 }
 
 func buildSyncConflictContext(conflicts []mergeAction) string {

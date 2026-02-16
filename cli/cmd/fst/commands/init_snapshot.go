@@ -3,7 +3,7 @@ package commands
 import (
 	"fmt"
 
-	"github.com/anthropics/fastest/cli/internal/workspace"
+	"github.com/ankitiscracked/fastest/cli/internal/workspace"
 )
 
 func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced bool) (string, error) {
@@ -34,7 +34,7 @@ func createInitialSnapshot(root, workspaceID, workspaceName string, cloudSynced 
 	// Set base snapshot and mode (not handled by workspace.Snapshot)
 	cfg := ws.Config()
 	cfg.BaseSnapshotID = result.SnapshotID
-	cfg.Mode = modeString(cloudSynced)
+	cfg.Mode = "local"
 	if err := ws.SaveConfig(); err != nil {
 		return "", fmt.Errorf("failed to update config: %w", err)
 	}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/ankitiscracked/fastest/cli/internal/manifest"
 	"github.com/epiclabs-io/diff3"
 )
 

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 func TestWorkspaceInitRequiresProjectFolder(t *testing.T) {
@@ -21,9 +21,7 @@ func TestWorkspaceInitRequiresProjectFolder(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(root, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(root, "config"))
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	defer ResetDeps()
 
 	cmd := NewRootCmd()
@@ -39,9 +37,7 @@ func TestWorkspaceCreateFromParent(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	defer ResetDeps()
 
 	// Create a project folder with fst.json

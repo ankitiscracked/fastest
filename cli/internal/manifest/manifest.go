@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anthropics/fastest/cli/internal/ignore"
+	"github.com/ankitiscracked/fastest/cli/internal/ignore"
 )
 
 const (

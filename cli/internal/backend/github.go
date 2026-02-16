@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/gitstore"
-	"github.com/anthropics/fastest/cli/internal/gitutil"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/gitstore"
+	"github.com/ankitiscracked/fastest/cli/internal/gitutil"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 // GitHubBackend exports snapshots to git and syncs with a GitHub remote.

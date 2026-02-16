@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anthropics/fastest/cli/internal/agent"
-	"github.com/anthropics/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/agent"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
 )
 
 // mockAgent returns a fake agent for testing.
@@ -36,7 +36,6 @@ func TestMergeWithAgentResolvesConflicts(t *testing.T) {
 
 	// Inject mock agent that returns merged content
 	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
 		AgentGetPreferred: func() (*agent.Agent, error) {
 			return mockAgent(), nil
 		},
@@ -78,9 +77,7 @@ func TestSnapshotWithAgentMessage(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", cacheDir)
 
 	// Create initial snapshot so there's a base to diff from
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	cmd := NewRootCmd()
 	cmd.SetArgs([]string{"snapshot", "-m", "initial"})
 	if err := cmd.Execute(); err != nil {
@@ -94,7 +91,6 @@ func TestSnapshotWithAgentMessage(t *testing.T) {
 	}
 
 	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
 		AgentGetPreferred: func() (*agent.Agent, error) {
 			return mockAgent(), nil
 		},
@@ -130,7 +126,6 @@ func TestDriftWithAgentSummary(t *testing.T) {
 	defer restoreCwd()
 
 	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
 		AgentGetPreferred: func() (*agent.Agent, error) {
 			return mockAgent(), nil
 		},
@@ -172,7 +167,6 @@ func TestMergeDryRunShowsConflicts(t *testing.T) {
 	defer restoreCwd()
 
 	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
 		AgentGetPreferred: func() (*agent.Agent, error) {
 			return mockAgent(), nil
 		},
@@ -281,7 +275,6 @@ func TestMergeAgentFallsBackToManualOnError(t *testing.T) {
 	defer restoreCwd()
 
 	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
 		AgentGetPreferred: func() (*agent.Agent, error) {
 			return nil, &agentUnavailableError{}
 		},
@@ -362,7 +355,6 @@ func TestRealAgentMerge(t *testing.T) {
 	}
 
 	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
 		AgentGetPreferred: func() (*agent.Agent, error) {
 			return realAgent, nil
 		},
@@ -420,9 +412,7 @@ func TestRealAgentSnapshotMessage(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", cacheDir)
 
 	// Create initial snapshot
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	cmd := NewRootCmd()
 	cmd.SetArgs([]string{"snapshot", "-m", "initial"})
 	if err := cmd.Execute(); err != nil {
@@ -445,7 +435,6 @@ func TestRealAgentSnapshotMessage(t *testing.T) {
 	}
 
 	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
 		AgentGetPreferred: func() (*agent.Agent, error) {
 			return realAgent, nil
 		},

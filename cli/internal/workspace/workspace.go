@@ -9,8 +9,8 @@ package workspace
 import (
 	"fmt"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 // Workspace represents an open workspace with its configuration and

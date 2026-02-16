@@ -1,6 +1,6 @@
 package config
 
-import "github.com/anthropics/fastest/cli/internal/store"
+import "github.com/ankitiscracked/fastest/cli/internal/store"
 
 // SnapshotParentIDsAt returns all parent snapshot IDs for a snapshot (multi-parent aware).
 func SnapshotParentIDsAt(root, snapshotID string) ([]string, error) {

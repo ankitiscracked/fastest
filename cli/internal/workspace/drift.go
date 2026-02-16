@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/conflicts"
-	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/conflicts"
+	"github.com/ankitiscracked/fastest/cli/internal/drift"
+	"github.com/ankitiscracked/fastest/cli/internal/manifest"
 )
 
 // DriftOpts configures a drift comparison.

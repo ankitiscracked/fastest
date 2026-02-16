@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/ankitiscracked/fastest/cli/internal/manifest"
 )
 
 // LoadManifest reads and parses a manifest by its content hash.

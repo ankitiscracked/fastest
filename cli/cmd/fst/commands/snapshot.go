@@ -2,18 +2,15 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/agent"
-	"github.com/anthropics/fastest/cli/internal/api"
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/drift"
-	"github.com/anthropics/fastest/cli/internal/manifest"
-	"github.com/anthropics/fastest/cli/internal/workspace"
+	"github.com/ankitiscracked/fastest/cli/internal/agent"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/drift"
+	"github.com/ankitiscracked/fastest/cli/internal/workspace"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -274,66 +271,6 @@ func generateSnapshotSummary(root string, cfg *config.ProjectConfig, preferredAg
 	}
 
 	return summary, nil
-}
-
-func uploadSnapshotToCloud(client *api.Client, root string, m *manifest.Manifest, manifestHash string, manifestJSON []byte) error {
-	if len(m.FileEntries()) == 0 {
-		return client.UploadManifest(manifestHash, manifestJSON)
-	}
-
-	hashToPath := make(map[string]string)
-	hashes := make([]string, 0, len(m.FileEntries()))
-	for _, f := range m.FileEntries() {
-		if _, exists := hashToPath[f.Hash]; !exists {
-			hashToPath[f.Hash] = f.Path
-			hashes = append(hashes, f.Hash)
-		}
-	}
-
-	missing := []string{}
-	for i := 0; i < len(hashes); i += 100 {
-		end := i + 100
-		if end > len(hashes) {
-			end = len(hashes)
-		}
-		batchMissing, err := client.BlobExists(hashes[i:end])
-		if err != nil {
-			return err
-		}
-		missing = append(missing, batchMissing...)
-	}
-
-	if len(missing) > 0 {
-		for i := 0; i < len(missing); i += 100 {
-			end := i + 100
-			if end > len(missing) {
-				end = len(missing)
-			}
-			urls, err := client.PresignUpload(missing[i:end])
-			if err != nil {
-				return err
-			}
-			for _, hash := range missing[i:end] {
-				path, ok := hashToPath[hash]
-				if !ok {
-					continue
-				}
-				url, ok := urls[hash]
-				if !ok || url == "" {
-					return fmt.Errorf("missing upload URL for blob %s", hash)
-				}
-				content, err := os.ReadFile(filepath.Join(root, path))
-				if err != nil {
-					return fmt.Errorf("failed to read %s: %w", path, err)
-				}
-				if err := client.UploadBlob(url, content); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	return client.UploadManifest(manifestHash, manifestJSON)
 }
 
 // escapeJSON escapes a string for JSON

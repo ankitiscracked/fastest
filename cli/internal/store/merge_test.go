@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anthropics/fastest/cli/internal/manifest"
+	"github.com/ankitiscracked/fastest/cli/internal/manifest"
 )
 
 // seedSnapshot creates a manifest with the given files, writes it and its blobs

@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/gitutil"
-	"github.com/anthropics/fastest/cli/internal/manifest"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/gitutil"
+	"github.com/ankitiscracked/fastest/cli/internal/manifest"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 // initGitRepo creates a git repo and returns an Env for it.

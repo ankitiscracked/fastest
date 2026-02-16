@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anthropics/fastest/cli/internal/ui"
+	"github.com/ankitiscracked/fastest/cli/internal/ui"
 )
 
 // MergeDiagramOpts configures the mini-diagram rendered after merge operations.

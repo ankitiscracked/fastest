@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 func init() {
@@ -23,7 +23,6 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(newWorkspaceInitCmd())
 	cmd.AddCommand(newWorkspaceCreateCmd())
 	cmd.AddCommand(newSetMainCmd())
-	cmd.AddCommand(newCloneCmd())
 
 	return cmd
 }
@@ -124,12 +123,6 @@ func runSetMain(workspaceName string) error {
 		return fmt.Errorf("no project folder found - run 'fst project init' first")
 	}
 
-	token, tokenErr := deps.AuthGetToken()
-	if tokenErr != nil {
-		fmt.Printf("Warning: %v\n", deps.AuthFormatError(tokenErr))
-		token = ""
-	}
-
 	var targetWorkspaceID string
 	var targetWorkspaceName string
 
@@ -146,13 +139,6 @@ func runSetMain(workspaceName string) error {
 		targetWorkspaceName = wsInfo.WorkspaceName
 	}
 
-	if token != "" {
-		client := deps.NewAPIClient(token, cfg)
-		if err := client.SetMainWorkspace(targetWorkspaceID); err != nil {
-			return err
-		}
-	}
-
 	parentCfg.MainWorkspaceID = targetWorkspaceID
 	if err := config.SaveParentConfigAt(parentRoot, parentCfg); err != nil {
 		return fmt.Errorf("failed to store main workspace locally: %w", err)
@@ -160,10 +146,6 @@ func runSetMain(workspaceName string) error {
 
 	fmt.Printf("✓ Set '%s' as the main workspace for this project.\n", targetWorkspaceName)
 	fmt.Println()
-	if token == "" {
-		fmt.Println("Saved locally only (not synced to cloud).")
-		fmt.Println()
-	}
 	fmt.Println("Other workspaces can now use 'fst drift' to compare against this workspace.")
 
 	return nil

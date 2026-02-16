@@ -1,6 +1,6 @@
 package config
 
-import "github.com/anthropics/fastest/cli/internal/store"
+import "github.com/ankitiscracked/fastest/cli/internal/store"
 
 // ComputeSnapshotID derives a content-addressed snapshot ID from the snapshot's
 // identity fields. Delegated to store.ComputeSnapshotID.

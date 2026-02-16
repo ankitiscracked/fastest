@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anthropics/fastest/cli/internal/config"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/config"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 func TestCreateRejectsWithoutProjectFolder(t *testing.T) {
@@ -20,9 +20,7 @@ func TestCreateRejectsWithoutProjectFolder(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(root, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(root, "config"))
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	defer ResetDeps()
 
 	cmd := NewRootCmd()
@@ -51,9 +49,7 @@ func TestCreateRejectsWhenNoSourceWorkspace(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	defer ResetDeps()
 
 	cmd := NewRootCmd()
@@ -73,9 +69,7 @@ func TestCreateRejectsTargetAlreadyExists(t *testing.T) {
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 	defer ResetDeps()
 
 	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
@@ -189,9 +183,7 @@ func setupProjectWithMain(t *testing.T, files map[string]string) (string, string
 	setenv(t, "XDG_CACHE_HOME", filepath.Join(parent, "cache"))
 	setenv(t, "XDG_CONFIG_HOME", filepath.Join(parent, "config"))
 
-	SetDeps(Deps{
-		AuthGetToken: func() (string, error) { return "", nil },
-	})
+	SetDeps(Deps{})
 
 	if err := config.SaveParentConfigAt(parent, &config.ParentConfig{
 		ProjectID:   "proj-test",

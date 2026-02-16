@@ -1,7 +1,7 @@
 package dag
 
 import (
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 // GetMergeBase finds the most recent common ancestor between two snapshot heads.

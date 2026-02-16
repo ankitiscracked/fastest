@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/anthropics/fastest/cli/internal/ignore"
-	"github.com/anthropics/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/ignore"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/anthropics/fastest/cli/internal/agent"
+	"github.com/ankitiscracked/fastest/cli/internal/agent"
 )
 
 func init() {

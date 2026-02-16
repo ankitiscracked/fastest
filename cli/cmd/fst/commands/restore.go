@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/ui"
-	"github.com/anthropics/fastest/cli/internal/workspace"
+	"github.com/ankitiscracked/fastest/cli/internal/ui"
+	"github.com/ankitiscracked/fastest/cli/internal/workspace"
 )
 
 func init() {

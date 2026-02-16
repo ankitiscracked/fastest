@@ -6,12 +6,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anthropics/fastest/cli/internal/agent"
-	"github.com/anthropics/fastest/cli/internal/conflicts"
-	"github.com/anthropics/fastest/cli/internal/dag"
-	"github.com/anthropics/fastest/cli/internal/store"
-	"github.com/anthropics/fastest/cli/internal/ui"
-	"github.com/anthropics/fastest/cli/internal/workspace"
+	"github.com/ankitiscracked/fastest/cli/internal/agent"
+	"github.com/ankitiscracked/fastest/cli/internal/conflicts"
+	"github.com/ankitiscracked/fastest/cli/internal/dag"
+	"github.com/ankitiscracked/fastest/cli/internal/store"
+	"github.com/ankitiscracked/fastest/cli/internal/ui"
+	"github.com/ankitiscracked/fastest/cli/internal/workspace"
 )
 
 func init() {

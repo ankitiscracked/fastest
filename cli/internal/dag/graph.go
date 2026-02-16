@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anthropics/fastest/cli/internal/ui"
+	"github.com/ankitiscracked/fastest/cli/internal/ui"
 )
 
 // SnapshotInfo is the minimal snapshot data needed for graph rendering.

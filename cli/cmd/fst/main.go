@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/anthropics/fastest/cli/cmd/fst/commands"
+	"github.com/ankitiscracked/fastest/cli/cmd/fst/commands"
 )
 
 func main() {
